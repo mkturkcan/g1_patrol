@@ -1,0 +1,190 @@
+"""Animated people for the New York demo (rendering only; requires a running Kit app).
+
+Each pedestrian of the filmed environments gets an Isaac Sim character. Its skeleton is posed every rendered frame
+from clips baked by ``bake_people_animations.py``: an in-place walk cycle whose phase advances with the pedestrian's
+actual speed (so feet do not slide), blended into an idle loop as the pedestrian slows down and stops. Characters
+face their walking direction and stand on the tile's ground. The kinematic capsules that the robot and its sensors
+interact with are hidden; their motion is what the characters follow.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+
+import numpy as np
+import torch
+from pxr import Gf, Usd, UsdGeom, UsdSkel, Vt
+
+PEOPLE = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.1/Isaac/People"
+CHARACTERS = {
+    "F_Business_02": "Characters/F_Business_02/F_Business_02.usd",
+    "F_Medical_01": "Characters/F_Medical_01/F_Medical_01.usd",
+    "M_Medical_01": "Characters/M_Medical_01/M_Medical_01.usd",
+    "female_police_01": "Characters/female_adult_police_01_new/female_adult_police_01_new.usd",
+    "female_police_02": "Characters/female_adult_police_02/female_adult_police_02.usd",
+    "female_police_03": "Characters/female_adult_police_03_new/female_adult_police_03_new.usd",
+    "male_construction_01": "Characters/male_adult_construction_01_new/male_adult_construction_01_new.usd",
+    "male_construction_03": "Characters/male_adult_construction_03/male_adult_construction_03.usd",
+    "male_construction_05": "Characters/male_adult_construction_05_new/male_adult_construction_05_new.usd",
+    "male_police_04": "Characters/male_adult_police_04/male_adult_police_04.usd",
+}
+# how often each character appears (a street crowd, not a police parade)
+WEIGHTS = {"F_Business_02": 4, "F_Medical_01": 2, "M_Medical_01": 2, "male_construction_01": 1,
+           "male_construction_03": 1, "male_construction_05": 1, "female_police_01": 0.3, "female_police_02": 0.3,
+           "female_police_03": 0.3, "male_police_04": 0.3}  # fmt: skip
+# clothing tints (multiplied with the clothes' textures): city colors, mostly dark and muted
+TOPS = [(0.05, 0.05, 0.06), (0.12, 0.13, 0.2), (0.25, 0.25, 0.27), (0.55, 0.42, 0.28), (0.35, 0.08, 0.1),
+        (0.2, 0.25, 0.15), (0.85, 0.85, 0.85), (0.45, 0.55, 0.7), (0.7, 0.2, 0.15), (0.9, 0.75, 0.3),
+        (0.15, 0.3, 0.45), (0.6, 0.6, 0.62)]  # fmt: skip
+BOTTOMS = [(0.05, 0.1, 0.22), (0.1, 0.17, 0.32), (0.04, 0.04, 0.05), (0.3, 0.3, 0.32), (0.45, 0.38, 0.27),
+           (0.2, 0.2, 0.25)]  # fmt: skip
+SHOES = [(0.9, 0.9, 0.9), (0.08, 0.08, 0.08), (0.35, 0.22, 0.12), (0.6, 0.6, 0.6)]
+WALK_SPEED = 1.08
+"""Walking speed (m/s) of the walk clip: its root-motion version covers 2.9 m per 80-frame cycle."""
+FPS = 30.0
+YAW_OFFSET = math.pi / 2
+"""The characters face -y in their own frame."""
+
+
+def _load_clip(path: str) -> dict:
+    stage = Usd.Stage.Open(path)
+    anim = UsdSkel.Animation(stage.GetDefaultPrim())
+    times = anim.GetRotationsAttr().GetTimeSamples()
+    rot = np.stack([np.array(anim.GetRotationsAttr().Get(t), dtype=np.float32) for t in times])  # (F, J, 4) xyzw
+    trans = np.stack([np.array(anim.GetTranslationsAttr().Get(t), dtype=np.float32) for t in times])
+    return {
+        "rot": rot[:-1],  # the last frame repeats the first: loop over F - 1 frames
+        "trans": trans[:-1],
+        "scales": anim.GetScalesAttr().Get(times[0]),
+        "joints": anim.GetJointsAttr().Get(),
+    }
+
+
+def _sample(clip: dict, phase: float) -> tuple[np.ndarray, np.ndarray]:
+    """Pose at a loop phase in [0, 1): linear interpolation of translations, normalized lerp of rotations."""
+    n = len(clip["rot"])
+    f = (phase % 1.0) * n
+    a, w = int(f) % n, f - int(f)
+    b = (a + 1) % n
+    return _nlerp(clip["rot"][a], clip["rot"][b], w), (1 - w) * clip["trans"][a] + w * clip["trans"][b]
+
+
+def _nlerp(qa: np.ndarray, qb: np.ndarray, w: float) -> np.ndarray:
+    sign = np.where((qa * qb).sum(-1, keepdims=True) < 0, -1.0, 1.0)
+    q = (1 - w) * qa + w * sign * qb
+    return q / np.linalg.norm(q, axis=-1, keepdims=True)
+
+
+class AnimatedCrowd:
+    """Characters standing in for the pedestrians of ``env_ids`` in the scenario command ``scenario``."""
+
+    def __init__(self, scenario, env_ids: list[int], clips_dir: str, root: str = "/World/Demo/People", seed: int = 0):
+        import omni.usd
+
+        self.stage = stage = omni.usd.get_context().get_stage()
+        self.scenario = scenario
+        self.env_ids = torch.as_tensor(env_ids, device=scenario.device)
+        rng = np.random.default_rng(seed)
+        names = list(CHARACTERS)
+        weights = np.array([WEIGHTS[n] for n in names], dtype=np.float64)
+        self.clips = {
+            name: {
+                kind: [_load_clip(os.path.join(clips_dir, f"{name}.stand_{kind}{suffix}.skelanim.usd")) for suffix in ("", "_mirror")]
+                for kind in ("walk_loop_in_place", "idle_loop")
+            }
+            for name in names
+        }
+        p = scenario.num_peds
+        self.people = []
+        for e in env_ids:
+            for k in range(p):
+                name = names[rng.choice(len(names), p=weights / weights.sum())]
+                path = f"{root}/env_{e}/person_{k}"
+                prim = stage.DefinePrim(path, "Xform")
+                prim.GetReferences().AddReference(f"{PEOPLE}/{CHARACTERS[name]}")
+                xf = UsdGeom.Xformable(prim)
+                xf.ClearXformOpOrder()
+                translate, rotate = xf.AddTranslateOp(), xf.AddRotateZOp()
+                anim = UsdSkel.Animation.Define(stage, f"{root}/env_{e}/anim_{k}")
+                walk = self.clips[name]["walk_loop_in_place"][int(rng.integers(2))]
+                idle = self.clips[name]["idle_loop"][int(rng.integers(2))]
+                anim.CreateJointsAttr().Set(walk["joints"])
+                anim.CreateScalesAttr().Set(walk["scales"])
+                rot_attr, trans_attr = anim.CreateRotationsAttr(), anim.CreateTranslationsAttr()
+                skel = next(q for q in Usd.PrimRange(prim) if q.IsA(UsdSkel.Skeleton))
+                UsdSkel.BindingAPI.Apply(skel).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+                self._dress_up(prim, rng)
+                self.people.append({
+                    "prim": UsdGeom.Imageable(prim), "translate": translate, "rotate": rotate,
+                    "rot": rot_attr, "trans": trans_attr, "walk": walk, "idle": idle,
+                    "walk_phase": float(rng.uniform()), "idle_phase": float(rng.uniform()),
+                    "stride": float(rng.uniform(0.92, 1.08)),  # people's step length varies a little
+                    "yaw": None, "blend": 0.0, "visible": None,
+                })  # fmt: skip
+        # hide the capsules these characters replace
+        for e in env_ids:
+            for k in range(p):
+                capsule = stage.GetPrimAtPath(f"/World/envs/env_{e}/Ped_{k}")
+                if capsule:
+                    UsdGeom.Imageable(capsule).MakeInvisible()
+
+    @staticmethod
+    def _dress_up(prim, rng: np.random.Generator):
+        """Give this person their own clothing colors (per-instance overrides of the clothes' tints)."""
+        from pxr import Sdf, UsdShade
+
+        for q in Usd.PrimRange(prim):
+            if not q.IsA(UsdShade.Shader):
+                continue
+            name = q.GetPath().pathString.lower()
+            if "fabric" in name and "safety" not in name:
+                palette = BOTTOMS if any(k in name for k in ("jeans", "pants", "trousers", "slacks")) else TOPS
+            elif "leather" in name and "boots" not in name:
+                palette = SHOES
+            else:
+                continue
+            color = np.array(palette[int(rng.integers(len(palette)))]) * rng.uniform(0.85, 1.15)
+            UsdShade.Shader(q).CreateInput("diffuse_tint", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*np.clip(color, 0, 1)))
+
+    def update(self, dt: float):
+        """Move and pose the characters to the pedestrians' current state (call before each rendered frame)."""
+        s, ids = self.scenario, self.env_ids
+        pos = (s.ped_pos[ids] + s.tile_center[ids][:, None]).cpu().numpy()
+        ground = s.layout.ground_height(s.tile_row[ids], s.tile_col[ids], s.ped_pos[ids]).cpu().numpy()
+        vel = s.ped_vel[ids].cpu().numpy()
+        visible = (s.ped_mode[ids] != 0).cpu().numpy()  # PARKED = 0
+        p = pos.shape[1]
+        for n, person in enumerate(self.people):
+            e, k = divmod(n, p)
+            if person["visible"] != bool(visible[e, k]):
+                person["visible"] = bool(visible[e, k])
+                person["prim"].MakeVisible() if visible[e, k] else person["prim"].MakeInvisible()
+            if not visible[e, k]:
+                person["yaw"] = None
+                continue
+            speed = float(np.hypot(*vel[e, k]))
+            # face the walking direction; keep the heading while (nearly) standing
+            if speed > 0.15:
+                target = math.atan2(vel[e, k, 1], vel[e, k, 0])
+                if person["yaw"] is None:
+                    person["yaw"] = target
+                else:
+                    diff = (target - person["yaw"] + math.pi) % (2 * math.pi) - math.pi
+                    person["yaw"] += diff * min(1.0, 8.0 * dt)
+            elif person["yaw"] is None:
+                person["yaw"] = 0.0
+            # walk-cycle phase follows the actual speed; idle when slow
+            person["walk_phase"] += speed / (WALK_SPEED * person["stride"]) * dt * FPS / len(person["walk"]["rot"])
+            person["idle_phase"] += dt * FPS / len(person["idle"]["rot"])
+            target_blend = min(1.0, speed / 0.5)
+            person["blend"] += (target_blend - person["blend"]) * min(1.0, 6.0 * dt)
+            rot_w, trans_w = _sample(person["walk"], person["walk_phase"])
+            rot_i, trans_i = _sample(person["idle"], person["idle_phase"])
+            w = person["blend"]
+            rot = _nlerp(rot_i, rot_w, w) if w < 0.999 else rot_w
+            trans = (1 - w) * trans_i + w * trans_w
+            person["rot"].Set(Vt.QuatfArray.FromNumpy(rot.astype(np.float32)))
+            person["trans"].Set(Vt.Vec3fArray.FromNumpy(trans.astype(np.float32)))
+            person["translate"].Set(Gf.Vec3d(float(pos[e, k, 0]), float(pos[e, k, 1]), float(ground[e, k])))
+            person["rotate"].Set(math.degrees(person["yaw"] + YAW_OFFSET))

@@ -1,0 +1,21 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+**/*.egg-info/
+*.py[cod]
+build/
+dist/
+
+logs/
+outputs/
+videos/
+wandb/
+
+.vscode/settings.json
+.vscode/launch.json
+pyrightconfig.json
+
+# animation clips baked from NVIDIA Isaac Sim assets (regenerate with scripts/demo/bake_people_animations.py)
+src/g1_patrol/assets/data/people/
+*.mp4
