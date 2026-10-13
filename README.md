@@ -1,6 +1,6 @@
 # G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments
 
-Mehmet Kerem Turkcan · [Project page](https://mkturkcan.github.io/g1_patrol/)
+Mehmet Kerem Turkcan · [Project page](https://mehmetkeremturkcan.com/g1_patrol/)
 
 This repository contains the simulation environments, training configurations and evaluation tools for goal-directed
 navigation of a Unitree G1 humanoid in dense urban pedestrian environments. A procedurally generated suite of New
