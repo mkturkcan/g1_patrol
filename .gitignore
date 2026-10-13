@@ -19,3 +19,4 @@ pyrightconfig.json
 # animation clips baked from NVIDIA Isaac Sim assets (regenerate with scripts/demo/bake_people_animations.py)
 src/g1_patrol/assets/data/people/
 *.mp4
+!docs/media/*.mp4

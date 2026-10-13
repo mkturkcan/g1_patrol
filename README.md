@@ -1,129 +1,127 @@
-# G1 Patrol: a civic humanoid for New York streetscapes
+# G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments
 
-Reinforcement-learning tasks, built on [Isaac Lab 3.0](https://github.com/isaac-sim/IsaacLab) and Isaac Sim 6.1, that
-teach a [Unitree G1](https://www.unitree.com/g1) humanoid to walk upright on city pavement and to make its way
-through crowded New York sidewalks, scaffolding tunnels, crosswalks and construction detours, giving way to
-pedestrians, using only the sensors the real robot carries.
+Mehmet Kerem Turkcan · [Project page](https://mkturkcan.github.io/g1_patrol/)
 
-## Why
+This repository contains the simulation environments, training configurations and evaluation tools for goal-directed
+navigation of a Unitree G1 humanoid in dense urban pedestrian environments. A procedurally generated suite of New
+York City street scenarios (sidewalks, sidewalk sheds, crosswalks, construction zones, doorways and pedestrian
+plazas, each at ten difficulty levels) is populated by pedestrians that follow a social-force model. Control is
+hierarchical: a locomotion policy tracks velocity commands at 50 Hz, and a navigation policy issues these commands at
+10 Hz. A navigation teacher with privileged state is trained with PPO and distilled into student policies that
+observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). All
+experiments are in simulation, using Isaac Lab 3.0 and Isaac Sim 6.1.
 
-The idea of this project is to build a **civic robot system** for the applications of the
-[Center for Smart Streetscapes (CS3)](https://cs3-erc.org/), the NSF Engineering Research Center led by Columbia
-University that works toward livable and safe streetscapes. A robot that shares the sidewalk with people (to patrol,
-inspect, report hazards or assist) has to move like a considerate pedestrian first: keep its balance on broken
-pavement and curbs, fit through tight spaces, and step aside for people rather than expect them to step aside for it.
+The project is part of work toward a civic robot system for the applications of the
+[Center for Smart Streetscapes (CS3)](https://cs3-erc.org/), an NSF Engineering Research Center led by Columbia
+University. It follows earlier work on street-scene perception:
+[SyntheticStreetScenes](https://huggingface.co/datasets/mehmetkeremturkcan/SyntheticStreetScenes), a dataset of
+approximately 5,200 generated street-scene videos, and
+[StreetPrompt](https://huggingface.co/mehmetkeremturkcan/StreetPrompt), a street-camera video classifier with classes
+specified as text.
 
-It follows earlier streetscape work in the same direction:
+![Policy architecture](docs/figures/architecture.png)
 
-- [**SyntheticStreetScenes**](https://huggingface.co/datasets/mehmetkeremturkcan/SyntheticStreetScenes): a dataset of
-  ~5,200 AI-generated street-scene videos (traffic, crashes, floods, civic events, ...) with prompts and attributes;
-- [**StreetPrompt**](https://huggingface.co/mehmetkeremturkcan/StreetPrompt): a street-camera video classifier whose
-  classes you write as text, trained on SyntheticStreetScenes and captioned real traffic footage.
+*Figure 1. Policy architecture. Numbers after the observation terms are input dimensions. The student is trained by
+distillation (mean squared error between student and teacher commands); at deployment only the student path is
+used.*
 
-Those projects let a city *see* its streets; this one is about a robot that can *walk* them. Everything here is
-simulation only so far.
+## Method
 
-## What is in here
+**Control hierarchy.** The navigation policy outputs a velocity command (forward velocity, lateral velocity, yaw
+rate) at 10 Hz. A frozen locomotion policy converts the command into joint position targets for the 37 joints of the
+G1 at 50 Hz, which are tracked by PD controllers. The simulator runs at 200 Hz.
 
-| Stage | Task ID | What it learns | Status |
+**Training.** Training proceeds in three stages; each stage is frozen before the next is trained.
+
+1. *Locomotion policy* (`G1Patrol-Walk-City`). Velocity tracking on uneven city terrain (potholes, cobblestones,
+   curbs, curb cuts, stairs, ramps) under the torque and velocity limits of the G1 actuators, with gait-phase and
+   posture rewards and random pushes. Commands: forward velocity −0.6 to 1.2 m/s, lateral ±0.6 m/s, yaw rate
+   ±1.2 rad/s.
+2. *Teacher* (`G1Patrol-Navigate-NYC`). Navigation with privileged observations: goal position, base velocities,
+   gravity vector, positions and velocities of the 10 nearest pedestrians, obstacle distances in 72 sectors (separately
+   for tall and low obstacles), a terrain height scan and the previous action (332 dimensions). A curriculum moves each
+   robot to a harder tile after it reaches the goal and to an easier tile after a contact or fall.
+3. *Students* (`G1Patrol-Navigate-NYC-Lidar`, `G1Patrol-Navigate-NYC-Camera`). Distilled from the teacher. Each
+   student observes proprioception, the goal position and one sensor at its mounting pose in the G1 URDF: a 40 × 40
+   elevation map (8 m × 8 m, 0.2 m cells) built from the MID-360 returns, or 64 × 38 depth images from the D435i with
+   distance-dependent noise, missing pixels and random occlusions.
+
+![Training workflow](docs/figures/workflow.png)
+
+*Figure 2. Training workflow.*
+
+| | Locomotion policy | Teacher | Students |
 |---|---|---|---|
-| 1 | `G1Patrol-Walk-Flat` | Walk on flat ground following (vx, vy, yaw-rate) commands | trained |
-| 2 | `G1Patrol-Walk-Rough` | Walk on rough terrain with a height scan | smoke-tested |
-| 3 | `G1Patrol-Walk-Street` | Curbs, sills, stairs, ramps, rough pavement; shoves of up to 1.2 m/s | trained |
-| 3b | `G1Patrol-Walk-City` | **Upright, realistic walker**: real motor torque/speed limits, gait-phase rewards, potholes, cobbles, curbs, curb cuts | trained, used by all navigation tasks |
-| 4 | `G1Patrol-Navigate-Crowd` | Reach a goal through walking people, poles and walls (flat arena) | trained |
-| 5 | `G1Patrol-Navigate-NYC` | **Privileged teacher** for six New York scenario types at ten difficulty levels | trained |
-| 6 | `G1Patrol-Navigate-NYC-Lidar` | Student distilled from the teacher, seeing the world only through the G1's **Livox MID-360** lidar | pipeline tested |
-| 7 | `G1Patrol-Navigate-NYC-Camera` | Camera-only student using the G1's **RealSense D435i** depth camera | pipeline tested |
+| Algorithm | PPO | PPO | Distillation (action MSE) |
+| Simulator | Newton (MuJoCo-Warp) | Isaac Sim PhysX | Isaac Sim PhysX |
+| Policy rate | 50 Hz | 10 Hz | 10 Hz |
+| Parallel robots | 4,096, then 16,384 | 8,192 | 8,192 |
+| Rollout length (steps per robot and iteration) | 24 | 32 | 32 |
+| Iterations | 4,000 + 3,000 | 3,350 | 1,500 |
+| Network | MLP 512-256-128 | MLP 512-256-128 | CNN 16-32-32, MLP 512-256-128 |
+| Hardware, time | 1 GPU 44 min, then 4 GPUs 31 min | 4 GPUs, 4.9 h | 4 GPUs |
 
-The navigation policies are hierarchical: a navigator at 10 Hz outputs velocity commands to the frozen
-`G1Patrol-Walk-City` walker, which turns them into joint targets at 50 Hz and handles balance, curbs and shoves.
+*Table 1. Training setup (NVIDIA RTX PRO 6000 GPUs).*
 
-## New York scenarios
+**Environment.** The terrain is a grid of 16 m × 10 m tiles; columns are the six scenario types and rows are ten
+difficulty levels. In each episode the robot must traverse a route on its tile within 40 s. Pedestrians are
+kinematic bodies that follow walking lanes under a social-force model. Most are timed to reach the robot's route
+when the robot does. A fraction of them (90% at level 1, 60% at level 10) perceive the robot, keep a clearance of at
+least 0.1 m, slow down and step around it; the loss of pedestrian speed is penalized, which rewards yielding. The
+others react only within 1 m. A unit test verifies that every route admits a 0.6 m wide path at every difficulty.
 
-`G1Patrol-Navigate-NYC` trains on a procedurally generated grid of 16 m × 10 m street tiles: columns are scenario
-types, rows are difficulty levels, and a curriculum moves each robot to harder tiles when it reaches its goal and to
-easier ones when it collides or falls.
+| Term | Definition | Weight |
+|---|---|---|
+| Progress | Reduction of distance to the goal per second, clipped to ±1.5 m/s | 2.0 |
+| Goal reached | Within 0.5 m of the goal (terminates) | 100 |
+| Contact | Pedestrian or obstacle contact (terminates) | −100 |
+| Fall | Torso contact with the ground (terminates) | −200 |
+| Personal space | Penetration of a 0.5 m clearance to the nearest pedestrian (m) | −4 |
+| Obstacle margin | Penetration of a 0.15 m margin to the nearest structure (m) | −4 |
+| Pedestrian delay | Total speed lost by pedestrians slowing for the robot (m/s) | −1 |
+| Roadway | Robot in the roadway outside a crosswalk | −2 |
+| Action rate | Squared change of the velocity command | −0.1 |
 
-| Scenario | What makes it hard |
-|---|---|
-| Busy sidewalk | Two-way foot traffic on a sidewalk that narrows from 5 m to 2.6 m; hydrants, poles, parking meters, newsboxes, bike racks and low tree-pit fences along the curb; people stepping out of doorways |
-| Sidewalk shed (scaffolding) | A tunnel of 9 cm poles and rails narrowing to 1.25 m; oncoming people force the robot to wait in a gap or doorway |
-| Crossing the street | Curbs or curb cuts, potholes, waves of people crossing towards the robot; walking in the street outside the crosswalk is penalized |
-| Construction detour | A chicane of fences and jersey barriers over steel plates and broken pavement, one person wide at the hardest level |
-| Doorway rush | A partition with a single opening or a subway entrance with people streaming out |
-| Times Square plaza | Dense criss-crossing crowds, tourists standing around, planters, tables and kiosks |
-
-Pedestrians are kinematic bodies driven by a social-force model. Most are timed to reach the robot's route when the
-robot does, so the crowd really does cross and block its path. Pedestrians who notice the robot keep their distance,
-slow down and step around it; that slowdown is penalized, which is what teaches the robot to **give way**. Distracted
-pedestrians (on their phone) only swerve at the last moment, so the robot has to keep out of their path. Every tile is
-checked by a unit test to be passable for the robot at every difficulty.
-
-### Sensors
-
-The students use only Unitree's official sensor setup, mounted where the G1's URDF puts it:
-
-- **Livox MID-360** lidar, upside down in the head (~1.13 m up, −52° to +7° vertical field of view): its returns are
-  binned into a robot-centred 8 m × 8 m height map that shows curbs, potholes, low fences, poles and people;
-- **RealSense D435i** depth camera, pitched 47.6° down: degraded with distance-dependent noise, missing pixels and
-  random occlusions. With that tilt it sees the ground from about 0.3 m to 3.4 m ahead, so a camera-only robot sees
-  people late; a re-angled bracket or an extra forward camera would help.
-
-The teacher instead observes the exact positions and velocities of the ten nearest pedestrians, obstacle distances in
-72 directions and the terrain, and is distilled into the students with rsl-rl's `DistillationRunner`.
+*Table 2. Reward terms of the navigation policy, multiplied by the control period (0.1 s). Contact is declared when
+the robot footprint (radius 0.25 m) intersects a pedestrian (radius 0.25 m) or a structure.*
 
 ## Results
 
-All numbers are from headless evaluation in play mode (no random shoves unless stated).
+The teacher is evaluated with the curriculum disabled and robots distributed uniformly over all 120 tiles (2,400
+robots, 60 s, 13,238 episodes, PhysX). It reaches the goal in 79.1% of episodes; 11.9% end in pedestrian contact,
+7.9% in obstacle contact, 0.7% in a fall and 0.4% in a time-out. Successful episodes take 10.5 s on average.
 
-### City walker (`G1Patrol-Walk-City`)
-
-Compared with the earlier street walker over 256 robots × 20 s (85 robot-minutes) on city terrain, the city walker
-stands and walks more upright while tracking velocity commands as well as before:
-
-| | Street walker | City walker |
-|---|---|---|
-| Torso tilt | 6.4° | 3.8° |
-| Knee bend | 41° | 30° |
-| Pelvis height | 0.69 m | 0.73 m |
-| Falls (Newton, its training engine) | — | 4 |
-| Falls with shoves of up to 1 m/s | — | 6 |
-| Falls on PhysX | — | 7 |
-
-### New York teacher (`G1Patrol-Navigate-NYC`)
-
-3350 PPO iterations (4.9 h on 4 GPUs, 4 × 2048 robots, PhysX). Evaluated with `scripts/evaluate_nav.py` with the
-curriculum frozen and robots spread evenly over all tiles (2400 robots × 60 s, 13,238 episodes). Share of episodes
-that reach the goal, by difficulty (easy: levels 1–4, medium: 5–7, hard: 8–10):
-
-| Scenario | Easy | Medium | Hard |
+| Scenario | Easy (levels 1–4) | Medium (5–7) | Hard (8–10) |
 |---|---|---|---|
-| Busy sidewalk | 89 % | 69 % | 44 % |
-| Sidewalk shed (scaffolding) | 97 % | 82 % | 50 % |
-| Crossing the street | 92 % | 68 % | 59 % |
-| Construction detour | 88 % | 77 % | 63 % |
-| Doorway rush | 90 % | 89 % | 85 % |
-| Times Square plaza | 88 % | 83 % | 84 % |
+| Sidewalk | 88.9% | 69.5% | 43.9% |
+| Sidewalk shed | 97.5% | 82.4% | 50.1% |
+| Crosswalk | 91.6% | 68.5% | 58.8% |
+| Construction zone | 87.7% | 76.7% | 63.2% |
+| Doorway | 90.4% | 89.0% | 85.2% |
+| Plaza | 88.2% | 83.0% | 84.0% |
 
-Overall, **79 %** of episodes reach the goal; the rest end in a pedestrian collision (12 %), an obstacle collision
-(8 %), a fall (0.7 %) or a time-out (0.4 %). Successful episodes take 10.5 s on average. Two thirds of the pedestrian collisions happen while the robot is
-closing in faster than the pedestrian, so the robot is still too assertive in the densest crowds; the hardest
-sidewalk and scaffolding tiles, where there is no room to pass oncoming people, remain the main open problem.
+*Table 3. Teacher success rate by scenario type and difficulty.*
 
-### Earlier stages
+Pedestrian contacts are mostly initiated by the robot: in 67.8% of them the robot approached faster than the
+pedestrian. Success is lowest on hard sidewalk and sidewalk-shed tiles, where the walkway admits one person at a time.
 
-- **Flat walker:** 1500 PPO iterations (11.5 min on Newton, 4096 robots); velocity errors of 0.06 m/s and no falls
-  in 85 robot-minutes. Policies transfer between Newton and PhysX once the joint and body order is pinned.
-- **Street walker:** 5000 iterations on Newton; 3 falls in 85 robot-minutes with or without 1 m/s shoves, on either
-  engine.
-- **Crowd navigator** (flat arena, 10 pedestrians, 8 poles, 4 walls): 83 % of episodes reach the goal, 15 % end in a
-  pedestrian collision; in most of those the pedestrian walked into a robot that was backing away, which motivated
-  the more realistic pedestrian behaviour of the New York tasks.
+| Metric | Newton | Newton, pushes ≤ 1 m/s | PhysX |
+|---|---|---|---|
+| Forward velocity error (m/s) | 0.100 | 0.119 | 0.103 |
+| Lateral velocity error (m/s) | 0.090 | 0.100 | 0.090 |
+| Yaw-rate error (rad/s) | 0.165 | 0.179 | 0.236 |
+| Torso tilt | 3.8° | 3.9° | 4.0° |
+| Knee flexion | 30.6° | 31.3° | 31.5° |
+| Pelvis height (m) | 0.734 | 0.736 | 0.732 |
+| Falls in 85 robot-minutes | 4 | 6 | 7 |
+
+*Table 4. Locomotion policy on city terrain (256 robots × 20 s, random velocity commands).*
+
+The lidar student is being trained; the camera student has not been trained yet.
 
 ## Installation
 
-Requires an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0` branch).
+Requirements: Linux, an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0`).
 
 ```bash
 conda create -n isaaclab3 python=3.12 && conda activate isaaclab3
@@ -135,78 +133,97 @@ pip install "moviepy>=1.0.3,<2" pytest
 git clone https://github.com/mkturkcan/g1_patrol.git && pip install --no-deps -e g1_patrol
 ```
 
-Isaac Sim asks you to accept the [NVIDIA Omniverse EULA](https://docs.omniverse.nvidia.com/platform/latest/common/NVIDIA_Omniverse_License_Agreement.html)
-on first launch (set `OMNI_KIT_ACCEPT_EULA=YES` to accept it non-interactively).
+Set `OMNI_KIT_ACCEPT_EULA=YES` to accept the
+[NVIDIA Omniverse EULA](https://docs.omniverse.nvidia.com/platform/latest/common/NVIDIA_Omniverse_License_Agreement.html)
+non-interactively.
 
 ## Usage
 
 ```bash
-isaaclab list_envs --show_presets                      # tasks and physics presets
-
-# walkers (Newton is ~2x faster for these)
+# Stage 1: locomotion policy (Newton). The trained policy used by the navigation tasks is
+# src/g1_patrol/assets/data/policies/g1_walk_city.pt.
 isaaclab train --task G1Patrol-Walk-City --device cuda:0
-python scripts/evaluate.py --task G1Patrol-Walk-City --checkpoint latest --push_velocity 1.0   # shove test
+python scripts/evaluate.py --task G1Patrol-Walk-City --checkpoint latest --push_velocity 1.0
 
-# New York teacher: 4 GPUs, PhysX (kinematic pedestrians are slow on MuJoCo-Warp)
+# Stage 2: teacher (4 GPUs, PhysX)
 isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC --external_callback g1_patrol.register_tasks \
     --num_envs 2048 physics=isaacsim_physx
-python scripts/evaluate_nav.py --task G1Patrol-Navigate-NYC --checkpoint latest --num_envs 2400   # per-scenario table
+python scripts/evaluate_nav.py --task G1Patrol-Navigate-NYC --checkpoint <model.pt> --num_envs 2400 --num_steps 600
 
-# students: distill the teacher into the lidar-only, then the camera-only policy
+# Stage 3: students, distilled from a teacher checkpoint
 isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC-Lidar --external_callback g1_patrol.register_tasks \
-    --num_envs 2048 --checkpoint <teacher model_XXXX.pt> physics=isaacsim_physx
+    --num_envs 2048 --checkpoint <teacher model.pt> physics=isaacsim_physx
 isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC-Camera --external_callback g1_patrol.register_tasks \
-    --num_envs 2048 --checkpoint <teacher model_XXXX.pt> physics=isaacsim_physx
+    --num_envs 2048 --checkpoint <teacher model.pt> physics=isaacsim_physx
 
-python -m pytest tests                                  # registrations and tile passability
+# tests: task registration, tile capacities, route passability
+python -m pytest tests
 ```
 
-Notes: runs are headless unless you pass `--visualizer kit`; pick GPUs with `--device cuda:N`; `--checkpoint`
-accepts `latest`, `best`, a run directory or a `model_XXXX.pt` file; config values can be overridden with Hydra, e.g.
-`env.scene.num_envs=1024 agent.max_iterations=3000`.
+`evaluate_nav.py` freezes the curriculum, distributes robots uniformly over all tiles and reports outcome rates per
+scenario type and difficulty. Runs are headless; select GPUs with `--device cuda:N`. Configuration values can be
+overridden with Hydra arguments, e.g. `env.scene.num_envs=1024 agent.max_iterations=3000`.
 
-### Demo videos
-
-`scripts/demo/` renders the policies in dressed-up New York streets with RTX: textured asphalt, concrete sidewalks
-with granite curbs, zebra crossings, brick facades with shop windows, green sidewalk sheds, street trees, a skyline,
-and Isaac Sim's animated people instead of the capsules the robot trains with. Pedestrians' walk cycles follow their
-simulated speed, and a chase camera films one robot per scenario. Only the rendering changes; the robot, the people's
-motion and what the policy sees are exactly those of the evaluation environment.
+**Rendering.** `scripts/demo/` renders policies with RTX: textured streets and buildings, and Isaac Sim's animated
+character models in place of the pedestrian capsules. Only the rendering changes; pedestrian motion and policy inputs
+are those of the evaluation environment. The character animations are retargeted from Isaac Sim assets and are not
+included in the repository:
 
 ```bash
-# once: retarget Isaac Sim's walk/idle clips onto the People characters (not redistributed here)
 python scripts/demo/bake_people_animations.py --out src/g1_patrol/assets/data/people
-
-# one clip per episode, named after its scenario and outcome
-python scripts/demo/nyc_demo.py --task G1Patrol-Navigate-NYC --checkpoint <model.pt> \
-    --scenarios sidewalk scaffold crosswalk construction bottleneck plaza --level 7 --seconds 60
+python scripts/demo/nyc_demo.py --task G1Patrol-Navigate-NYC --checkpoint <model.pt> --no_overlay \
+    --scenarios sidewalk scaffold crosswalk construction bottleneck plaza --levels 6 6 7 7 9 9 --camera chase
 ```
 
-## Layout
+`scripts/figures/` contains the scripts for the diagrams (`make_diagrams.py`) and the overview video
+(`make_video.py`).
+
+## Tasks
+
+| Task ID | Description |
+|---|---|
+| `G1Patrol-Walk-City` | Locomotion policy used by all navigation tasks (Stage 1) |
+| `G1Patrol-Navigate-NYC` | Privileged navigation teacher (Stage 2) |
+| `G1Patrol-Navigate-NYC-Lidar` | MID-360 lidar student (Stage 3) |
+| `G1Patrol-Navigate-NYC-Camera` | D435i depth-camera student (Stage 3) |
+| `G1Patrol-Walk-Flat`, `G1Patrol-Walk-Rough` | Flat- and rough-terrain velocity tracking; `Walk-Rough` is the base configuration of `Walk-City` |
+| `G1Patrol-Walk-Street` | Earlier street-terrain walker without actuator limits and gait rewards |
+| `G1Patrol-Navigate-Crowd` | Earlier flat-arena crowd navigation task with a single-plane lidar |
+
+## Repository layout
 
 ```
 src/g1_patrol/
-├── assets/data/policies/        # frozen walkers used by the navigation tasks (g1_walk_city.pt, g1_walk_street.pt)
+├── assets/data/policies/        frozen locomotion policies (g1_walk_city.pt)
 └── tasks/
-    ├── locomotion/              # G1Patrol-Walk-*: terrains, gait/posture rewards, push curriculum, configs
+    ├── locomotion/              walking tasks: terrains, gait and posture rewards, configurations
     └── navigation/
-        ├── nyc/                 # street tiles (tiles.py, pure numpy), terrain generator and importer
-        ├── mdp/nyc_scenario.py  # routes, pedestrian traffic, privileged state
-        ├── mdp/nyc_terms.py     # observations, rewards, terminations, curriculum
-        ├── mdp/perception.py    # lidar height map and degraded depth images for the students
-        ├── mdp/actions.py       # drives the frozen walker with clamped velocity commands
-        ├── mdp/crowd.py         # the earlier flat-arena crowd task
-        └── config/g1/           # nyc_env_cfg.py (teacher and students), crowd_env_cfg.py, PPO/distillation configs
+        ├── nyc/                 street tiles (tiles.py), terrain generator and importer
+        ├── mdp/                 scenario command, observations, rewards, terminations, sensor processing
+        └── config/g1/           NYC teacher and student configurations, PPO and distillation settings
 scripts/
-├── evaluate.py                  # walkers: tracking error, posture, falls, shove test (+ RTX video)
-├── evaluate_nav.py              # navigators: outcome rates per scenario and difficulty
-├── render_trajectory.py         # offline stick-figure video
-└── demo/                        # RTX demo: city looks, animated people, chase camera
-tests/                           # task registrations, tile capacity and passability
+├── evaluate.py                  locomotion evaluation (tracking, posture, falls, pushes)
+├── evaluate_nav.py              navigation evaluation per scenario type and difficulty
+├── demo/                        RTX rendering with animated pedestrians
+└── figures/                     diagrams and overview video
+docs/                            project page (GitHub Pages)
+tests/                           registration, tile capacity and passability tests
+```
+
+## Citation
+
+```bibtex
+@misc{turkcan2026g1patrol,
+  title        = {G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments},
+  author       = {Turkcan, Mehmet Kerem},
+  year         = {2026},
+  howpublished = {\url{https://github.com/mkturkcan/g1_patrol}}
+}
 ```
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Files generated from the Isaac Lab project template keep their original BSD-3-Clause
-notice. Isaac Sim, its assets (robots, people, materials) and Isaac Lab are subject to their own licenses; the demo
-downloads the assets it uses from NVIDIA's asset server rather than redistributing them.
+MIT, see [LICENSE](LICENSE). Files generated from the Isaac Lab project template keep their BSD-3-Clause notice.
+Icons in the figures are from [Lucide](https://lucide.dev) (ISC). Isaac Sim, Isaac Lab and their assets are subject to
+their own licenses; NVIDIA assets used for rendering are downloaded from NVIDIA's asset server and are not
+redistributed here.

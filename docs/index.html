@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>G1 Patrol</title>
+<meta name="description" content="Humanoid navigation in dense urban pedestrian environments: a hierarchical policy for the Unitree G1 trained on a procedural suite of New York City street scenarios in Isaac Lab.">
+<meta property="og:title" content="G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments">
+<meta property="og:description" content="Hierarchical navigation policy for the Unitree G1, trained in simulation on six New York City scenario types at ten difficulty levels.">
+<meta property="og:image" content="media/hero.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Code:wght@400;500&display=swap">
+<style>
+/* Layout: a single centered column (text 860px, figures 1100px) on white. Hierarchy comes from type size and
+   spacing alone; figures and tables carry numbered captions. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f8f9fa;
+  --rule: #e8eaed;
+  --outline: #dadce0;
+  --text: #202124;
+  --text-2: #3c4043;
+  --muted: #5f6368;
+  --link: #1a73e8;
+  --font: "Google Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Google Sans Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --b-sidewalk: #00933c;
+  --b-scaffold: #b933ad;
+  --b-crosswalk: #0039a6;
+  --b-construction: #ff6319;
+  --b-bottleneck: #996633;
+  --b-plaza: #fccc0a;
+  /* ordinal ramp for difficulty (easy -> hard), each step >= 2:1 against white */
+  --d-easy: #8ab4f8;
+  --d-medium: #4285f4;
+  --d-hard: #174ea6;
+  --gutter: clamp(16px, 4vw, 32px);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 1.0625rem/1.65 var(--font); -webkit-font-smoothing: antialiased; }
+img, video, canvas { max-width: 100%; display: block; }
+img { height: auto; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 4px; }
+h1, h2, h3 { margin: 0; font-weight: 500; text-wrap: balance; }
+p { margin: 0; }
+.col { width: 100%; max-width: 860px; margin-inline: auto; padding-inline: var(--gutter); }
+.wide { width: 100%; max-width: 1100px; margin-inline: auto; padding-inline: var(--gutter); }
+.prose { color: var(--text-2); }
+.prose + .prose { margin-top: 14px; }
+
+/* navigation */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px); box-shadow: 0 1px 0 var(--rule); }
+.bar .wide { display: flex; align-items: center; gap: 24px; min-height: 56px; }
+.mark { font-weight: 500; font-size: 1.05rem; color: var(--text); }
+.mark:hover { text-decoration: none; }
+.bar nav { display: flex; gap: 22px; margin-left: auto; flex-wrap: wrap; }
+.bar nav a { font-size: 0.92rem; color: var(--muted); }
+.bar nav a:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 760px) { .bar nav a:not(.gh) { display: none; } }
+
+/* title */
+.titleblock { text-align: center; padding-block: clamp(48px, 8vw, 88px) 36px; display: grid; gap: 16px; justify-items: center; }
+.titleblock h1 { font-size: clamp(1.8rem, 4vw, 2.9rem); line-height: 1.18; max-width: 22ch; letter-spacing: -0.01em; }
+.authors { font-size: 1.15rem; color: var(--text-2); }
+.links { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+.links a { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border: 1px solid var(--outline); border-radius: 999px; font-size: 0.95rem; font-weight: 500; color: var(--text); }
+.links a:hover { background: var(--surface); text-decoration: none; }
+.links svg { width: 18px; height: 18px; }
+
+/* figures */
+figure { margin: 0; }
+.media { border-radius: 12px; overflow: hidden; background: var(--surface); }
+.media video, .media img { width: 100%; }
+figcaption { margin-top: 12px; font-size: 0.92rem; line-height: 1.55; color: var(--muted); max-width: 860px; }
+figcaption b { color: var(--text); font-weight: 500; }
+.wide figcaption { margin-inline: auto; }
+.teaser { position: relative; }
+.teaser video { aspect-ratio: 16 / 9; object-fit: cover; }
+.teaser .toggle { position: absolute; top: 14px; right: 14px; background: rgba(255, 255, 255, 0.92); border: 0; color: var(--text); border-radius: 999px; padding: 7px 14px; font: 500 0.82rem/1 var(--font); cursor: pointer; }
+.diagram { background: #fff; }
+.diagram img { width: 100%; }
+
+/* sections */
+section { padding-top: clamp(56px, 7vw, 88px); }
+section h2 { font-size: clamp(1.5rem, 2.6vw, 1.95rem); margin-bottom: 18px; }
+h3.sub { font-size: 1.22rem; margin-block: 40px 14px; }
+.abstract p { font-size: 1.08rem; color: var(--text-2); }
+.space { margin-top: 32px; }
+
+/* scenario grid */
+.scenes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px 24px; }
+@media (max-width: 980px) { .scenes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .scenes { grid-template-columns: 1fr; } }
+.scene { display: grid; grid-template-rows: auto auto 1fr auto; gap: 10px; min-width: 0; align-content: start; }
+.frame { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: var(--surface); }
+.frame video { width: 100%; height: 100%; object-fit: cover; }
+.angles { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 2px; background: rgba(255, 255, 255, 0.92); border-radius: 999px; padding: 3px; }
+.angles button { border: 0; background: transparent; color: var(--muted); font: 500 0.78rem/1 var(--font); padding: 6px 11px; border-radius: 999px; cursor: pointer; }
+.angles button[aria-pressed="true"] { background: var(--text); color: #fff; }
+.expand { position: absolute; right: 10px; bottom: 10px; width: 32px; height: 32px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, 0.92); color: var(--text); cursor: pointer; display: grid; place-items: center; }
+.expand svg { width: 16px; height: 16px; }
+.scene .title { display: flex; align-items: center; gap: 10px; }
+.bullet { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff; display: grid; place-items: center; font: 700 0.8rem/1 var(--font); }
+.bullet.dark-ink { color: #111; }
+.scene h3 { font-size: 1.08rem; }
+.scene p { color: var(--muted); font-size: 0.95rem; }
+.rates { display: flex; gap: 22px; margin: 0; font-size: 0.92rem; }
+.rates div { display: flex; gap: 6px; align-items: baseline; }
+.rates dt { color: var(--muted); }
+.rates dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* gallery */
+.gallery { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 760px) { .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.gallery button { padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: var(--surface); cursor: zoom-in; aspect-ratio: 16 / 9; }
+.gallery img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.25s ease; }
+.gallery button:hover img { transform: scale(1.03); }
+@media (prefers-reduced-motion: reduce) { .gallery img { transition: none; } }
+
+/* lists */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 4vw, 48px); align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+.stack { display: grid; gap: 12px; }
+ul.facts { margin: 0; padding-left: 1.2em; display: grid; gap: 12px; color: var(--text-2); font-size: 0.98rem; }
+ul.facts b { color: var(--text); font-weight: 500; }
+
+/* tables */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 0.95rem; }
+caption { caption-side: top; text-align: left; font-size: 0.92rem; color: var(--muted); padding-bottom: 12px; line-height: 1.55; }
+caption b { color: var(--text); font-weight: 500; }
+th, td { text-align: left; padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+thead th { font-weight: 500; color: var(--muted); font-size: 0.88rem; border-bottom: 1px solid var(--outline); white-space: nowrap; }
+td.num, th.num { text-align: right; padding-left: 16px; padding-right: 0; white-space: nowrap; }
+td.def { color: var(--text-2); }
+tbody tr:last-child td { border-bottom: 0; }
+
+/* sensing */
+.viewer { position: relative; border-radius: 12px; overflow: hidden; background: var(--surface); aspect-ratio: 16 / 9; min-height: 300px; }
+.viewer canvas { width: 100% !important; height: 100% !important; }
+.viewer .ui { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+.viewer .ui > * { pointer-events: auto; }
+.seg { display: flex; gap: 2px; background: #fff; border: 1px solid var(--outline); border-radius: 999px; padding: 3px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 0.82rem/1 var(--font); padding: 7px 12px; border-radius: 999px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--text); color: #fff; }
+.legend { display: flex; gap: 14px; align-items: center; background: #fff; border: 1px solid var(--outline); border-radius: 999px; padding: 7px 14px; font-size: 0.82rem; color: var(--muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.viewer .hint { position: absolute; bottom: 12px; left: 14px; font-size: 0.8rem; color: var(--muted); }
+.viewer .loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 0.9rem; }
+.inputs { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr); gap: 20px; }
+@media (max-width: 760px) { .inputs { grid-template-columns: 1fr; } }
+.inputs img { width: 100%; image-rendering: pixelated; border-radius: 10px; }
+.inputs .spec { margin-top: 8px; font-size: 0.88rem; color: var(--muted); }
+
+/* charts */
+.chart-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.88rem; color: var(--text-2); }
+.chart-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
+.chart-title { font-weight: 500; font-size: 0.98rem; }
+.chart { position: relative; margin-top: 10px; }
+.chart svg { width: 100%; height: auto; overflow: visible; display: block; }
+.chart text { font-family: var(--font); fill: var(--muted); font-size: 12px; }
+.chart .lab { fill: var(--text); font-size: 14px; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .hit { fill: transparent; }
+.tip { position: absolute; pointer-events: none; background: #fff; border-radius: 8px; padding: 9px 12px; font-size: 0.82rem; line-height: 1.5; color: var(--text-2); white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); z-index: 5; box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3), 0 4px 8px rgba(60, 64, 67, 0.15); }
+.tip b { color: var(--text); font-weight: 500; }
+.charts2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+@media (max-width: 820px) { .charts2 { grid-template-columns: 1fr; } }
+details.table { margin-top: 16px; }
+details.table summary { cursor: pointer; color: var(--link); font-size: 0.92rem; }
+details.table .tablewrap { margin-top: 10px; }
+
+pre.bibtex { margin: 0; padding: 18px 20px; background: var(--surface); border-radius: 12px; overflow-x: auto; font: 400 0.84rem/1.6 var(--mono); color: var(--text-2); }
+.copy { margin-top: 12px; background: #fff; border: 1px solid var(--outline); color: var(--text); border-radius: 999px; padding: 8px 16px; font: 500 0.86rem/1 var(--font); cursor: pointer; }
+.copy:hover { background: var(--surface); }
+
+footer { margin-top: clamp(64px, 9vw, 112px); padding-block: 28px 44px; color: var(--muted); font-size: 0.88rem; box-shadow: 0 -1px 0 var(--rule); }
+footer .wide { display: flex; gap: 10px 28px; flex-wrap: wrap; justify-content: space-between; }
+
+dialog.lightbox { padding: 0; border: 0; background: transparent; max-width: min(1400px, 94vw); width: 100%; overflow: visible; }
+dialog.lightbox::backdrop { background: rgba(32, 33, 36, 0.86); }
+dialog.lightbox video, dialog.lightbox img { width: 100%; border-radius: 10px; background: #000; }
+dialog.lightbox .close { position: absolute; top: -46px; right: 0; background: #fff; border: 0; color: var(--text); border-radius: 999px; padding: 8px 16px; font: 500 0.86rem/1 var(--font); cursor: pointer; }
+dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wide">
+    <a class="mark" href="#top">G1 Patrol</a>
+    <nav aria-label="Sections">
+      <a href="#abstract">Abstract</a>
+      <a href="#video">Video</a>
+      <a href="#method">Method</a>
+      <a href="#environment">Environment</a>
+      <a href="#sensing">Sensing</a>
+      <a href="#results">Results</a>
+      <a class="gh" href="https://github.com/mkturkcan/g1_patrol">Code</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="col titleblock">
+    <h1>G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments</h1>
+    <p class="authors">Mehmet Kerem Turkcan</p>
+    <div class="links">
+      <a href="https://github.com/mkturkcan/g1_patrol"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5z"/></svg>Code</a>
+      <a href="#video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m22 8-5 4 5 4z"/></svg>Video</a>
+      <a href="#bibtex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>BibTeX</a>
+    </div>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <div class="media teaser">
+        <video id="hero" muted loop playsinline preload="metadata" poster="media/hero.jpg" aria-label="Rollouts of the navigation policy in several scenario types"></video>
+        <button class="toggle" id="heroToggle" type="button">Pause</button>
+      </div>
+      <figcaption><b>Figure 1.</b> Rollouts of the privileged navigation policy on sidewalk, plaza, sidewalk-shed, crosswalk, construction-zone and doorway tiles, taken from successful episodes. Pedestrians are rendered with animated character models; pedestrian motion and policy inputs are those of the simulation.</figcaption>
+    </figure>
+  </div>
+
+  <section id="abstract" class="col abstract">
+    <h2>Abstract</h2>
+    <p>We study goal-directed navigation of a Unitree G1 humanoid in dense urban pedestrian environments. We construct a procedurally generated suite of New York City street scenarios (sidewalks, sidewalk sheds, crosswalks, construction zones, doorways and pedestrian plazas) at ten difficulty levels, populated by pedestrians that follow a social-force model in which some pedestrians react to the robot only at close range. Control is hierarchical: a locomotion policy trained with the actuator limits of the physical robot tracks velocity commands at 50 Hz, and a navigation policy issues these commands at 10 Hz. A navigation teacher with privileged state is trained with PPO and distilled into student policies that observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). Evaluated on 13,238 episodes over all 120 scenario tiles, the teacher reaches the goal in 79.1% of episodes, with pedestrian contact in 11.9%, obstacle contact in 7.9% and falls in 0.7%. Success decreases to 44% and 50% on the narrowest sidewalks and sidewalk sheds. All experiments are conducted in simulation (Isaac Lab 3.0, Isaac Sim 6.1).</p>
+  </section>
+
+  <section id="video" class="wide">
+    <h2 class="col" style="padding:0">Video</h2>
+    <figure>
+      <div class="media"><video controls playsinline preload="metadata" poster="media/overview.jpg" src="media/overview.mp4" aria-label="Overview video"></video></div>
+      <figcaption><b>Figure 2.</b> Overview: scenario types, rollouts of the teacher policy, onboard sensing, architecture, training workflow and evaluation results (70 s).</figcaption>
+    </figure>
+  </section>
+
+  <section id="method" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Method</h2>
+      <p class="prose">The navigation policy outputs a velocity command (forward velocity, lateral velocity and yaw rate) at 10 Hz. A frozen locomotion policy converts the command into joint position targets for the 37 joints of the G1 at 50 Hz, which are tracked by PD controllers; the simulator runs at 200 Hz. The teacher observes privileged simulator state. Student policies observe proprioception, the goal position and one onboard sensor, and are trained to reproduce the teacher's commands.</p>
+    </div>
+    <figure class="space">
+      <div class="media diagram"><img src="figures/architecture.png" alt="Architecture: simulation, privileged and onboard observations, teacher and student navigation policies, frozen locomotion policy and the robot" width="3200" height="1520" loading="lazy"></div>
+      <figcaption><b>Figure 3.</b> Policy architecture. Numbers after the observation terms are input dimensions. The student is trained by distillation (mean squared error between student and teacher commands); at deployment only the student path is used.</figcaption>
+    </figure>
+    <div class="col space" style="padding:0">
+      <p class="prose">Training proceeds in three stages; each stage is frozen before the next is trained (Figure 4, Table 1). The locomotion policy is trained on uneven city terrain with the torque and velocity limits of the G1 actuators, gait-phase and posture rewards, and random pushes. The teacher is trained with PPO on the scenario suite under a difficulty curriculum. The students are trained by distillation from the teacher.</p>
+    </div>
+    <figure class="space">
+      <div class="media diagram"><img src="figures/workflow.png" alt="Workflow: scenario generation, locomotion training, teacher training, student distillation and evaluation" width="3200" height="1400" loading="lazy"></div>
+      <figcaption><b>Figure 4.</b> Training workflow. The curriculum moves each robot to a harder tile after it reaches the goal and to an easier tile after a contact or fall. The frozen locomotion policy executes the commands of all navigation policies.</figcaption>
+    </figure>
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table>
+          <caption><b>Table 1.</b> Training setup. Rollout length is the number of policy steps per robot and iteration.</caption>
+          <thead><tr><th></th><th>Locomotion policy</th><th>Teacher</th><th>Students</th></tr></thead>
+          <tbody>
+            <tr><td>Algorithm</td><td>PPO</td><td>PPO</td><td>Distillation (action MSE)</td></tr>
+            <tr><td>Simulator</td><td>Newton (MuJoCo-Warp)</td><td>Isaac Sim PhysX</td><td>Isaac Sim PhysX</td></tr>
+            <tr><td>Policy rate</td><td>50 Hz</td><td>10 Hz</td><td>10 Hz</td></tr>
+            <tr><td>Parallel robots</td><td>4,096, then 16,384</td><td>8,192</td><td>8,192</td></tr>
+            <tr><td>Rollout length</td><td>24</td><td>32</td><td>32</td></tr>
+            <tr><td>Iterations</td><td>4,000 + 3,000</td><td>3,350</td><td>1,500</td></tr>
+            <tr><td>Network</td><td>MLP 512-256-128</td><td>MLP 512-256-128</td><td>CNN 16-32-32, MLP 512-256-128</td></tr>
+            <tr><td>Hardware, time</td><td>1 GPU 44 min, 4 GPUs 31 min</td><td>4 GPUs, 4.9 h</td><td>4 GPUs (in progress)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="environment" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Environment</h2>
+      <p class="prose">The terrain is a grid of 16 m × 10 m tiles. Columns correspond to the six scenario types and rows to ten difficulty levels. In each episode the robot is placed at one end of a route on its tile and must reach the other end within 40 s.</p>
+    </div>
+    <figure class="space">
+      <div class="scenes" id="scenes"></div>
+      <figcaption><b>Figure 5.</b> Scenario types. Each clip is a complete successful episode of the teacher policy in real time; the camera can be switched and the clip enlarged. Values are success rates on easy (levels 1–4), medium (5–7) and hard (8–10) tiles.</figcaption>
+    </figure>
+    <figure class="space">
+      <div class="gallery" id="gallery"></div>
+      <figcaption><b>Figure 6.</b> Rendered views of the environment (select to enlarge). Materials, building facades and trees are added for rendering only; collision and sensor geometry are those of the training environment.</figcaption>
+    </figure>
+
+    <h3 class="sub col" style="padding:0">Pedestrian model</h3>
+    <div class="split">
+      <figure class="stack">
+        <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/plaza_drone.jpg" data-src="media/plaza_drone.mp4" aria-label="Plaza scenario, level 10, top view"></video></div>
+        <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/crosswalk_side.jpg" data-src="media/crosswalk_side.mp4" aria-label="Crosswalk scenario, level 8, side view"></video></div>
+        <figcaption><b>Figure 7.</b> Plaza at level 10 (top) and crosswalk at level 8 (bottom).</figcaption>
+      </figure>
+      <ul class="facts">
+        <li><b>Dynamics.</b> Pedestrians are kinematic bodies that follow walking lanes under a social-force model with repulsion from other pedestrians and from structures. Walking speeds are drawn from 0.7–1.3 m/s at level 1 and 0.8–1.6 m/s at level 10; 10% walk at 0.4–0.6 m/s.</li>
+        <li><b>Encounters.</b> 65% of walking pedestrians are timed to reach the robot's route when the robot does (assuming 0.8 m/s), so that pedestrians cross and block the route. The number of pedestrians increases with difficulty, up to 20 on plaza tiles.</li>
+        <li><b>Awareness.</b> A fraction of pedestrians (90% at level 1, 60% at level 10) perceive the robot: they keep a clearance of at least 0.1 m, slow down when the robot blocks their path and step around it. The resulting loss of pedestrian speed is penalized, which rewards yielding.</li>
+        <li><b>Distracted pedestrians.</b> The remaining pedestrians do not slow down and react only within 1 m with a lateral swerve.</li>
+        <li><b>Other behaviors.</b> Stationary pedestrians at waiting spots (curbs, doorways, work zones) start walking after 5–25 s. No pedestrian is spawned within 1.5 m of the robot.</li>
+        <li><b>Feasibility.</b> A unit test verifies that every route admits a path of width 0.6 m on every tile type at difficulties 0, 0.5, 0.8 and 1.</li>
+      </ul>
+    </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table>
+          <caption><b>Table 2.</b> Reward terms of the navigation policy. Rewards are multiplied by the control period (0.1 s). Contact is declared when the robot footprint (radius 0.25 m) intersects a pedestrian (radius 0.25 m) or a structure.</caption>
+          <thead><tr><th>Term</th><th>Definition</th><th class="num">Weight</th></tr></thead>
+          <tbody>
+            <tr><td>Progress</td><td class="def">Reduction of distance to the goal per second, clipped to ±1.5 m/s</td><td class="num">2.0</td></tr>
+            <tr><td>Goal reached</td><td class="def">Within 0.5 m of the goal (terminates)</td><td class="num">100</td></tr>
+            <tr><td>Contact</td><td class="def">Pedestrian or obstacle contact (terminates)</td><td class="num">−100</td></tr>
+            <tr><td>Fall</td><td class="def">Torso contact with the ground (terminates)</td><td class="num">−200</td></tr>
+            <tr><td>Personal space</td><td class="def">Penetration of a 0.5 m clearance to the nearest pedestrian (m)</td><td class="num">−4</td></tr>
+            <tr><td>Obstacle margin</td><td class="def">Penetration of a 0.15 m margin to the nearest structure (m)</td><td class="num">−4</td></tr>
+            <tr><td>Pedestrian delay</td><td class="def">Total speed lost by pedestrians slowing for the robot (m/s)</td><td class="num">−1</td></tr>
+            <tr><td>Roadway</td><td class="def">Robot in the roadway outside a crosswalk</td><td class="num">−2</td></tr>
+            <tr><td>Action rate</td><td class="def">Squared change of the velocity command</td><td class="num">−0.1</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="sensing" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Sensing</h2>
+      <p class="prose">The student policies use only the sensors installed on the G1, at the poses given in the robot's URDF. The MID-360 is mounted inverted in the head, about 1.1 m above the ground, with a vertical field of view of −52° to +7°; it is simulated with 32 channels at 1° horizontal resolution and a 10 m range. The D435i is pitched 47.6° downward.</p>
+    </div>
+    <figure class="space">
+      <div class="viewer" id="viewer" role="img" aria-label="Interactive 3D point cloud of simulated MID-360 returns around the robot">
+        <div class="loading" id="viewerLoading">Loading point cloud…</div>
+        <div class="ui">
+          <div class="seg" role="group" aria-label="Scene">
+            <button type="button" data-cloud="crosswalk" aria-pressed="true">Crosswalk</button>
+            <button type="button" data-cloud="scaffold" aria-pressed="false">Sidewalk shed</button>
+            <button type="button" data-cloud="plaza" aria-pressed="false">Plaza</button>
+          </div>
+          <div class="legend"><span><i style="background:#e8710a"></i>pedestrians</span><span><i style="background:#80868b"></i>ground and structures</span><span><i style="background:#1a73e8"></i>robot</span></div>
+        </div>
+        <div class="hint">Drag to rotate, scroll to zoom</div>
+      </div>
+      <figcaption><b>Figure 8.</b> Simulated MID-360 returns at level 8 (interactive). Points on pedestrians are highlighted. For visibility the scan is rendered with 96 channels at 0.5° resolution; the policy input uses 32 channels at 1°. The ring marks a 1 m radius around the robot.</figcaption>
+    </figure>
+    <figure class="space">
+      <div class="inputs">
+        <div>
+          <img src="media/sensor_lidar.png" alt="Lidar elevation map with concentric scan rings, a wall and pedestrians" width="400" height="400" loading="lazy">
+          <p class="spec">(a) Lidar student: elevation map, 8 m × 8 m, 0.2 m cells, robot-centred and heading-aligned.</p>
+        </div>
+        <div>
+          <img src="media/sensor_depth.png" alt="Depth image with ground, a nearby pedestrian and missing pixels" width="640" height="380" loading="lazy">
+          <p class="spec">(b) Camera student: depth image, 64 × 38 px, 87° × 58° field of view, maximum range 6 m.</p>
+        </div>
+      </div>
+      <figcaption><b>Figure 9.</b> Student observations. Elevation maps store the highest return per cell; unobserved cells are black. Depth images include distance-dependent noise, 5% missing pixels and random rectangular occlusions. With the default camera pitch the ground is visible between approximately 0.3 m and 3.4 m ahead of the robot.</figcaption>
+    </figure>
+  </section>
+
+  <section id="results" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Results</h2>
+      <p class="prose">The final teacher policy is evaluated with the curriculum disabled and robots distributed uniformly over all 120 tiles (2,400 robots, 60 s of simulated time, 13,238 completed episodes, PhysX). Pedestrian motion and policy inputs are as in training; random pushes are disabled.</p>
+    </div>
+    <figure class="space">
+      <div class="chart-legend"><span><i style="background:var(--d-easy)"></i>easy (levels 1–4)</span><span><i style="background:var(--d-medium)"></i>medium (5–7)</span><span><i style="background:var(--d-hard)"></i>hard (8–10)</span></div>
+      <div class="chart" id="barChart"></div>
+      <details class="table">
+        <summary>Show values as a table</summary>
+        <div class="tablewrap"><table id="resultsTable"></table></div>
+      </details>
+      <figcaption><b>Figure 10.</b> Success rate (episodes reaching the goal) by scenario type and difficulty. Hover a bar for contact and fall rates and episode counts.</figcaption>
+    </figure>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table>
+          <caption><b>Table 3.</b> Episode outcomes over all tiles.</caption>
+          <thead><tr><th>Outcome</th><th class="num">Share of episodes</th></tr></thead>
+          <tbody>
+            <tr><td>Goal reached</td><td class="num">79.1%</td></tr>
+            <tr><td>Pedestrian contact</td><td class="num">11.9%</td></tr>
+            <tr><td>Obstacle contact</td><td class="num">7.9%</td></tr>
+            <tr><td>Fall</td><td class="num">0.7%</td></tr>
+            <tr><td>Time-out (40 s)</td><td class="num">0.4%</td></tr>
+            <tr><td>Mean time to goal (successful episodes)</td><td class="num">10.5 s</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="prose space">Pedestrian contacts are mostly initiated by the robot: in 67.8% of them the robot approached faster than the pedestrian, and 33.7% involve pedestrians that perceive the robot, which by construction do not reduce their clearance below 0.1 m themselves. Success is lowest on hard sidewalk (43.9%) and sidewalk-shed (50.1%) tiles, where the walkway admits one person at a time and the policy often does not wait for oncoming pedestrians to pass.</p>
+    </div>
+
+    <figure class="space">
+      <div class="charts2">
+        <div><p class="chart-title">Mean curriculum level</p><div class="chart" id="levelChart"></div></div>
+        <div><p class="chart-title">Success rate at the current curriculum level</p><div class="chart" id="goalChart"></div></div>
+      </div>
+      <figcaption><b>Figure 11.</b> Training curves of the teacher over PPO iterations 350–3,350 (averages over 25 iterations and 8,192 robots). Training was resumed at iteration 350 after changes to the scenario generator, which reset the curriculum. The success rate remains near 68% while the mean level rises from 3.7 to 7.4.</figcaption>
+    </figure>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table>
+          <caption><b>Table 4.</b> Locomotion policy on city terrain: 256 robots for 20 s each (85 robot-minutes), random velocity commands. Tracking errors are mean absolute errors; knee flexion and torso tilt are time averages.</caption>
+          <thead><tr><th>Metric</th><th class="num">Newton</th><th class="num">Newton, pushes ≤ 1 m/s</th><th class="num">PhysX</th></tr></thead>
+          <tbody>
+            <tr><td>Forward velocity error (m/s)</td><td class="num">0.100</td><td class="num">0.119</td><td class="num">0.103</td></tr>
+            <tr><td>Lateral velocity error (m/s)</td><td class="num">0.090</td><td class="num">0.100</td><td class="num">0.090</td></tr>
+            <tr><td>Yaw-rate error (rad/s)</td><td class="num">0.165</td><td class="num">0.179</td><td class="num">0.236</td></tr>
+            <tr><td>Torso tilt</td><td class="num">3.8°</td><td class="num">3.9°</td><td class="num">4.0°</td></tr>
+            <tr><td>Knee flexion</td><td class="num">30.6°</td><td class="num">31.3°</td><td class="num">31.5°</td></tr>
+            <tr><td>Pelvis height (m)</td><td class="num">0.734</td><td class="num">0.736</td><td class="num">0.732</td></tr>
+            <tr><td>Falls</td><td class="num">4</td><td class="num">6</td><td class="num">7</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="limitations" class="col">
+    <h2>Limitations</h2>
+    <ul class="facts">
+      <li>All results are in simulation; the policies have not been deployed on hardware.</li>
+      <li>The reported navigation results are for the privileged teacher. Training of the lidar student is in progress; the camera student has not been trained yet.</li>
+      <li>Pedestrians are kinematic and scripted; contact ends the episode, and physical interaction between robot and pedestrians is not modeled.</li>
+      <li>Performance on the narrowest corridors (hard sidewalk and sidewalk-shed tiles) remains low.</li>
+      <li>With the default mounting, the D435i observes the ground only up to about 3.4 m ahead, which limits anticipation for a camera-only policy.</li>
+    </ul>
+  </section>
+
+  <section id="context" class="col">
+    <h2>Context</h2>
+    <p class="prose">This project is part of work toward a civic robot system for the applications of the <a href="https://cs3-erc.org/">Center for Smart Streetscapes (CS3)</a>, an NSF Engineering Research Center led by Columbia University. It follows earlier work on street-scene perception: <a href="https://huggingface.co/datasets/mehmetkeremturkcan/SyntheticStreetScenes">SyntheticStreetScenes</a>, a dataset of approximately 5,200 generated street-scene videos with prompts and attributes, and <a href="https://huggingface.co/mehmetkeremturkcan/StreetPrompt">StreetPrompt</a>, a street-camera video classifier with classes specified as text.</p>
+  </section>
+
+  <section id="bibtex" class="col">
+    <h2>BibTeX</h2>
+    <pre class="bibtex" id="bib">@misc{turkcan2026g1patrol,
+  title        = {G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments},
+  author       = {Turkcan, Mehmet Kerem},
+  year         = {2026},
+  howpublished = {\url{https://github.com/mkturkcan/g1_patrol}}
+}</pre>
+    <button class="copy" type="button" id="copyBib">Copy</button>
+  </section>
+</main>
+
+<footer>
+  <div class="wide">
+    <span>Mehmet Kerem Turkcan · MIT License</span>
+    <span>Isaac Lab 3.0 · Isaac Sim 6.1 · Icons in figures: Lucide (ISC)</span>
+  </div>
+</footer>
+
+<dialog class="lightbox" id="lightbox">
+  <button class="close" type="button" id="lightboxClose">Close</button>
+  <video id="lightboxVideo" controls playsinline hidden></video>
+  <img id="lightboxImg" alt="" hidden>
+  <p class="cap" id="lightboxCap"></p>
+</dialog>
+
+<script>
+const RESULTS = {"sidewalk":{"easy":{"goal":0.889,"ped":0.089,"obst":0.019,"fall":0.0028,"eps":720},"medium":{"goal":0.695,"ped":0.171,"obst":0.134,"fall":0.0,"eps":603},"hard":{"goal":0.439,"ped":0.261,"obst":0.3,"fall":0.0,"eps":713}},"scaffold":{"easy":{"goal":0.975,"ped":0.017,"obst":0.009,"fall":0.0,"eps":826},"medium":{"goal":0.824,"ped":0.098,"obst":0.079,"fall":0.0,"eps":675},"hard":{"goal":0.501,"ped":0.245,"obst":0.244,"fall":0.01,"eps":603}},"crosswalk":{"easy":{"goal":0.916,"ped":0.076,"obst":0.004,"fall":0.0038,"eps":1320},"medium":{"goal":0.685,"ped":0.222,"obst":0.083,"fall":0.0098,"eps":711},"hard":{"goal":0.588,"ped":0.281,"obst":0.09,"fall":0.041,"eps":877}},"construction":{"easy":{"goal":0.877,"ped":0.048,"obst":0.076,"fall":0.0,"eps":673},"medium":{"goal":0.767,"ped":0.082,"obst":0.13,"fall":0.0021,"eps":477},"hard":{"goal":0.632,"ped":0.136,"obst":0.132,"fall":0.0106,"eps":470}},"bottleneck":{"easy":{"goal":0.904,"ped":0.044,"obst":0.052,"fall":0.0,"eps":800},"medium":{"goal":0.89,"ped":0.098,"obst":0.01,"fall":0.002,"eps":502},"hard":{"goal":0.852,"ped":0.138,"obst":0.006,"fall":0.0039,"eps":507}},"plaza":{"easy":{"goal":0.882,"ped":0.042,"obst":0.073,"fall":0.0024,"eps":1250},"medium":{"goal":0.83,"ped":0.097,"obst":0.05,"fall":0.0232,"eps":818},"hard":{"goal":0.84,"ped":0.095,"obst":0.051,"fall":0.0144,"eps":693}}};
+const CURVES = {"iteration":[362,387,412,437,462,487,512,537,562,587,612,637,662,687,712,737,762,787,812,837,862,887,912,937,962,987,1012,1037,1062,1087,1112,1137,1162,1187,1212,1237,1262,1287,1312,1337,1362,1387,1412,1437,1462,1487,1512,1537,1562,1587,1612,1637,1662,1687,1712,1737,1762,1787,1812,1837,1862,1887,1912,1937,1962,1987,2012,2037,2062,2087,2112,2137,2162,2187,2212,2237,2262,2287,2312,2337,2362,2387,2412,2437,2462,2487,2512,2537,2562,2587,2612,2637,2662,2687,2712,2737,2762,2787,2812,2837,2862,2887,2912,2937,2962,2987,3012,3037,3062,3087,3112,3137,3162,3187,3212,3237,3262,3287,3312,3337],"goal":[0.6829,0.6124,0.5879,0.5967,0.5923,0.6152,0.6065,0.5989,0.6079,0.6159,0.6142,0.6184,0.6275,0.6249,0.6307,0.6349,0.6378,0.6334,0.6417,0.6528,0.6455,0.6533,0.6545,0.66,0.6545,0.6533,0.647,0.6584,0.6545,0.6582,0.6567,0.6615,0.6454,0.6567,0.6593,0.6562,0.6575,0.6647,0.6639,0.6595,0.658,0.6599,0.6554,0.6554,0.6612,0.6657,0.6627,0.6547,0.6689,0.6703,0.6713,0.6676,0.6652,0.6713,0.6667,0.6601,0.6637,0.6567,0.6505,0.6638,0.6657,0.6592,0.6659,0.6646,0.6734,0.6693,0.6806,0.671,0.6774,0.6719,0.6727,0.6759,0.6744,0.6708,0.6812,0.6744,0.6783,0.6769,0.6717,0.677,0.6811,0.6723,0.6806,0.6713,0.6779,0.6891,0.6832,0.6903,0.6845,0.6797,0.6815,0.6831,0.6801,0.6809,0.6843,0.6825,0.6882,0.6811,0.6879,0.6822,0.6787,0.6737,0.6775,0.6788,0.6778,0.6832,0.6753,0.6726,0.6702,0.6726,0.6831,0.6784,0.6734,0.6834,0.6866,0.6811,0.6854,0.6835,0.6806,0.6821],"level":[3.664,6.429,6.771,6.847,6.801,6.893,6.966,6.894,6.938,7.029,7.126,7.092,7.111,7.112,7.123,7.174,7.224,7.279,7.308,7.255,7.365,7.357,7.334,7.321,7.313,7.319,7.409,7.383,7.343,7.348,7.323,7.375,7.41,7.393,7.424,7.451,7.431,7.364,7.385,7.43,7.411,7.398,7.398,7.379,7.41,7.41,7.46,7.408,7.378,7.4,7.387,7.363,7.408,7.377,7.442,7.428,7.427,7.436,7.395,7.375,7.463,7.415,7.507,7.396,7.382,7.418,7.361,7.41,7.47,7.434,7.404,7.424,7.433,7.388,7.447,7.467,7.423,7.44,7.38,7.461,7.418,7.431,7.419,7.472,7.399,7.471,7.436,7.389,7.398,7.374,7.414,7.425,7.457,7.457,7.441,7.395,7.37,7.413,7.461,7.461,7.453,7.38,7.367,7.439,7.495,7.387,7.413,7.442,7.492,7.404,7.433,7.443,7.452,7.512,7.436,7.468,7.466,7.504,7.424,7.417]};
+const SCENES = [
+  { key: "sidewalk", letter: "W", title: "Sidewalk", angles: ["side", "chase"],
+    text: "Two-way pedestrian flow. Walkway width decreases from 5.0 m to 2.6 m. Street furniture along the curb; pedestrians exit doorways." },
+  { key: "scaffold", letter: "S", title: "Sidewalk shed", angles: ["chase", "side"],
+    text: "Scaffold tunnel with 9 cm posts and guard rails. Walkway width decreases from 2.4 m to 1.25 m." },
+  { key: "crosswalk", letter: "X", title: "Crosswalk", angles: ["chase", "side"],
+    text: "Curb cuts or 10–18 cm curbs, potholes and opposing pedestrian flows. Leaving the crosswalk is penalized." },
+  { key: "construction", letter: "C", title: "Construction zone", angles: ["drone", "chase"],
+    text: "Chicane of fences and jersey barriers over steel plates. Clear width decreases from 1.8 m to 1.0 m." },
+  { key: "bottleneck", letter: "D", title: "Doorway", angles: ["chase", "drone"],
+    text: "Partition with one opening (1.8 m to 0.9 m) or a subway entrance with pedestrians exiting the stairwell." },
+  { key: "plaza", letter: "P", title: "Plaza", angles: ["drone", "chase"],
+    text: "Open plaza with crossing flows, stationary pedestrians, planters, tables and kiosks; 6 to 20 pedestrians." },
+];
+const STILLS = [
+  ["sidewalk", "Sidewalk, level 7, chase camera"], ["sidewalk_side", "Sidewalk, level 7, side camera"],
+  ["scaffold", "Sidewalk shed, level 7, chase camera"], ["scaffold_side", "Sidewalk shed, level 7, side camera"],
+  ["crosswalk", "Crosswalk, level 8, chase camera"], ["construction", "Construction zone, level 8, top camera"],
+  ["bottleneck", "Doorway (subway entrance), level 10, top camera"], ["plaza", "Plaza, level 10, top camera"],
+];
+const ANGLE_NAMES = { chase: "Chase", side: "Side", drone: "Top" };
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const pct = (v) => Math.round(v * 100) + "%";
+const pct1 = (v) => (v * 100).toFixed(1) + "%";
+
+/* teaser */
+(function teaser() {
+  const v = document.getElementById("hero");
+  const btn = document.getElementById("heroToggle");
+  v.src = window.innerWidth < 900 ? "media/hero_720.mp4" : "media/hero.mp4";
+  const setLabel = () => { btn.textContent = v.paused ? "Play" : "Pause"; };
+  if (!reduceMotion) { v.autoplay = true; v.play().catch(() => {}); }
+  v.addEventListener("play", setLabel); v.addEventListener("pause", setLabel); setLabel();
+  btn.addEventListener("click", () => { v.paused ? v.play() : v.pause(); });
+})();
+
+/* videos load and play while visible */
+const inView = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const v = e.target;
+    if (e.isIntersecting) {
+      if (!v.getAttribute("src") && v.dataset.src) v.src = v.dataset.src;
+      if (!reduceMotion) v.play().catch(() => {});
+    } else if (!v.paused) v.pause();
+  }
+}, { threshold: 0.35 });
+document.querySelectorAll("video.lazy").forEach((v) => inView.observe(v));
+
+/* lightbox */
+const lb = document.getElementById("lightbox");
+const lbv = document.getElementById("lightboxVideo");
+const lbi = document.getElementById("lightboxImg");
+function openLightbox(src, cap, kind) {
+  lbv.hidden = kind !== "video"; lbi.hidden = kind !== "image";
+  if (kind === "video") lbv.src = src; else { lbi.src = src; lbi.alt = cap; }
+  document.getElementById("lightboxCap").textContent = cap;
+  lb.showModal();
+  if (kind === "video") lbv.play().catch(() => {});
+}
+document.getElementById("lightboxClose").addEventListener("click", () => lb.close());
+lb.addEventListener("close", () => { lbv.pause(); lbv.removeAttribute("src"); lbv.load(); lbi.removeAttribute("src"); });
+lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
+
+/* scenario grid */
+(function scenes() {
+  const host = document.getElementById("scenes");
+  const expandIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>';
+  for (const s of SCENES) {
+    const r = RESULTS[s.key];
+    const el = document.createElement("article");
+    el.className = "scene";
+    const angle = s.angles[0];
+    el.innerHTML = `
+      <div class="frame">
+        <video muted loop playsinline preload="none" poster="media/${s.key}_${angle}.jpg" data-src="media/${s.key}_${angle}.mp4" aria-label="${s.title}: successful episode"></video>
+        <div class="angles" role="group" aria-label="Camera">${s.angles.map((a, i) => `<button type="button" data-angle="${a}" aria-pressed="${i === 0}">${ANGLE_NAMES[a]}</button>`).join("")}</div>
+        <button class="expand" type="button" aria-label="Enlarge ${s.title}">${expandIcon}</button>
+      </div>
+      <div class="title"><span class="bullet${s.key === "plaza" ? " dark-ink" : ""}" style="--c: var(--b-${s.key})" aria-hidden="true">${s.letter}</span><h3>${s.title}</h3></div>
+      <p>${s.text}</p>
+      <dl class="rates">
+        <div><dt>Easy</dt><dd>${pct(r.easy.goal)}</dd></div>
+        <div><dt>Medium</dt><dd>${pct(r.medium.goal)}</dd></div>
+        <div><dt>Hard</dt><dd>${pct(r.hard.goal)}</dd></div>
+      </dl>`;
+    host.appendChild(el);
+    const v = el.querySelector("video");
+    inView.observe(v);
+    el.querySelectorAll(".angles button").forEach((b) => b.addEventListener("click", () => {
+      el.querySelectorAll(".angles button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+      const a = b.dataset.angle;
+      v.poster = `media/${s.key}_${a}.jpg`;
+      v.dataset.src = v.src = `media/${s.key}_${a}.mp4`;
+      if (!reduceMotion) v.play().catch(() => {});
+    }));
+    el.querySelector(".expand").addEventListener("click", () => openLightbox(v.dataset.src, `${s.title}, ${el.querySelector('.angles [aria-pressed="true"]').textContent.toLowerCase()} camera, complete episode in real time`, "video"));
+  }
+})();
+
+/* gallery */
+(function gallery() {
+  const host = document.getElementById("gallery");
+  for (const [name, cap] of STILLS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", `Enlarge: ${cap}`);
+    b.innerHTML = `<img src="media/stills/${name}_thumb.jpg" alt="${cap}" width="640" height="360" loading="lazy">`;
+    b.addEventListener("click", () => openLightbox(`media/stills/${name}.jpg`, cap, "image"));
+    host.appendChild(b);
+  }
+})();
+
+/* BibTeX copy */
+document.getElementById("copyBib").addEventListener("click", (e) => {
+  const bib = document.getElementById("bib");
+  const select = () => { const r = document.createRange(); r.selectNodeContents(bib); const s = getSelection(); s.removeAllRanges(); s.addRange(r); };
+  const done = () => { e.target.textContent = "Copied"; setTimeout(() => { e.target.textContent = "Copy"; }, 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(bib.textContent).then(done, select); else select();
+});
+
+/* charts */
+const NS = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs, parent) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; };
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function tooltip(host) {
+  let t = host.querySelector(".tip");
+  if (!t) { t = document.createElement("div"); t.className = "tip"; t.hidden = true; host.appendChild(t); }
+  return t;
+}
+
+function drawBars() {
+  const host = document.getElementById("barChart");
+  host.querySelectorAll("svg").forEach((n) => n.remove());
+  const W = Math.max(300, host.clientWidth);
+  const narrow = W < 560;
+  const labelW = narrow ? 0 : 170;
+  const bandH = narrow ? 92 : 64, barH = 14, gap = 3, top = 6, axisH = 26;
+  const names = Object.fromEntries(SCENES.map((s) => [s.key, s]));
+  const keys = SCENES.map((s) => s.key);
+  const H = top + keys.length * bandH + axisH;
+  const x0 = labelW + 8, x1 = W - 44;
+  const sx = (v) => x0 + v * (x1 - x0);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Success rate by scenario type and difficulty" }, host);
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    svgEl("line", { x1: sx(v), x2: sx(v), y1: top, y2: H - axisH + 4, class: "grid" }, svg);
+    const t = svgEl("text", { x: sx(v), y: H - 8, "text-anchor": v === 0 ? "start" : "middle" }, svg); t.textContent = pct(v);
+  }
+  const tip = tooltip(host);
+  const levels = [["easy", "--d-easy"], ["medium", "--d-medium"], ["hard", "--d-hard"]];
+  keys.forEach((k, i) => {
+    const s = names[k];
+    const yb = top + i * bandH + (narrow ? 28 : 6);
+    const ly = narrow ? top + i * bandH + 14 : yb + (3 * barH + 2 * gap) / 2 + 4;
+    const g = svgEl("g", {}, svg);
+    svgEl("circle", { cx: 10, cy: ly - 4, r: 9, fill: css(`--b-${k}`) }, g);
+    const lt = svgEl("text", { x: 10, y: ly - 0.5, "text-anchor": "middle", style: `font: 700 10px var(--font); fill: ${k === "plaza" ? "#111" : "#fff"}` }, g); lt.textContent = s.letter;
+    const tl = svgEl("text", { x: 28, y: ly, class: "lab" }, g); tl.textContent = s.title;
+    levels.forEach(([lv, color], j) => {
+      const d = RESULTS[k][lv];
+      const y = yb + j * (barH + gap);
+      const w = Math.max(6, sx(d.goal) - x0);
+      svgEl("path", { d: `M${x0},${y} h${w - 4} a4,4 0 0 1 4,4 v${barH - 8} a4,4 0 0 1 -4,4 h${-(w - 4)} z`, fill: css(color) }, g);
+      const vt = svgEl("text", { x: x0 + w + 6, y: y + barH - 3, style: "fill: var(--text-2)" }, g); vt.textContent = pct(d.goal);
+      const hit = svgEl("rect", { x: x0, y: y - 1, width: x1 - x0, height: barH + 2, class: "hit" }, g);
+      hit.addEventListener("pointerenter", () => {
+        tip.innerHTML = `<b>${s.title}, ${lv}</b><br>success ${pct1(d.goal)}<br>pedestrian contact ${pct1(d.ped)}<br>obstacle contact ${pct1(d.obst)}<br>fall ${pct1(d.fall)}<br>${d.eps.toLocaleString()} episodes`;
+        tip.hidden = false;
+        const r = host.getBoundingClientRect(), rr = hit.getBoundingClientRect();
+        tip.style.left = Math.min(r.width - 110, Math.max(110, sx(d.goal) * r.width / W)) + "px";
+        tip.style.top = (rr.top - r.top) + "px";
+      });
+      hit.addEventListener("pointerleave", () => { tip.hidden = true; });
+    });
+  });
+  const tb = document.getElementById("resultsTable");
+  tb.innerHTML = `<thead><tr><th>Scenario</th><th>Difficulty</th><th class="num">Success</th><th class="num">Pedestrian contact</th><th class="num">Obstacle contact</th><th class="num">Fall</th><th class="num">Episodes</th></tr></thead><tbody>${
+    keys.map((k) => levels.map(([lv]) => { const d = RESULTS[k][lv]; return `<tr><td>${names[k].title}</td><td>${lv}</td><td class="num">${pct1(d.goal)}</td><td class="num">${pct1(d.ped)}</td><td class="num">${pct1(d.obst)}</td><td class="num">${pct1(d.fall)}</td><td class="num">${d.eps.toLocaleString()}</td></tr>`; }).join("")).join("")}</tbody>`;
+}
+
+function drawLine(id, values, yMin, yMax, yTicks, fmt) {
+  const host = document.getElementById(id);
+  host.querySelectorAll("svg").forEach((n) => n.remove());
+  const W = Math.max(280, host.clientWidth), H = 220;
+  const m = { l: 42, r: 12, t: 10, b: 26 };
+  const its = CURVES.iteration;
+  const sx = (v) => m.l + (v - 350) / (3350 - 350) * (W - m.l - m.r);
+  const sy = (v) => m.t + (1 - (v - yMin) / (yMax - yMin)) * (H - m.t - m.b);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": host.parentElement.querySelector(".chart-title").textContent }, host);
+  for (const v of yTicks) {
+    svgEl("line", { x1: m.l, x2: W - m.r, y1: sy(v), y2: sy(v), class: "grid" }, svg);
+    const t = svgEl("text", { x: m.l - 8, y: sy(v) + 4, "text-anchor": "end" }, svg); t.textContent = fmt(v);
+  }
+  for (const v of [350, 1000, 2000, 3000]) {
+    const t = svgEl("text", { x: sx(v), y: H - 6, "text-anchor": v === 350 ? "start" : "middle" }, svg); t.textContent = v.toLocaleString();
+  }
+  const pts = its.map((it, i) => [sx(it), sy(values[i])]);
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("");
+  svgEl("path", { d: `${line}L${pts[pts.length - 1][0]},${sy(yMin)}L${pts[0][0]},${sy(yMin)}Z`, fill: css("--link"), "fill-opacity": 0.08 }, svg);
+  svgEl("path", { d: line, fill: "none", stroke: css("--link"), "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  const last = pts[pts.length - 1];
+  svgEl("circle", { cx: last[0], cy: last[1], r: 4, fill: css("--link"), stroke: "#fff", "stroke-width": 2 }, svg);
+  const cross = svgEl("line", { y1: m.t, y2: H - m.b, stroke: css("--muted"), "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" }, svg);
+  const dot = svgEl("circle", { r: 4, fill: css("--link"), stroke: "#fff", "stroke-width": 2, visibility: "hidden" }, svg);
+  const tip = tooltip(host);
+  const hit = svgEl("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, class: "hit" }, svg);
+  hit.addEventListener("pointermove", (e) => {
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * W / r.width;
+    let i = 0, best = 1e9;
+    pts.forEach((p, k) => { const d = Math.abs(p[0] - px); if (d < best) { best = d; i = k; } });
+    cross.setAttribute("x1", pts[i][0]); cross.setAttribute("x2", pts[i][0]); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", pts[i][0]); dot.setAttribute("cy", pts[i][1]); dot.setAttribute("visibility", "visible");
+    tip.innerHTML = `iteration <b>${its[i].toLocaleString()}</b><br>${fmt(values[i], true)}`;
+    tip.hidden = false;
+    tip.style.left = Math.min(r.width - 70, Math.max(70, pts[i][0] * r.width / W)) + "px";
+    tip.style.top = (pts[i][1] * r.height / H) + "px";
+  });
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+}
+
+function drawCharts() {
+  drawBars();
+  drawLine("levelChart", CURVES.level, 1, 10, [1, 4, 7, 10], (v, long) => long ? `mean level <b>${v.toFixed(2)}</b>` : String(v));
+  drawLine("goalChart", CURVES.goal, 0, 1, [0, 0.25, 0.5, 0.75, 1], (v, long) => long ? `success <b>${pct1(v)}</b>` : pct(v));
+}
+drawCharts();
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 150); });
+
+/* point cloud viewer (three.js is loaded when the figure approaches the viewport) */
+(function viewer() {
+  const host = document.getElementById("viewer");
+  const loading = document.getElementById("viewerLoading");
+  let started = false;
+  const load = (src) => new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = fail; document.head.appendChild(s); });
+  const io = new IntersectionObserver((es) => {
+    if (started || !es.some((e) => e.isIntersecting)) return;
+    started = true; io.disconnect();
+    load("https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js")
+      .then(() => load("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"))
+      .then(init)
+      .catch(() => { loading.textContent = "The 3D viewer could not be loaded."; });
+  }, { rootMargin: "400px" });
+  io.observe(host);
+
+  function init() {
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    host.insertBefore(renderer.domElement, host.firstChild);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+    camera.position.set(-7.5, 6.5, 7.5);
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(1.5, 0.6, 0);
+    controls.enableDamping = true;
+    controls.autoRotate = !reduceMotion;
+    controls.autoRotateSpeed = 0.5;
+    controls.minDistance = 3; controls.maxDistance = 30;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    const robot = new THREE.Group();
+    const blue = new THREE.MeshBasicMaterial({ color: 0x1a73e8 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.12, 1.15, 20), blue); body.position.y = 0.58; robot.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 14), blue); head.position.y = 1.25; robot.add(head);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.98, 1.02, 64), new THREE.MeshBasicMaterial({ color: 0x1a73e8, transparent: true, opacity: 0.45, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01; robot.add(ring);
+    scene.add(robot);
+    let points = null;
+    const cache = {};
+    const env0 = new THREE.Color("#bdc1c6"), env1 = new THREE.Color("#3c4043"), person = new THREE.Color("#e8710a");
+    async function show(name) {
+      loading.hidden = false; loading.textContent = "Loading point cloud…";
+      try {
+        if (!cache[name]) {
+          const buf = await (await fetch(`data/cloud_${name}.bin`)).arrayBuffer();
+          const a = new Int16Array(buf), n = a.length / 4;
+          const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+          const c = new THREE.Color();
+          for (let i = 0; i < n; i++) {
+            const x = a[4 * i] / 100, y = a[4 * i + 1] / 100, z = a[4 * i + 2] / 100;
+            pos[3 * i] = x; pos[3 * i + 1] = z; pos[3 * i + 2] = -y;
+            if (a[4 * i + 3]) c.copy(person); else c.copy(env0).lerp(env1, Math.min(1, Math.max(0, (z + 0.1) / 2.6)));
+            col[3 * i] = c.r; col[3 * i + 1] = c.g; col[3 * i + 2] = c.b;
+          }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+          g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+          cache[name] = g;
+        }
+        if (points) scene.remove(points);
+        points = new THREE.Points(cache[name], new THREE.PointsMaterial({ size: 0.045, vertexColors: true, sizeAttenuation: true }));
+        scene.add(points);
+        loading.hidden = true;
+      } catch (e) { loading.textContent = "The point cloud could not be loaded."; }
+    }
+    host.querySelectorAll("[data-cloud]").forEach((b) => b.addEventListener("click", () => {
+      host.querySelectorAll("[data-cloud]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+      show(b.dataset.cloud);
+    }));
+    function resize() { const w = host.clientWidth, h = host.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+    new ResizeObserver(resize).observe(host); resize();
+    let visible = true;
+    new IntersectionObserver((es) => { visible = es.some((e) => e.isIntersecting); }).observe(host);
+    (function tick() { requestAnimationFrame(tick); if (!visible) return; controls.update(); renderer.render(scene, camera); })();
+    show("crosswalk");
+  }
+})();
+</script>
+</body>
+</html>
