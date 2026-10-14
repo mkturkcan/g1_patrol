@@ -175,9 +175,26 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
     _storefronts(stage, f"{root}/storefronts", lay, center, rng)
     if lay.kind == "plaza":
         _times_square(stage, f"{root}/times_square", lay, center, rng)
-    for k, (kind, x, y) in enumerate(lay.decor):
+    for k, (kind, *args) in enumerate(lay.decor):
         if kind == "tree":
+            x, y = args
             _tree(stage, f"{root}/tree_{k}", center[0] + x, center[1] + y, lay.ground(x, y), rng)
+        elif kind == "stairs":
+            _stairs(stage, f"{root}/stairs_{k}", lay, center, *args)
+
+
+def _stairs(stage, root: str, lay: TileLayout, center, x0: float, x1: float, y0: float, y1: float, steps: int = 7):
+    """Stairs in a subway stairwell, from its floor at x0 up to street level at x1 (the stairwell itself is a pit in
+    the height field; the robot is kept out of it by the rails)."""
+    floor = lay.ground(x0 + 0.2, (y0 + y1) / 2)
+    top = lay.ground(x1 + 0.3, (y0 + y1) / 2)
+    tread, rise = (x1 - x0) / steps, (top - floor) / steps
+    boxes = [
+        _box((center[0] + (x0 + k * tread + x1) / 2, center[1] + (y0 + y1) / 2, floor + (k + 1) * rise / 2),
+             (x1 - x0 - k * tread, y1 - y0, (k + 1) * rise))
+        for k in range(steps)
+    ]
+    add_mesh(stage, root, trimesh.util.concatenate(boxes), "concrete")
 
 
 def _box(center, extents, yaw: float = 0.0) -> trimesh.Trimesh:
@@ -394,16 +411,19 @@ def tile_center(generator, r: int, c: int) -> tuple[float, float]:
     return (r + 0.5) * generator.cfg.size[0] + generator.shift[0], (c + 0.5) * generator.cfg.size[1] + generator.shift[1]
 
 
-def dress(stage, generator, tiles: list[tuple[int, int]], seed: int = 0):
-    """Dress the given (row, col) tiles of an :class:`NycTerrainGenerator` and add sky and sun."""
+def dress(stage, generator, tiles, seed: int = 0):
+    """Dress tiles of an :class:`NycTerrainGenerator` and add sky and sun. ``tiles`` lists (row, col) positions, or maps
+    each position to the (row, col) whose layout is drawn there (e.g. copies of a tile along its street; positions may
+    lie beyond the terrain)."""
     create_materials()
     rng = np.random.default_rng(seed)
-    dressed = set(tiles)
-    for r, c in tiles:
-        lay = generator.layouts[(r, c)]
+    placements = tiles if isinstance(tiles, dict) else {t: t for t in tiles}
+    dressed = set(placements)
+    for (r, c), source in sorted(placements.items()):
+        lay = generator.layouts[source]
         dress_tile(stage, lay, tile_center(generator, r, c), f"r{r}_c{c}", rng, far_side=(r, c - 1) not in dressed)
     add_backdrop(stage, generator, dressed)
-    centers = np.array([tile_center(generator, r, c) for r, c in tiles])
+    centers = np.array([tile_center(generator, r, c) for r, c in placements])
     add_skyline(stage, centers.mean(axis=0), rng, inner=max(45.0, float(np.ptp(centers, axis=0).max()) / 2 + 35.0))
     add_sky_and_sun(stage)
     hide_training_visuals(stage)

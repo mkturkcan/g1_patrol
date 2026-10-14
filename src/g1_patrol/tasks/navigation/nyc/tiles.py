@@ -6,8 +6,9 @@ in [0, 1]. A builder fills a :class:`TileLayout` with
 * a ground height field (sidewalks, curbs, curb cuts, potholes, broken pavement, steel plates),
 * static structures, each kept both as a mesh and as a 2D primitive for collision checks and privileged observations:
   circles (poles, hydrants, trash cans, posts) and oriented boxes (walls, fences, barriers, planters, rails),
-* scenario semantics: robot routes, pedestrian lanes, spots where people stand, and street areas the robot should not
-  walk in,
+* scenario semantics: robot routes, pedestrian paths (polylines from where people enter the scene - off the tile, a
+  door, a subway stairwell - to where they leave it, off the tile), spots where people stand, and street areas the
+  robot should not walk in,
 * looks, for rendering only: a material name per structure, painted ground regions (asphalt, sidewalk, zebra stripes,
   steel plates, ...) and visual-only decor (trees). They never change the geometry the robot trains on.
 
@@ -28,7 +29,12 @@ OVERHEAD_Z = 2.0
 """Structures whose bottom is higher than this (scaffold decks, beams) do not block walking."""
 
 # padded per-tile capacities of the layout tensors
-MAX_CIRCLES, MAX_BOXES, MAX_ROUTES, MAX_LANES, MAX_STANDING, MAX_FORBIDDEN = 64, 80, 4, 16, 12, 4
+MAX_CIRCLES, MAX_BOXES, MAX_ROUTES, MAX_PATHS, MAX_STANDING, MAX_FORBIDDEN = 64, 80, 4, 16, 12, 4
+MAX_PATH_POINTS = 8
+PATH_ROW = 2 * MAX_PATH_POINTS + 4
+"""Width of a padded path row: point coordinates, number of points, half width, weight, free length."""
+OFF_TILE = 45.0
+"""Paths along the street start and end this far (m) beyond the tile's ends, so people walk into and out of view."""
 
 
 @dataclass
@@ -39,7 +45,7 @@ class TileLayout:
     circles: list = field(default_factory=list)  # (x, y, radius, z0, z1)
     boxes: list = field(default_factory=list)  # (cx, cy, yaw, half_x, half_y, z0, z1)
     routes: list = field(default_factory=list)  # (start_x, start_y, goal_x, goal_y)
-    lanes: list = field(default_factory=list)  # (ax, ay, bx, by, half_width, weight) walked from a to b
+    paths: list = field(default_factory=list)  # (points, half_width, weight, free_length), walked first to last
     standing: list = field(default_factory=list)  # (x, y)
     forbidden: list = field(default_factory=list)  # (x0, x1, y0, y1) street areas
     crowd: tuple = (4, 12)  # number of pedestrians at difficulty 0 and 1
@@ -128,6 +134,21 @@ class TileLayout:
         self.circle(x + dx, y + dy, 0.025, 0.9, mat="bike_rack")
         self.segment_box(x - dx, y - dy, x + dx, y + dy, 0.05, 0.05, z0=0.85, mat="bike_rack")
 
+    def path(self, points, half_width: float, weight: float, free_length: float = 0.0):
+        """A pedestrian path from where people enter the scene to where they leave it. Walkers keep a random lateral
+        offset of up to ``half_width``; structures do not push them during the first ``free_length`` meters (out of
+        a doorway or up a stairwell)."""
+        assert 2 <= len(points) <= MAX_PATH_POINTS
+        self.paths.append(([(float(x), float(y)) for x, y in points], float(half_width), float(weight), float(free_length)))
+
+    def path_rows(self) -> list:
+        """Paths as rows of width ``PATH_ROW`` (points padded with the last point)."""
+        rows = []
+        for points, half_width, weight, free_length in self.paths:
+            padded = points + [points[-1]] * (MAX_PATH_POINTS - len(points))
+            rows.append([c for point in padded for c in point] + [len(points), half_width, weight, free_length])
+        return rows
+
     def standing_spot(self, x: float, y: float):
         self.standing.append((x, y))
 
@@ -202,6 +223,8 @@ def _lerp(a: float, b: float, t: float) -> float:
 
 
 HALF_L, HALF_W = TILE_SIZE[0] / 2, TILE_SIZE[1] / 2
+OFF = HALF_L + OFF_TILE
+"""x of the off-tile ends of paths along the street."""
 BUILDING_Y = HALF_W - 0.6
 """Facade line; the building occupies y > BUILDING_Y."""
 
@@ -233,7 +256,10 @@ def _sidewalk_street(lay: TileLayout, d: float, width: float, rng: np.random.Gen
     for x in door_xs:
         lay.box(x, HALF_W - 0.1, 0.0, 1.6, 0.2, 4.0, mat="storefront")  # door at the back of the recess
         lay.standing_spot(x, BUILDING_Y + 0.15)
-        lay.lanes.append((x, BUILDING_Y + 0.2, x + rng.choice([-3.0, 3.0]), curb_y + width / 2, 0.3, 0.5))
+        # people come out of the door (from behind it) and join the foot traffic along the sidewalk
+        direction, mid = float(rng.choice([-1.0, 1.0])), curb_y + width / 2
+        lay.path([(x, HALF_W + 0.4), (x, BUILDING_Y + 0.2), (x + 3.0 * direction, mid), (direction * OFF, mid)], 0.3, 0.5,
+                 free_length=1.2)
     return curb_y
 
 
@@ -264,11 +290,12 @@ def _street_furniture(lay: TileLayout, d: float, curb_y: float, rng: np.random.G
             lay.decor.append(("tree", x, curb_y + 0.65))
 
 
-def _sidewalk_lanes(lay: TileLayout, curb_y: float, top_y: float, weight: float = 1.0):
+def _sidewalk_paths(lay: TileLayout, curb_y: float, top_y: float, weight: float = 1.0):
+    """Two-way foot traffic along the sidewalk between ``curb_y`` and ``top_y``, from and to beyond the tile."""
     width = top_y - curb_y
     for frac, direction in ((0.3, 1.0), (0.7, -1.0)):
         y = curb_y + frac * width
-        lay.lanes.append((-direction * HALF_L, y, direction * HALF_L, y, 0.25 * width, weight))
+        lay.path([(-direction * OFF, y), (direction * OFF, y)], 0.25 * width, weight)
 
 
 def _along_routes(lay: TileLayout, y: float):
@@ -281,7 +308,7 @@ def build_sidewalk(d: float, rng: np.random.Generator) -> TileLayout:
     width = _lerp(5.0, 2.6, d)
     curb_y = _sidewalk_street(lay, d, width, rng, doors=int(rng.integers(1, 4)))
     _street_furniture(lay, d, curb_y, rng)
-    _sidewalk_lanes(lay, curb_y + 1.0, BUILDING_Y)
+    _sidewalk_paths(lay, curb_y + 1.0, BUILDING_Y)
     _along_routes(lay, (curb_y + 1.0 + BUILDING_Y) / 2)
     for _ in range(int(_lerp(0, 3, d))):  # people chatting or on the phone in the middle of the sidewalk
         lay.standing_spot(rng.uniform(-5, 5), rng.uniform(curb_y + 1.2, BUILDING_Y - 0.4))
@@ -312,7 +339,7 @@ def build_scaffold(d: float, rng: np.random.Generator) -> TileLayout:
     for _ in range(int(_lerp(0, 2, d))):  # material stacked against the posts (keeps >= 0.9 m of the walkway clear)
         x = rng.choice(xs)
         lay.box(x + 0.5, post_y + 0.2, 0.0, 0.8, 0.3, 0.6, mat="lumber")
-    _sidewalk_lanes(lay, post_y + 0.2, BUILDING_Y - (0.35 if inner_posts else 0.0) - 0.1, weight=1.5)
+    _sidewalk_paths(lay, post_y + 0.2, BUILDING_Y - (0.35 if inner_posts else 0.0) - 0.1, weight=1.5)
     _along_routes(lay, (post_y + BUILDING_Y) / 2)
     lay.crowd = (2, 9)
     return lay
@@ -356,12 +383,15 @@ def build_crosswalk(d: float, rng: np.random.Generator) -> TileLayout:
     for sy in (street[1] + 0.5, street[0] - 0.5):
         for _ in range(2):
             lay.standing_spot(cx + rng.uniform(-half, half), sy + np.sign(sy) * rng.uniform(0, 0.8))
-    lay.lanes += [
-        (cx, HALF_W - 0.8, cx, -HALF_W + 0.8, half * 0.8, 2.0),
-        (cx, -HALF_W + 0.8, cx, HALF_W - 0.8, half * 0.8, 2.0),
-    ]
-    for y in (HALF_W - walk / 2, -HALF_W + walk / 2):
-        lay.lanes += [(-HALF_L, y, HALF_L, y, 0.6, 0.6), (HALF_L, y, -HALF_L, y, 0.6, 0.6)]
+    walk_y = HALF_W - walk / 2
+    for y in (walk_y, -walk_y):
+        lay.path([(-OFF, y), (OFF, y)], 0.6, 0.6)
+        lay.path([(OFF, y), (-OFF, y)], 0.6, 0.6)
+    # crossing: along one sidewalk to the crosswalk, across the street, and on along the other sidewalk
+    for y in (walk_y, -walk_y):
+        for from_x in (-OFF, OFF):
+            for to_x in (-OFF, OFF):
+                lay.path([(from_x, y), (cx, y), (cx, -y), (to_x, -y)], half * 0.8, 0.5)
     lay.routes += [
         (cx + rng.uniform(-1, 1), -HALF_W + 1.0, cx + rng.uniform(-1, 1), HALF_W - 1.0),
         (cx + rng.uniform(-1, 1), HALF_W - 1.0, cx + rng.uniform(-1, 1), -HALF_W + 1.0),
@@ -406,10 +436,10 @@ def build_construction(d: float, rng: np.random.Generator) -> TileLayout:
     _street_furniture(lay, d, curb_y, rng, x_ranges=[(-HALF_L + 1.0, zone[0] - 1.0), (zone[1] + 1.0, HALF_L - 1.0)])
     # foot traffic threads the chicane
     cross_x = -0.5 + clear / 2
-    path = [(-HALF_L, curb_y + width / 2), (zone[0] - 1.0, curb_y + clear / 2), (cross_x, curb_y + clear / 2),
-            (cross_x, BUILDING_Y - clear / 2), (zone[1] + 1.0, BUILDING_Y - clear / 2), (HALF_L, curb_y + width / 2)]
-    for (ax, ay), (qx, qy) in zip(path[:-1], path[1:]):
-        lay.lanes += [(ax, ay, qx, qy, 0.25, 0.5), (qx, qy, ax, ay, 0.25, 0.5)]
+    path = [(-OFF, curb_y + width / 2), (zone[0] - 1.0, curb_y + clear / 2), (cross_x, curb_y + clear / 2),
+            (cross_x, BUILDING_Y - clear / 2), (zone[1] + 1.0, BUILDING_Y - clear / 2), (OFF, curb_y + width / 2)]
+    lay.path(path, 0.25, 2.5)
+    lay.path(path[::-1], 0.25, 2.5)
     _along_routes(lay, curb_y + width / 2)
     lay.crowd = (2, 8)
     return lay
@@ -426,7 +456,8 @@ def build_bottleneck(d: float, rng: np.random.Generator) -> TileLayout:
         oy = rng.uniform(curb_y + opening / 2 + 0.2, BUILDING_Y - opening / 2 - 0.2)
         lay.segment_box(0.0, curb_y + 0.05, 0.0, oy - opening / 2, 0.2, 2.5, mat="partition")
         lay.segment_box(0.0, oy + opening / 2, 0.0, BUILDING_Y, 0.2, 2.5, mat="partition")
-        lay.lanes += [(5.0, oy, -7.5, oy, opening * 0.3, 3.0), (-7.5, oy, 5.0, oy, opening * 0.3, 1.0)]
+        lay.path([(OFF, oy), (-OFF, oy)], opening * 0.3, 3.0)
+        lay.path([(-OFF, oy), (OFF, oy)], opening * 0.3, 1.0)
         lay.standing_spot(1.5, oy + rng.uniform(-1, 1))
     else:
         # subway entrance: railed stair opening in the middle of the sidewalk, people emerging from below
@@ -440,12 +471,13 @@ def build_bottleneck(d: float, rng: np.random.Generator) -> TileLayout:
             lay.segment_box(ax, ay, bx, by, 0.06, 1.0, mat="subway_rail")
         lay.add_rect(x0 + 0.1, x1 - 0.1, y0 + 0.1, y1 - 0.1, -1.0)  # stairwell (fenced off)
         lay.paint_rect(x0 + 0.1, x1 - 0.1, y0 + 0.1, y1 - 0.1, "stairwell")
-        lay.lanes += [
-            (x1 + 0.3, ey, -HALF_L, curb_y + opening / 2, 0.3, 3.0),
-            (x1 + 0.3, ey, HALF_L, BUILDING_Y - 0.6, 0.3, 1.5),
-            (-HALF_L, curb_y + opening / 2, HALF_L, curb_y + opening / 2, 0.25, 1.0),
-        ]
-    _sidewalk_lanes(lay, curb_y + 0.3, BUILDING_Y, weight=0.7)
+        # people come up the stairs (which rise towards the open end at x1) and walk off along the sidewalk
+        bottom, top, side = (x0 + 0.5, ey), (x1 + 0.6, ey), curb_y + opening / 2
+        lay.path([bottom, top, (x1 + 0.6, side), (-OFF, side)], 0.3, 3.0, free_length=x1 - x0)
+        lay.path([bottom, top, (OFF, BUILDING_Y - 0.6)], 0.3, 1.5, free_length=x1 - x0)
+        lay.path([(-OFF, side), (OFF, side)], 0.25, 1.0)
+        lay.decor.append(("stairs", x0 + 0.1, x1 - 0.1, y0 + 0.1, y1 - 0.1))
+    _sidewalk_paths(lay, curb_y + 0.3, BUILDING_Y, weight=0.7)
     _along_routes(lay, (curb_y + BUILDING_Y) / 2)
     lay.crowd = (3, 12)
     return lay
@@ -481,9 +513,20 @@ def build_plaza(d: float, rng: np.random.Generator) -> TileLayout:
         lay.circle(*spot(0.06, (-7, 7), (-4.5, 4.5)), 0.06, 3.5, mat="pole")
     if rng.uniform() < 0.6:
         lay.box(*spot(1.25, (-4, 4), (-2, 2)), 0.0, 2.0, 1.5, 2.5, mat="kiosk")
-    for _ in range(8):
-        a, b = rng.choice(len(edge), size=2, replace=False)
-        lay.lanes.append((*edge[a], *edge[b], 0.6, 1.0))
+    # foot traffic enters and leaves along the street (the plaza continues beyond the tile's ends): five paths cross
+    # the plaza through a random point, three come in and go back out on the same side through two points
+    ys = np.linspace(-4.0, 4.0, 5)
+    for k in range(8):
+        side = float(rng.choice([-1.0, 1.0]))
+        start = (side * OFF, float(rng.choice(ys)))
+        if k < 5:
+            middle = [(rng.uniform(-4.0, 4.0), rng.uniform(-3.5, 3.5))]
+            end = (-side * OFF, float(rng.choice(ys)))
+        else:
+            middle = [(rng.uniform(-4.0, 4.0), rng.uniform(-3.5, -1.0)), (rng.uniform(-4.0, 4.0), rng.uniform(1.0, 3.5))]
+            middle = middle if rng.uniform() < 0.5 else middle[::-1]
+            end = (side * OFF, float(rng.choice(ys)))
+        lay.path([start, *middle, end], 0.6, 1.0)
     for _ in range(int(_lerp(2, 6, d))):
         lay.standing_spot(*spot(0.3))
     lay.crowd = (6, 20)

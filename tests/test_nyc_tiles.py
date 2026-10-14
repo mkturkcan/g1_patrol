@@ -8,10 +8,13 @@ import pytest
 
 from g1_patrol.tasks.navigation.nyc.tiles import (
     BUILDERS,
+    HALF_L,
+    HALF_W,
     MAX_BOXES,
     MAX_CIRCLES,
     MAX_FORBIDDEN,
-    MAX_LANES,
+    MAX_PATH_POINTS,
+    MAX_PATHS,
     MAX_ROUTES,
     MAX_STANDING,
     OVERHEAD_Z,
@@ -75,7 +78,8 @@ def test_tiles_fit_the_tensor_caps(kind):
         for seed in range(5):
             lay = BUILDERS[kind](float(d), np.random.default_rng(seed))
             assert 1 <= len(lay.routes) <= MAX_ROUTES
-            assert 1 <= len(lay.lanes) <= MAX_LANES
+            assert 1 <= len(lay.paths) <= MAX_PATHS
+            assert all(2 <= len(points) <= MAX_PATH_POINTS for points, *_ in lay.paths)
             assert len(lay.circles) <= MAX_CIRCLES
             assert len(lay.boxes) <= MAX_BOXES
             assert len(lay.standing) <= MAX_STANDING
@@ -94,3 +98,20 @@ def test_routes_are_passable(kind):
                 assert free[start], f"{kind} d={d} seed={seed}: route start ({sx:.1f}, {sy:.1f}) is blocked"
                 assert free[goal], f"{kind} d={d} seed={seed}: route goal ({gx:.1f}, {gy:.1f}) is blocked"
                 assert _connected(free, start, goal), f"{kind} d={d} seed={seed}: no passage from start to goal"
+
+
+@pytest.mark.parametrize("kind", list(BUILDERS))
+def test_pedestrians_enter_and_leave_out_of_view(kind):
+    """People never appear or vanish on the tile: every path ends beyond the tile's ends and starts there, behind a
+    door or at the foot of a subway stairwell."""
+    for d in (0.0, 0.5, 1.0):
+        for seed in range(6):
+            lay = BUILDERS[kind](d, np.random.default_rng(seed))
+            stairs = [item[1:] for item in lay.decor if item[0] == "stairs"]
+            for points, *_ in lay.paths:
+                (sx, sy), (ex, ey) = points[0], points[-1]
+                assert abs(ex) > HALF_L + 1.0, f"{kind} d={d} seed={seed}: path ends on the tile at ({ex:.1f}, {ey:.1f})"
+                off_tile = abs(sx) > HALF_L + 1.0
+                behind_door = sy > HALF_W
+                in_stairwell = any(x0 <= sx <= x1 and y0 <= sy <= y1 for x0, x1, y0, y1 in stairs)
+                assert off_tile or behind_door or in_stairwell, f"{kind} d={d} seed={seed}: path starts at ({sx:.1f}, {sy:.1f})"

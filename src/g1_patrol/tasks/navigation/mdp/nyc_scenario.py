@@ -3,10 +3,12 @@
 Per episode, for the tile the robot is on (terrain level = difficulty, terrain type = scenario):
 
 * the robot starts at one end of one of the tile's routes and must reach the other end;
-* a difficulty-dependent number of pedestrians walk the tile's lanes. Most are timed to reach the robot's route when
-  the robot does, so the crowd actually crosses and blocks its path; others stand at the tile's standing spots and
-  set off later. Walkers that reach the end of a lane re-enter at its start, so traffic keeps flowing;
-* pedestrians follow a simple social-force model (lanes, structures, each other, and - for those who notice it - the
+* a difficulty-dependent number of pedestrians walk the tile's paths. A path leads from where people enter the scene
+  (beyond the tile's ends, out of a door, up a subway stairwell) to where they leave it (beyond the tile's ends), so
+  nobody appears or disappears in view. Most walkers are timed to reach the robot's route when the robot does, so the
+  crowd actually crosses and blocks its path; others stand at the tile's standing spots and set off later. Walkers
+  that have left the scene re-enter on a new path, so traffic keeps flowing;
+* pedestrians follow a simple social-force model (paths, structures, each other, and - for those who notice it - the
   robot). Pedestrians who notice the robot slow down and step around it when it is in their way; that delay is what
   teaches the robot to give way. Distracted pedestrians (on their phone) neither slow down nor keep their distance:
   they only swerve at the last moment, so the robot has to keep out of their path.
@@ -30,7 +32,17 @@ from isaaclab.markers.config import SPHERE_MARKER_CFG
 from isaaclab.utils import configclass, replace
 from isaaclab.utils.math import quat_from_euler_xyz, yaw_quat
 
-from ..nyc.tiles import MAX_BOXES, MAX_CIRCLES, MAX_FORBIDDEN, MAX_LANES, MAX_STANDING, OVERHEAD_Z
+from ..nyc.tiles import (
+    HALF_L,
+    HALF_W,
+    MAX_BOXES,
+    MAX_CIRCLES,
+    MAX_FORBIDDEN,
+    MAX_PATH_POINTS,
+    MAX_PATHS,
+    MAX_STANDING,
+    OVERHEAD_Z,
+)
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObjectCollection
@@ -45,6 +57,38 @@ def _rotate(v: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
     """Rotate 2D vectors (..., 2) by -yaw (world -> heading frame); yaw broadcasts over leading dims."""
     c, s = torch.cos(yaw), torch.sin(yaw)
     return torch.stack([c * v[..., 0] + s * v[..., 1], -s * v[..., 0] + c * v[..., 1]], dim=-1)
+
+
+def _left(u: torch.Tensor) -> torch.Tensor:
+    """Unit vectors (..., 2) rotated by +90 degrees."""
+    return torch.stack([-u[..., 1], u[..., 0]], dim=-1)
+
+
+def path_at(pts: torch.Tensor, cum: torch.Tensor, s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Point and unit direction at arc length ``s`` (...) of polylines with points ``pts`` (..., K, 2) and cumulative
+    lengths ``cum`` (..., K); padded points repeat the last point. ``s`` is clamped to the polyline."""
+    s = torch.minimum(s.clamp(min=0.0), cum[..., -1])
+    k = (cum[..., 1:] < s[..., None]).sum(-1).clamp(max=pts.shape[-2] - 2)  # segment containing s
+    a = torch.gather(pts, -2, k[..., None, None].expand(*k.shape, 1, 2)).squeeze(-2)
+    b = torch.gather(pts, -2, (k + 1)[..., None, None].expand(*k.shape, 1, 2)).squeeze(-2)
+    c0 = torch.gather(cum, -1, k[..., None]).squeeze(-1)
+    u = (b - a) / torch.linalg.norm(b - a, dim=-1, keepdim=True).clamp(min=1e-6)
+    return a + (s - c0)[..., None] * u, u
+
+
+def path_project(pts: torch.Tensor, cum: torch.Tensor, x: torch.Tensor, s_prev: torch.Tensor | None = None) -> torch.Tensor:
+    """Arc length of the point of the polylines closest to ``x`` (..., 2). With ``s_prev``, parts of the polyline more
+    than 1 m behind or 3 m ahead of ``s_prev`` are penalized, so that a walker does not skip to a distant part."""
+    a, b = pts[..., :-1, :], pts[..., 1:, :]
+    seg_len = cum[..., 1:] - cum[..., :-1]
+    u = (b - a) / seg_len[..., None].clamp(min=1e-6)
+    t = torch.minimum(((x[..., None, :] - a) * u).sum(-1).clamp(min=0.0), seg_len)
+    d = torch.linalg.norm(x[..., None, :] - (a + t[..., None] * u), dim=-1)
+    s_k = cum[..., :-1] + t
+    d = torch.where(seg_len > 1e-6, d, torch.full_like(d, 1e6))  # padding
+    if s_prev is not None:
+        d = d + 2.0 * ((s_prev[..., None] - 1.0 - s_k).clamp(min=0.0) + (s_k - s_prev[..., None] - 3.0).clamp(min=0.0))
+    return torch.gather(s_k, -1, d.argmin(-1, keepdim=True)).squeeze(-1)
 
 
 def box_distance(points: torch.Tensor, boxes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -92,12 +136,16 @@ class NycScenarioCommand(CommandTerm):
         self.circles = torch.zeros(n, MAX_CIRCLES, 5, device=dev)
         self.boxes = torch.zeros(n, MAX_BOXES, 7, device=dev)
         self.forbidden = torch.zeros(n, MAX_FORBIDDEN, 4, device=dev)
-        self.lanes = torch.zeros(n, MAX_LANES, 6, device=dev)
+        self.path_pts = torch.zeros(n, MAX_PATHS, MAX_PATH_POINTS, 2, device=dev)
+        self.path_cum = torch.zeros(n, MAX_PATHS, MAX_PATH_POINTS, device=dev)  # arc length at each point
+        self.path_half_width = torch.zeros(n, MAX_PATHS, device=dev)
+        self.path_weight = torch.zeros(n, MAX_PATHS, device=dev)
+        self.path_free = torch.zeros(n, MAX_PATHS, device=dev)
         self.standing = torch.zeros(n, MAX_STANDING, 2, device=dev)
         self.circle_valid = torch.zeros(n, MAX_CIRCLES, dtype=torch.bool, device=dev)
         self.box_valid = torch.zeros(n, MAX_BOXES, dtype=torch.bool, device=dev)
         self.forbidden_valid = torch.zeros(n, MAX_FORBIDDEN, dtype=torch.bool, device=dev)
-        self.lane_valid = torch.zeros(n, MAX_LANES, dtype=torch.bool, device=dev)
+        self.path_valid = torch.zeros(n, MAX_PATHS, dtype=torch.bool, device=dev)
         self.num_standing = torch.zeros(n, dtype=torch.long, device=dev)
         self.difficulty = torch.zeros(n, device=dev)
         # robot task
@@ -112,8 +160,10 @@ class NycScenarioCommand(CommandTerm):
         self.ped_speed = torch.ones(n, p, device=dev)
         self.ped_aware = torch.zeros(n, p, dtype=torch.bool, device=dev)
         self.ped_mode = torch.zeros(n, p, dtype=torch.long, device=dev)
-        self.ped_lane = torch.zeros(n, p, dtype=torch.long, device=dev)
+        self.ped_path = torch.zeros(n, p, dtype=torch.long, device=dev)
         self.ped_offset = torch.zeros(n, p, device=dev)
+        self.ped_s = torch.zeros(n, p, device=dev)
+        """Arc length of each pedestrian's position along its path."""
         self.ped_timer = torch.zeros(n, p, device=dev)
         self.ped_delay = torch.zeros(n, p, device=dev)
         """Speed (m/s) each pedestrian is currently giving up because the robot is in its way."""
@@ -148,6 +198,24 @@ class NycScenarioCommand(CommandTerm):
 
     def visible_peds(self) -> torch.Tensor:
         return self.ped_mode != PARKED
+
+    @staticmethod
+    def tile_local(xy: torch.Tensor) -> torch.Tensor:
+        """Positions (..., 2) beyond the tile's ends mapped onto the tile, for streets that continue like the tile."""
+        return torch.stack([torch.remainder(xy[..., 0] + HALF_L, 2 * HALF_L) - HALF_L, xy[..., 1]], dim=-1)
+
+    def ped_paths(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Points (m, p, K, 2) and cumulative lengths (m, p, K) of each pedestrian's path."""
+        e = slice(None) if env_ids is None else env_ids
+        idx = self.ped_path[e]
+        pts = torch.gather(self.path_pts[e], 1, idx[..., None, None].expand(-1, -1, MAX_PATH_POINTS, 2))
+        cum = torch.gather(self.path_cum[e], 1, idx[..., None].expand(-1, -1, MAX_PATH_POINTS))
+        return pts, cum
+
+    def walking_direction(self) -> torch.Tensor:
+        """Unit direction (n, p, 2) of each pedestrian's path at its position along it."""
+        pts, cum = self.ped_paths()
+        return path_at(pts, cum, self.ped_s)[1]
 
     def pedestrian_clearance(self) -> torch.Tensor:
         d = torch.linalg.norm(self.ped_pos - self.robot_pos().unsqueeze(1), dim=-1)
@@ -304,7 +372,14 @@ class NycScenarioCommand(CommandTerm):
         self.boxes[env_ids], self.box_valid[env_ids] = lay.boxes[r, c], cap(MAX_BOXES, device=dev) < lay.num_boxes[r, c, None]
         self.forbidden[env_ids] = lay.forbidden[r, c]
         self.forbidden_valid[env_ids] = cap(MAX_FORBIDDEN, device=dev) < lay.num_forbidden[r, c, None]
-        self.lanes[env_ids], self.lane_valid[env_ids] = lay.lanes[r, c], cap(MAX_LANES, device=dev) < lay.num_lanes[r, c, None]
+        rows, k = lay.paths[r, c], MAX_PATH_POINTS
+        pts = rows[..., : 2 * k].reshape(n, MAX_PATHS, k, 2)
+        seg = torch.linalg.norm(pts[..., 1:, :] - pts[..., :-1, :], dim=-1)  # padded segments have zero length
+        self.path_pts[env_ids] = pts
+        self.path_cum[env_ids] = torch.cat([torch.zeros_like(seg[..., :1]), seg.cumsum(-1)], dim=-1)
+        self.path_half_width[env_ids], self.path_weight[env_ids] = rows[..., 2 * k + 1], rows[..., 2 * k + 2]
+        self.path_free[env_ids] = rows[..., 2 * k + 3]
+        self.path_valid[env_ids] = cap(MAX_PATHS, device=dev) < lay.num_paths[r, c, None]
         self.standing[env_ids], self.num_standing[env_ids] = lay.standing[r, c], lay.num_standing[r, c]
 
         # robot: one of the tile's routes, facing roughly towards the goal
@@ -328,24 +403,31 @@ class NycScenarioCommand(CommandTerm):
         self._spawn_pedestrians(env_ids, route)
         self.write_pedestrians(env_ids)
 
-    def _lane_geometry(self, lanes: torch.Tensor):
-        a, b = lanes[..., 0:2], lanes[..., 2:4]
-        length = torch.linalg.norm(b - a, dim=-1).clamp(min=1e-3)
-        u = (b - a) / length.unsqueeze(-1)
-        normal = torch.stack([-u[..., 1], u[..., 0]], dim=-1)
-        return a, u, normal, length
-
-    def _sample_lanes(self, env_ids: torch.Tensor, count: int, route: torch.Tensor | None = None) -> torch.Tensor:
-        """Lane index per pedestrian, by lane weight, favouring lanes that oppose or cross the robot's route."""
-        lanes = self.lanes[env_ids]
-        weight = lanes[..., 5] * self.lane_valid[env_ids]
+    def _sample_paths(self, env_ids: torch.Tensor, count: int, route: torch.Tensor | None = None) -> torch.Tensor:
+        """Path index per pedestrian, by path weight, favouring paths that oppose or cross the robot's route (judged
+        where the path comes closest to the route's middle)."""
+        weight = self.path_weight[env_ids] * self.path_valid[env_ids]
         if route is not None:
-            _, u, _, _ = self._lane_geometry(lanes)
+            pts, cum = self.path_pts[env_ids], self.path_cum[env_ids]
+            middle = ((route[:, :2] + route[:, 2:]) / 2)[:, None].expand(-1, MAX_PATHS, 2)
+            _, u = path_at(pts, cum, path_project(pts, cum, middle))
             rdir = route[:, 2:] - route[:, :2]
             rdir = rdir / torch.linalg.norm(rdir, dim=-1, keepdim=True).clamp(min=1e-3)
             weight = weight * (1.0 + 1.5 * ((u * rdir[:, None]).sum(-1) < 0.5))
-        weight = weight + 1e-6 * self.lane_valid[env_ids]
+        weight = weight + 1e-6 * self.path_valid[env_ids]
         return torch.multinomial(weight.clamp(min=1e-9), count, replacement=True)
+
+    @staticmethod
+    def _on_tile_range(pts: torch.Tensor, cum: torch.Tensor, samples: int = 48) -> tuple[torch.Tensor, torch.Tensor]:
+        """First and last arc length (..) at which the paths are on the tile."""
+        length = cum[..., -1]
+        s = length[..., None] * torch.linspace(0.0, 1.0, samples, device=pts.device)
+        x, _ = path_at(pts[..., None, :, :].expand(*s.shape, -1, 2), cum[..., None, :].expand(*s.shape, -1), s)
+        inside = (x[..., 0].abs() < HALF_L - 0.5) & (x[..., 1].abs() < HALF_W)
+        lo = torch.where(inside, s, torch.full_like(s, 1e9)).amin(-1)
+        hi = torch.where(inside, s, torch.full_like(s, -1e9)).amax(-1)
+        none = lo > hi
+        return torch.where(none, torch.zeros_like(lo), lo), torch.where(none, length, hi)
 
     def _spawn_pedestrians(self, env_ids: torch.Tensor, route: torch.Tensor):
         cfg, n, p, dev = self.cfg, len(env_ids), self.num_peds, self.device
@@ -366,23 +448,26 @@ class NycScenarioCommand(CommandTerm):
         self.ped_speed[env_ids] = torch.where(slow, 0.4 + 0.2 * torch.rand(n, p, device=dev), speed)
         aware_prob = cfg.aware_easy + (cfg.aware_hard - cfg.aware_easy) * d
         self.ped_aware[env_ids] = torch.rand(n, p, device=dev) < aware_prob[:, None]
-        lane = self._sample_lanes(env_ids, p, route)
-        self.ped_lane[env_ids] = lane
-        lanes = torch.gather(self.lanes[env_ids], 1, lane[..., None].expand(-1, -1, 6))
-        a, u, normal, length = self._lane_geometry(lanes)
-        self.ped_offset[env_ids] = (torch.rand(n, p, device=dev) * 2 - 1) * lanes[..., 4]
+        path = self._sample_paths(env_ids, p, route)
+        self.ped_path[env_ids] = path
+        pts, cum = self.ped_paths(env_ids)
+        length = cum[..., -1]
+        half_width = torch.gather(self.path_half_width[env_ids], 1, path)
+        self.ped_offset[env_ids] = (torch.rand(n, p, device=dev) * 2 - 1) * half_width
 
-        # walkers: most are timed to meet the robot on its route, the rest are spread along their lanes
+        # walkers: most are timed to meet the robot on its route, the rest are spread over the on-tile part of their path
         meet_frac = 0.2 + 0.6 * torch.rand(n, p, device=dev)
         meet = route[:, None, :2] + meet_frac[..., None] * (route[:, None, 2:] - route[:, None, :2])
-        s_meet = ((meet - a) * u).sum(-1).clamp(min=torch.zeros_like(length), max=length)
+        s_meet = path_project(pts, cum, meet)
         robot_eta = torch.linalg.norm(meet - route[:, None, :2], dim=-1) / cfg.robot_nominal_speed
         s0 = s_meet - self.ped_speed[env_ids] * robot_eta
         spread = torch.rand(n, p, device=dev) > cfg.encounter_ratio
-        s0 = torch.where(spread, torch.rand(n, p, device=dev) * length, s0)
+        s_lo, s_hi = self._on_tile_range(pts, cum)
+        s0 = torch.where(spread, s_lo + torch.rand(n, p, device=dev) * (s_hi - s_lo), s0)
         delay = torch.where(s0 < 0, -s0 / self.ped_speed[env_ids], torch.zeros_like(s0))
-        s0 = s0.clamp(min=torch.zeros_like(length), max=length)
-        walk_pos = a + s0[..., None] * u + self.ped_offset[env_ids][..., None] * normal
+        s0 = torch.minimum(s0.clamp(min=0.0), length)
+        on_path, u = path_at(pts, cum, s0)
+        walk_pos = on_path + self.ped_offset[env_ids][..., None] * _left(u)
 
         # standing: at a random standing spot of the tile, setting off after a while
         spot = (torch.rand(n, p, device=dev) * self.num_standing[env_ids].clamp(min=1)[:, None]).long()
@@ -394,12 +479,13 @@ class NycScenarioCommand(CommandTerm):
         mode = torch.where(standing, torch.full_like(mode, STANDING), mode)
         pos = torch.where(standing[..., None], stand_pos, walk_pos)
         timer = torch.where(standing, 5.0 + 20.0 * torch.rand(n, p, device=dev), delay)
-        # nobody starts on top of the robot: those would enter later at the start of their lane instead
+        # nobody starts on top of the robot: those enter later at the start of their path instead
         near = torch.linalg.norm(pos - self.start[env_ids][:, None], dim=-1) < cfg.spawn_clearance
         mode = torch.where(near, torch.full_like(mode, PARKED), mode)
         timer = torch.where(near & (mode == PARKED), timer.clamp(min=1.0 + 3.0 * torch.rand(n, p, device=dev)), timer)
         self.ped_mode[env_ids] = mode
         self.ped_pos[env_ids] = pos
+        self.ped_s[env_ids] = torch.where(standing, path_project(pts, cum, pos), s0)
         self.ped_timer[env_ids] = torch.where(active, timer, torch.full_like(timer, 1e9))  # inactive: never appear
         self.ped_vel[env_ids] = self.ped_speed[env_ids][..., None] * u * (mode == WALKING)[..., None]
         self.ped_delay[env_ids] = 0.0
@@ -421,31 +507,38 @@ class NycScenarioCommand(CommandTerm):
         cfg = self.cfg
         n, p, dev = self.num_envs, self.num_peds, self.device
         self.ped_timer -= dt
-        lanes = torch.gather(self.lanes, 1, self.ped_lane[..., None].expand(-1, -1, 6))
-        a, u, normal, length = self._lane_geometry(lanes)
+        pts, cum = self.ped_paths()
 
-        # delayed walkers appear at the start of their lane; standing people set off along a lane
-        entry = a + self.ped_offset[..., None] * normal
+        # walkers enter where their path starts (beyond the tile's ends, out of a door, up a stairwell); standing
+        # people set off along their path
+        start, u0 = path_at(pts, cum, torch.zeros_like(self.ped_s))
+        entry = start + self.ped_offset[..., None] * _left(u0)
         entry_clear = torch.linalg.norm(entry - self.robot_pos()[:, None], dim=-1) > cfg.spawn_clearance
         appear = (self.ped_mode == PARKED) & (self.ped_timer <= 0) & entry_clear
         self.ped_pos = torch.where(appear[..., None], entry, self.ped_pos)
+        self.ped_s = torch.where(appear, torch.zeros_like(self.ped_s), self.ped_s)
         set_off = (self.ped_mode == STANDING) & (self.ped_timer <= 0)
+        self.ped_s = torch.where(set_off, path_project(pts, cum, self.ped_pos), self.ped_s)
         self.ped_mode = torch.where(appear | set_off, torch.full_like(self.ped_mode, WALKING), self.ped_mode)
 
-        # walkers that reached the end of their lane re-enter at the start of a (new) lane after a short pause
-        s = ((self.ped_pos - a) * u).sum(-1)
-        done = (self.ped_mode == WALKING) & (s > length - 0.3)
+        # progress along the path; walkers at its end have left the scene and re-enter on a new path after a pause
+        walking = self.ped_mode == WALKING
+        self.ped_s = torch.where(walking, path_project(pts, cum, self.ped_pos, self.ped_s), self.ped_s)
+        done = walking & (self.ped_s > cum[..., -1] - 0.3)
         if done.any():
-            new_lane = self._sample_lanes(torch.arange(n, device=dev), p)
-            self.ped_lane = torch.where(done, new_lane, self.ped_lane)
+            self.ped_path = torch.where(done, self._sample_paths(torch.arange(n, device=dev), p), self.ped_path)
+            half_width = torch.gather(self.path_half_width, 1, self.ped_path)
+            self.ped_offset = torch.where(done, (torch.rand(n, p, device=dev) * 2 - 1) * half_width, self.ped_offset)
             self.ped_timer = torch.where(done, 3.0 * torch.rand(n, p, device=dev), self.ped_timer)
             self.ped_mode = torch.where(done, torch.full_like(self.ped_mode, PARKED), self.ped_mode)
-            lanes = torch.gather(self.lanes, 1, self.ped_lane[..., None].expand(-1, -1, 6))
-            a, u, normal, length = self._lane_geometry(lanes)
-            s = ((self.ped_pos - a) * u).sum(-1)
+            self.ped_s = torch.where(done, torch.zeros_like(self.ped_s), self.ped_s)
+            pts, cum = self.ped_paths()
+        walking = self.ped_mode == WALKING
+        _, path_dir = path_at(pts, cum, self.ped_s)
 
-        # desired velocity: follow the lane (look-ahead point at the pedestrian's lateral offset)
-        target = a + (s + 1.0).clamp(max=length)[..., None] * u + self.ped_offset[..., None] * normal
+        # desired velocity: follow the path (look-ahead point at the pedestrian's lateral offset)
+        look, look_dir = path_at(pts, cum, self.ped_s + 1.0)
+        target = look + self.ped_offset[..., None] * _left(look_dir)
         to_target = target - self.ped_pos
         v_des = self.ped_speed[..., None] * to_target / torch.linalg.norm(to_target, dim=-1, keepdim=True).clamp(min=1e-3)
 
@@ -481,18 +574,22 @@ class NycScenarioCommand(CommandTerm):
         others = visible[:, None, :] & ~torch.eye(p, dtype=torch.bool, device=dev)[None]
         gap = torch.where(others, dist - 2 * r, torch.full_like(dist, 1e3))
         force = push(gap, diff / dist[..., None]).sum(dim=2)
-        # structures (circles and boxes, closest surface point)
+        # structures (circles and boxes, closest surface point); not while coming out of a doorway or up a stairwell.
+        # Beyond the tile's ends the street continues like the tile itself (the demo renders copies of it there)
+        free = (self.ped_s < torch.gather(self.path_free, 1, self.ped_path)) & walking
+        local = self.tile_local(self.ped_pos)
         circ = self.circles
-        diff = self.ped_pos[:, :, None] - circ[:, None, :, :2]
+        diff = local[:, :, None] - circ[:, None, :, :2]
         dist = torch.linalg.norm(diff, dim=-1).clamp(min=1e-3)
         cmask = (self.circle_valid & (circ[..., 3] < OVERHEAD_Z))[:, None]
         gap = torch.where(cmask, dist - circ[:, None, :, 2] - r, torch.full_like(dist, 1e3))
-        force += push(gap, diff / dist[..., None]).sum(dim=2)
-        d_box, closest = box_distance(self.ped_pos, self.boxes)
-        diff = self.ped_pos[:, :, None] - closest
+        structures = push(gap, diff / dist[..., None]).sum(dim=2)
+        d_box, closest = box_distance(local, self.boxes)
+        diff = local[:, :, None] - closest
         bmask = (self.box_valid & (self.boxes[..., 5] < OVERHEAD_Z))[:, None]
         gap = torch.where(bmask, d_box - r, torch.full_like(d_box, 1e3))
-        force += push(gap, diff / torch.linalg.norm(diff, dim=-1, keepdim=True).clamp(min=1e-3)).sum(dim=2)
+        structures += push(gap, diff / torch.linalg.norm(diff, dim=-1, keepdim=True).clamp(min=1e-3)).sum(dim=2)
+        force += structures * ~free[..., None]
         # the robot, for pedestrians who notice it
         d_r = torch.linalg.norm(to_robot, dim=-1).clamp(min=1e-3)
         force += self.ped_aware[..., None] * push(d_r - r - cfg.robot_radius, -to_robot / d_r[..., None])
@@ -501,10 +598,10 @@ class NycScenarioCommand(CommandTerm):
         vel = self.ped_vel + (v_des + force - self.ped_vel) * min(dt / cfg.relaxation_time, 1.0)
         speed = torch.linalg.norm(vel, dim=-1, keepdim=True)
         vel = vel * (cfg.max_pedestrian_speed / speed.clamp(min=cfg.max_pedestrian_speed))
-        # people do not walk backwards: forces may slow a pedestrian down or move it sideways, but not push it back
-        # along its walking direction (standing pedestrians have no walking direction and are only nudged)
-        along = (vel * heading).sum(-1)
-        vel = vel - (along + cfg.max_backward_speed).clamp(max=0.0)[..., None] * heading
+        # people do not walk backwards: forces may slow a walker down or move it sideways, but not push it back along
+        # its path (also when it has stopped to give way); standing pedestrians are only nudged
+        along = (vel * path_dir).sum(-1)
+        vel = vel - ((along + cfg.max_backward_speed).clamp(max=0.0) * walking)[..., None] * path_dir
         # aware pedestrians never walk into the robot (crowd pressure included): cap their closing speed so they keep
         # at least ``aware_min_gap`` over the next step; contact then only happens if the robot closes in itself
         u_r = to_robot / d_r[..., None]
@@ -523,7 +620,7 @@ class NycScenarioCommand(CommandTerm):
         pos, vel, mode = self.ped_pos[ids], self.ped_vel[ids], self.ped_mode[ids]
         rows, cols = self.tile_row[ids], self.tile_col[ids]
         n, p = pos.shape[:2]
-        ground = self.layout.ground_height(rows, cols, pos)
+        ground = self.layout.ground_height(rows, cols, self.tile_local(pos))
         pose = torch.zeros(n, p, 7, device=self.device)
         pose[..., :2] = pos + self.tile_center[ids][:, None]
         pose[..., 2] = torch.where(mode != PARKED, ground + self.cfg.pedestrian_center_height, torch.full_like(ground, -10.0))
@@ -585,7 +682,7 @@ class NycScenarioCommandCfg(CommandTermCfg):
     distracted_swerve_speed: float = 0.7
     """Look-ahead (m) and peak sideways speed (m/s) with which pedestrians step around a robot in their path."""
     max_backward_speed: float = 0.05
-    """Largest speed (m/s) at which a walking pedestrian may move against its walking direction."""
+    """Largest speed (m/s) at which a walking pedestrian may move against the direction of its path."""
     aware_min_gap: float = 0.1
     """Aware pedestrians never move closer than this (m) to the robot by themselves."""
     spawn_clearance: float = 1.5

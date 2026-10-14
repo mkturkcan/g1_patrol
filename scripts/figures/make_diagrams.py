@@ -205,7 +205,7 @@ def workflow(icons: str, out: str):
         cx, cy = xs[0] + 16 + (k % 2) * 128, Y + 46 + (k // 2) * 76
         s.image(media(f"{name}.jpg"), cx, cy, 120, 68, r=3, frame=True)
     s.item(xs[0] + 16, Y + 286, 248, 44, "6 types × 10 levels", "yellow", "construction")
-    s.item(xs[0] + 16, Y + 342, 248, 44, "Pedestrian lanes, timing", "cyan", "users")
+    s.item(xs[0] + 16, Y + 342, 248, 44, "Pedestrian paths, timing", "cyan", "users")
     s.item(xs[0] + 16, Y + 398, 248, 44, "Routes, structures, terrain", "orange", "route")
     s.item(xs[0] + 16, Y + 454, 248, 60, "Passability test\nfor every tile", "lavender", "shield-check", size=14)
 
@@ -222,7 +222,7 @@ def workflow(icons: str, out: str):
     x = xs[2]
     s.image(media("stills/plaza.jpg"), x + 16, Y + 46, 248, 140)
     s.item(x + 16, Y + 206, 248, 44, "PPO, PhysX", "lavender", "cpu", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "3,250 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "4,250 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
     s.item(x + 16, Y + 334, 248, 60, "Privileged state:\npedestrians, obstacles", "cyan", "users", size=14)
     s.item(x + 16, Y + 406, 248, 44, "Adaptive curriculum", "orange", "target", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Teacher  π_{T}", "green", "brain-circuit")

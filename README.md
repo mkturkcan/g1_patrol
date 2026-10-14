@@ -44,7 +44,8 @@ tracked by PD controllers. The simulator runs at 200 Hz.
    gravity vector, positions and velocities of the 10 nearest pedestrians, obstacle distances in 72 sectors (separately
    for tall and low obstacles), a terrain height scan and the current command (332 dimensions). Training is
    initialized from an earlier teacher whose output layer is scaled by 0.3. The collision-risk reward (Table 2) is
-   added after 2,050 iterations, and training continues for 1,200 iterations.
+   added after 2,050 iterations, and training continues for 1,200 iterations; the last 1,000 iterations use the
+   path-based pedestrian model described below (earlier stages used straight lanes inside the tile).
 3. *Students* (`G1Patrol-Navigate-NYC-Lidar`, `G1Patrol-Navigate-NYC-Camera`). Distilled from the teacher with
    DAgger-style rollouts of the student; the loss is the mean squared error between the tanh-mapped actions of student
    and teacher. Each student observes proprioception, the goal position and one sensor at its mounting pose in the G1
@@ -65,17 +66,18 @@ tracked by PD controllers. The simulator runs at 200 Hz.
 | Policy rate | 50 Hz | 10 Hz | 10 Hz |
 | Parallel robots | 4,096, then 16,384 | 8,192 | 8,192 |
 | Rollout length (steps per robot and iteration) | 24 | 32 | 32 |
-| Iterations | 4,000 + 3,000 | 2,050 + 1,200 | 1,500 |
+| Iterations | 4,000 + 3,000 | 2,050 + 1,200 + 1,000 | 1,500 + 600 |
 | Entropy coefficient | 0.008 | 0.001 | – |
 | Network | MLP 512-256-128 | MLP 512-256-128 | CNN 16-32-32 per image input, MLP 512-256-128 |
-| Hardware, time | 1 GPU 44 min, then 4 GPUs 31 min | 4 GPUs, 6.2 h | 4 GPUs shared by both students, 5.8 h |
+| Hardware, time | 1 GPU 44 min, then 4 GPUs 31 min | 4 GPUs, 7.8 h | 4 GPUs shared by both students, 8.4 h |
 
 *Table 1. Training setup (NVIDIA RTX PRO 6000 GPUs).*
 
 **Environment.** The terrain is a grid of 16 m × 10 m tiles; columns are the six scenario types and rows are ten
 difficulty levels. In each episode the robot must traverse a route on its tile within 40 s. Pedestrians are
-kinematic bodies that follow walking lanes under a social-force model. Most are timed to reach the robot's route
-when the robot does. A fraction of them (90% at level 1, 60% at level 10) perceive the robot, keep a clearance of at
+kinematic bodies that follow walking paths under a social-force model. A path leads from where people enter the
+scene (45 m beyond the tile's ends, out of a shop door, up a subway stairwell) to 45 m beyond the tile's ends, so
+pedestrians do not appear or disappear in view. Most are timed to reach the robot's route when the robot does. A fraction of them (90% at level 1, 60% at level 10) perceive the robot, keep a clearance of at
 least 0.1 m, slow down and step around it; the loss of pedestrian speed is penalized, which rewards yielding. The
 others react only within 1 m. A unit test verifies that every route admits a 0.6 m wide path at every difficulty.
 
@@ -115,56 +117,58 @@ rate ±1.2 rad/s, without filtering.
 
 | Outcome | Teacher, clamped commands | Teacher | Lidar student | Camera student |
 |---|---:|---:|---:|---:|
-| Goal reached | 77.2% | 76.6% | 72.1% | 69.8% |
-| Pedestrian contact | 13.1% | 15.3% | 16.1% | 17.8% |
-| Obstacle contact | 8.5% | 7.5% | 11.3% | 12.3% |
-| Fall | 0.9% | 0.2% | 0.1% | 0.1% |
-| Time-out (40 s) | 0.3% | 0.4% | 0.4% | 0.1% |
-| Mean time to goal (successful episodes) | 10.5 s | 13.3 s | 13.3 s | 13.4 s |
-| Time within 0.5 m of a pedestrian | 9.9% | 11.9% | 13.9% | 14.3% |
-| Completed episodes | 13,392 | 10,228 | 10,438 | 10,786 |
+| Goal reached | 74.0% | 74.9% | 69.3% | 69.1% |
+| Pedestrian contact | 15.5% | 16.3% | 18.3% | 20.3% |
+| Obstacle contact | 9.0% | 8.1% | 11.9% | 10.2% |
+| Fall | 1.08% | 0.22% | 0.03% | 0.04% |
+| Time-out (40 s) | 0.4% | 0.5% | 0.5% | 0.4% |
+| Mean time to goal (successful episodes) | 10.6 s | 13.4 s | 13.4 s | 13.2 s |
+| Time within 0.5 m of a pedestrian | 11.1% | 13.0% | 13.7% | 15.9% |
+| Completed episodes | 13,764 | 10,439 | 10,983 | 11,062 |
 
 *Table 3. Episode outcomes over all tiles.*
 
 | Scenario | Easy (levels 1–4) | Medium (5–7) | Hard (8–10) |
 |---|---:|---:|---:|
-| Sidewalk | 91 / 94 / 94% | 79 / 78 / 81% | 28 / 27 / 32% |
-| Sidewalk shed | 99 / 97 / 89% | 87 / 80 / 75% | 50 / 52 / 49% |
-| Crosswalk | 92 / 90 / 90% | 66 / 62 / 61% | 48 / 46 / 45% |
-| Construction zone | 88 / 87 / 93% | 79 / 62 / 59% | 65 / 48 / 23% |
-| Doorway | 92 / 92 / 92% | 85 / 87 / 82% | 81 / 74 / 71% |
-| Plaza | 92 / 78 / 84% | 84 / 85 / 83% | 76 / 67 / 70% |
+| Sidewalk | 92 / 93 / 88% | 66 / 71 / 67% | 23 / 18 / 22% |
+| Sidewalk shed | 98 / 96 / 95% | 87 / 78 / 79% | 56 / 47 / 48% |
+| Crosswalk | 94 / 92 / 91% | 74 / 67 / 67% | 57 / 53 / 53% |
+| Construction zone | 90 / 88 / 90% | 75 / 51 / 47% | 55 / 49 / 46% |
+| Doorway | 90 / 88 / 90% | 78 / 79 / 71% | 74 / 71 / 70% |
+| Plaza | 89 / 84 / 81% | 84 / 80 / 76% | 74 / 64 / 66% |
 
 *Table 4. Success rate by scenario type and difficulty (teacher / lidar student / camera student).*
 
-The lidar and camera students reach 94% and 91% of the teacher's success rate. Most of their additional failures are
-obstacle contacts on hard construction-zone and sidewalk tiles. Two changes between the first and the final
-students, accumulating the height map over 3 s and computing the distillation loss on tanh-mapped actions, reduced
-obstacle contacts of the camera student from 24.4% to 12.3% and increased its success rate from 60.4% to 69.8%; the
-success rate of the lidar student increased from 70.0% to 72.1%. Pedestrian contact is the most frequent failure for
-all policies. On hard sidewalk tiles, where the walkway admits one person at a time, success is 27–32%.
+The lidar and camera students reach 93% and 92% of the teacher's success rate. The largest differences are on
+construction-zone tiles of medium difficulty (75% for the teacher, 51% and 47% for the students), where the clear
+walkway is a chicane of fences and barriers. Two changes between the first and the final students, accumulating the
+height map over 3 s and computing the distillation loss on tanh-mapped actions, reduced obstacle contacts of the
+camera student from 24.4% to 12.3% and increased its success rate from 60.4% to 69.8%; the success rate of the lidar
+student increased from 70.0% to 72.1% (both measured with the earlier pedestrian model, before fine-tuning on the
+path-based one). Pedestrian contact is the most frequent failure for all policies. On hard sidewalk tiles, where the
+walkway admits one person at a time, success is 18–23%.
 
 | Quantity | Teacher, clamped commands | Teacher | Lidar student | Camera student |
 |---|---:|---:|---:|---:|
-| Forward command (m/s) | 1.15 | 0.94 | 0.93 | 0.94 |
-| \|Lateral command\| (m/s) | 0.58 | 0.15 | 0.12 | 0.10 |
-| Time with \|lateral command\| > 0.25 m/s | 96.7% | 20.6% | 8.6% | 5.9% |
-| \|Yaw-rate command\| (rad/s) | 0.54 | 0.27 | 0.21 | 0.20 |
-| Time with \|yaw-rate command\| > 0.8 rad/s | 28.9% | 5.4% | 1.0% | 0.7% |
-| Requested command at a range limit | 70.1% | 37.4% | 28.9% | 28.5% |
-| Yaw-rate command change (rad/s²) | 2.77 | 0.81 | 0.42 | 0.40 |
-| Planar speed (m/s) | 1.16 | 0.88 | 0.86 | 0.87 |
+| Forward command (m/s) | 1.15 | 0.94 | 0.94 | 0.93 |
+| \|Lateral command\| (m/s) | 0.58 | 0.14 | 0.10 | 0.09 |
+| Time with \|lateral command\| > 0.25 m/s | 96.6% | 19.3% | 7.2% | 5.9% |
+| \|Yaw-rate command\| (rad/s) | 0.55 | 0.26 | 0.21 | 0.20 |
+| Time with \|yaw-rate command\| > 0.8 rad/s | 29.4% | 5.4% | 1.3% | 1.0% |
+| Requested command at a range limit | 70.2% | 37.7% | 29.7% | 28.9% |
+| Yaw-rate command change (rad/s²) | 2.80 | 0.80 | 0.42 | 0.42 |
+| Planar speed (m/s) | 1.16 | 0.88 | 0.86 | 0.86 |
 | Torso tilt | 3.9° | 3.4° | 3.4° | 3.4° |
-| Knee flexion | 40.2° | 38.5° | 38.4° | 38.5° |
+| Knee flexion | 40.2° | 38.5° | 38.5° | 38.5° |
 
 *Table 5. Velocity commands and posture during the evaluation (time averages). A requested command is at a range
 limit when it lies within 5% of the range of a command component (average over the three components).*
 
 The earlier teacher commands lateral velocities above 0.25 m/s 97% of the time and requests a range limit 70% of the
 time, so the robot moves diagonally at high speed. With the tanh mapping, the low-pass filter and the command
-penalties of Table 2, these shares are 21% and 37% for the final teacher, the mean rate of change of the yaw-rate
-command is 3.4 times lower, and the fall rate decreases from 0.9% to 0.2%. Success is 0.6 percentage points lower,
-and successful episodes take 13.3 s instead of 10.5 s at a mean speed of 0.88 m/s instead of 1.16 m/s.
+penalties of Table 2, these shares are 19% and 38% for the final teacher, the mean rate of change of the yaw-rate
+command is 3.5 times lower, and the fall rate decreases from 1.1% to 0.2%. Success is 0.9 percentage points higher;
+successful episodes take 13.4 s instead of 10.6 s at a mean speed of 0.88 m/s instead of 1.16 m/s.
 
 | Metric | Newton | Newton, pushes ≤ 1 m/s | PhysX |
 |---|---|---|---|
@@ -227,9 +231,10 @@ scenario type and difficulty. Runs are headless; select GPUs with `--device cuda
 overridden with Hydra arguments, e.g. `env.scene.num_envs=1024 agent.max_iterations=3000`.
 
 **Rendering.** `scripts/demo/` renders policies with RTX: textured streets and buildings, and Isaac Sim's animated
-character models in place of the pedestrian capsules. Only the rendering changes; pedestrian motion and policy inputs
-are those of the evaluation environment. The character animations are retargeted from Isaac Sim assets and are not
-included in the repository:
+character models in place of the pedestrian capsules. Copies of the filmed tile continue the street beyond its ends,
+where pedestrians enter and leave. Only the rendering changes; pedestrian motion and policy inputs are those of the
+evaluation environment. The character animations are retargeted from Isaac Sim assets and are not included in the
+repository:
 
 ```bash
 python scripts/demo/bake_people_animations.py --out src/g1_patrol/assets/data/people

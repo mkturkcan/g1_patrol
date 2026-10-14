@@ -25,9 +25,10 @@ from .tiles import (
     MAX_BOXES,
     MAX_CIRCLES,
     MAX_FORBIDDEN,
-    MAX_LANES,
+    MAX_PATHS,
     MAX_ROUTES,
     MAX_STANDING,
+    PATH_ROW,
     TILE_SIZE,
     TileLayout,
 )
@@ -90,7 +91,7 @@ class NycLayout:
             "circles": (5, MAX_CIRCLES),
             "boxes": (7, MAX_BOXES),
             "routes": (4, MAX_ROUTES),
-            "lanes": (6, MAX_LANES),
+            "paths": (PATH_ROW, MAX_PATHS),
             "standing": (2, MAX_STANDING),
             "forbidden": (4, MAX_FORBIDDEN),
         }
@@ -103,7 +104,8 @@ class NycLayout:
         difficulty = np.zeros((rows, cols), dtype=np.float32)
         for (r, c), lay in generator.layouts.items():
             for name, (width, cap) in fields.items():
-                data[name][r, c], counts[name][r, c] = pad(getattr(lay, name), width, cap)
+                items = lay.path_rows() if name == "paths" else getattr(lay, name)
+                data[name][r, c], counts[name][r, c] = pad(items, width, cap)
             heights[r, c] = lay.heights
             crowd[r, c] = lay.crowd
             kind[r, c] = KINDS.index(lay.kind)

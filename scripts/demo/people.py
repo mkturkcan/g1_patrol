@@ -2,9 +2,11 @@
 
 Each pedestrian of the filmed environments gets an Isaac Sim character. Its skeleton is posed every rendered frame
 from clips baked by ``bake_people_animations.py``: an in-place walk cycle whose phase advances with the pedestrian's
-actual speed (so feet do not slide), blended into an idle loop as the pedestrian slows down and stops. Characters
-face their walking direction and stand on the tile's ground. The kinematic capsules that the robot and its sensors
-interact with are hidden; their motion is what the characters follow.
+speed along its facing direction (so feet do not slide), blended into an idle loop as the pedestrian slows down and
+stops. A character faces along its path when it enters the scene and turns towards its direction of motion; when that
+direction is behind it, it turns on the spot instead of stepping backwards. Characters stand on the tile's ground
+(and on the stairs of subway entrances). The kinematic capsules that the robot and its sensors interact with are
+hidden; their motion is what the characters follow.
 """
 
 from __future__ import annotations
@@ -79,12 +81,15 @@ def _nlerp(qa: np.ndarray, qb: np.ndarray, w: float) -> np.ndarray:
 class AnimatedCrowd:
     """Characters standing in for the pedestrians of ``env_ids`` in the scenario command ``scenario``."""
 
-    def __init__(self, scenario, env_ids: list[int], clips_dir: str, root: str = "/World/Demo/People", seed: int = 0):
+    def __init__(self, scenario, env_ids: list[int], clips_dir: str, root: str = "/World/Demo/People", seed: int = 0,
+                 stairs: list | None = None):
         import omni.usd
 
         self.stage = stage = omni.usd.get_context().get_stage()
         self.scenario = scenario
         self.env_ids = torch.as_tensor(env_ids, device=scenario.device)
+        # subway stairs per filmed environment: (x0, x1, y0, y1) tile-local, rising from x0 to street level at x1
+        self.stairs = stairs or [[] for _ in env_ids]
         rng = np.random.default_rng(seed)
         names = list(CHARACTERS)
         weights = np.array([WEIGHTS[n] for n in names], dtype=np.float64)
@@ -96,6 +101,10 @@ class AnimatedCrowd:
             for name in names
         }
         p = scenario.num_peds
+        # per filmed environment and person, after each update: shown, chest position (world), moving backwards
+        self.visible = np.zeros((len(env_ids), p), dtype=bool)
+        self.points = np.zeros((len(env_ids), p, 3))
+        self.backward = np.zeros((len(env_ids), p), dtype=bool)
         self.people = []
         for e in env_ids:
             for k in range(p):
@@ -147,14 +156,36 @@ class AnimatedCrowd:
             color = np.array(palette[int(rng.integers(len(palette)))]) * rng.uniform(0.85, 1.15)
             UsdShade.Shader(q).CreateInput("diffuse_tint", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*np.clip(color, 0, 1)))
 
+    def _ground(self, ids) -> np.ndarray:
+        """Ground height under each pedestrian: the tile's (repeated beyond its ends), and the stairs of subway entrances
+        instead of the floor of their stairwell."""
+        s = self.scenario
+        local = s.tile_local(s.ped_pos[ids])
+        ground = s.layout.ground_height(s.tile_row[ids], s.tile_col[ids], local).cpu().numpy()
+        local = local.cpu().numpy()
+        for e, stairs in enumerate(self.stairs):
+            for x0, x1, y0, y1 in stairs:
+                lay_top = s.layout.ground_height(s.tile_row[ids][e : e + 1], s.tile_col[ids][e : e + 1],
+                                                 torch.tensor([[[x1 + 0.3, (y0 + y1) / 2]]], device=s.device))
+                top = float(lay_top.flatten()[0])
+                x, y = local[e, :, 0], local[e, :, 1]
+                inside = (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
+                ramp = top - 1.0 * (1.0 - np.clip((x - x0) / (x1 - x0), 0.0, 1.0))
+                ground[e] = np.where(inside, ramp, ground[e])
+        return ground
+
     def update(self, dt: float):
         """Move and pose the characters to the pedestrians' current state (call before each rendered frame)."""
         s, ids = self.scenario, self.env_ids
         pos = (s.ped_pos[ids] + s.tile_center[ids][:, None]).cpu().numpy()
-        ground = s.layout.ground_height(s.tile_row[ids], s.tile_col[ids], s.ped_pos[ids]).cpu().numpy()
+        ground = self._ground(ids)
         vel = s.ped_vel[ids].cpu().numpy()
+        path_dir = s.walking_direction()[ids].cpu().numpy()
         visible = (s.ped_mode[ids] != 0).cpu().numpy()  # PARKED = 0
         p = pos.shape[1]
+        self.visible[:] = visible
+        self.points[..., :2], self.points[..., 2] = pos[..., :2], ground + 1.2
+        self.backward[:] = False
         for n, person in enumerate(self.people):
             e, k = divmod(n, p)
             if person["visible"] != bool(visible[e, k]):
@@ -165,19 +196,22 @@ class AnimatedCrowd:
                 continue
             v = vel[e, k]
             speed = float(np.hypot(*v))
-            if person["yaw"] is None:
-                person["yaw"] = math.atan2(v[1], v[0]) if speed > 0.05 else 0.0
-            # turn towards the direction of motion while walking, at a speed-dependent turn rate; when the path
-            # reverses, pivot quickly instead of stepping backwards
-            if speed > 0.1:
+            if person["yaw"] is None:  # entering the scene (or standing at a spot): face along the path
+                person["yaw"] = math.atan2(path_dir[e, k, 1], path_dir[e, k, 0])
+            # turn towards the direction of motion while walking; when the motion is behind the person, pivot on the
+            # spot (also at low speed) instead of stepping backwards
+            along = float(v[0] * math.cos(person["yaw"]) + v[1] * math.sin(person["yaw"]))
+            if speed > 0.2 or (speed > 0.03 and along < 0.0):
                 diff = (math.atan2(v[1], v[0]) - person["yaw"] + math.pi) % (2 * math.pi) - math.pi
                 rate = (4.0 + 8.0 * min(1.0, speed)) * dt * (2.5 if abs(diff) > math.pi / 2 else 1.0)
                 person["yaw"] += max(-rate, min(rate, diff))
-            # the walk cycle follows the speed along the facing direction (it runs backwards if the person steps back)
+            # the walk cycle follows the speed along the facing direction and never runs backwards
             along = float(v[0] * math.cos(person["yaw"]) + v[1] * math.sin(person["yaw"]))
+            self.backward[e, k] = along < -0.05
+            along = max(0.0, along)
             person["walk_phase"] += along / (WALK_SPEED * person["stride"]) * dt * FPS / len(person["walk"]["rot"])
             person["idle_phase"] += dt * FPS / len(person["idle"]["rot"])
-            target_blend = min(1.0, abs(along) / 0.5)
+            target_blend = min(1.0, along / 0.5)
             person["blend"] += (target_blend - person["blend"]) * min(1.0, 6.0 * dt)
             rot_w, trans_w = _sample(person["walk"], person["walk_phase"])
             rot_i, trans_i = _sample(person["idle"], person["idle_phase"])

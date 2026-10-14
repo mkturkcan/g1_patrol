@@ -95,6 +95,7 @@ class FollowCamera:
         self.camera.CreateFocalLengthAttr(focal)
         self.camera.CreateHorizontalApertureAttr(20.955)
         self.camera.CreateVerticalApertureAttr(20.955 * height / width)
+        self.focal, self.aperture = focal, (20.955, 20.955 * height / width)
         self.camera.CreateClippingRangeAttr().Set((0.05, 500.0))
         xf = UsdGeom.Xformable(self.camera.GetPrim())
         self.transform = xf.AddTransformOp()
@@ -182,6 +183,19 @@ class FollowCamera:
             *eye, 1.0,
         )  # fmt: skip
         self.transform.Set(m)
+
+    def in_view(self, points: np.ndarray, max_distance: float = 60.0) -> np.ndarray:
+        """Whether world points (m, 3) are in the image, in front of the camera and within ``max_distance``."""
+        if self.eye is None:
+            return np.zeros(len(points), dtype=bool)
+        forward = (self.target - self.eye) / np.linalg.norm(self.target - self.eye)
+        right = np.cross(forward, [0.0, 0.0, 1.0])
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
+        d = points - self.eye
+        z, x, y = d @ forward, d @ right, d @ up
+        tan_x, tan_y = self.aperture[0] / (2 * self.focal), self.aperture[1] / (2 * self.focal)
+        return (z > 0.3) & (z < max_distance) & (np.abs(x) < z * tan_x) & (np.abs(y) < z * tan_y)
 
     def frame(self) -> np.ndarray | None:
         data = self.rgb.get_data()
@@ -288,11 +302,15 @@ def main(argv):
             tiles.append((level, col))
         terrain.env_origins[:] = terrain.terrain_origins[terrain.terrain_levels, terrain.terrain_types]
 
-        # looks: dress the filmed tiles and their neighbours along the street, people, cameras
+        # looks: dress the filmed tiles and, along the street, copies of them (pedestrians enter and leave the scene
+        # beyond the tile's ends, and walk past these copies); people; cameras
         generator = NycTerrainGenerator.latest
-        rows = lambda r: range(max(0, r - 1), min(generator.cfg.num_rows, r + 2))  # noqa: E731
-        nyc_look.dress(stage, generator, sorted({(q, c) for r, c in tiles for q in rows(r)}))
-        crowd = AnimatedCrowd(scenario, list(range(len(args.scenarios))), os.path.join(PROJECT, "src/g1_patrol/assets/data/people"))
+        placements = {(r + k, c): (r, c) for r, c in tiles for k in (-2, -1, 1, 2)}
+        placements.update({t: t for t in tiles})  # filmed tiles always show their own layout
+        nyc_look.dress(stage, generator, placements)
+        stairs = [[item[1:] for item in generator.layouts[t].decor if item[0] == "stairs"] for t in tiles]
+        crowd = AnimatedCrowd(scenario, list(range(len(args.scenarios))), os.path.join(PROJECT, "src/g1_patrol/assets/data/people"),
+                              stairs=stairs)
         cameras = [FollowCamera(stage, f"/World/Demo/Cameras/cam_{e}", name, args.width, args.height, args.camera)
                    for e, name in enumerate(args.scenarios)]  # fmt: skip
         camera_bounds = [
@@ -304,6 +322,9 @@ def main(argv):
         fps = 1.0 / frame_dt
 
         clips = [None] * len(args.scenarios)
+        # people check per clip: characters appearing or vanishing in view, frames of characters moving backwards
+        people_events = [[0, 0, 0] for _ in args.scenarios]
+        prev_people = [None] * len(args.scenarios)
         clip_t = [0.0] * len(args.scenarios)
         clip_frames = [0] * len(args.scenarios)
         clip_count = [0] * len(args.scenarios)
@@ -313,6 +334,7 @@ def main(argv):
             path = os.path.join(out_dir, f"{args.scenarios[e]}_L{levels[e]}_{args.camera}_ep{clip_count[e]:02d}.mp4")
             clips[e] = (imageio.get_writer(path, fps=fps, codec="libx264", quality=9, macro_block_size=8), path)
             clip_t[e], clip_frames[e] = 0.0, 0
+            people_events[e], prev_people[e] = [0, 0, 0], None
 
         def close_clip(e, outcome):
             writer, path = clips[e]
@@ -322,7 +344,9 @@ def main(argv):
                 return
             final = path.replace(".mp4", f"_{outcome}.mp4")
             os.replace(path, final)
-            print(f"[DEMO] {os.path.basename(final)} ({clip_t[e]:.1f} s, {clip_frames[e]} frames)", flush=True)
+            appear, vanish, backward = people_events[e]
+            print(f"[DEMO] {os.path.basename(final)} ({clip_t[e]:.1f} s, {clip_frames[e]} frames; people in view: {appear} appeared, "
+                  f"{vanish} vanished, {backward} character-frames moving backwards)", flush=True)
 
         import carb
         import omni.kit.app
@@ -343,6 +367,14 @@ def main(argv):
             omni.kit.app.get_app().update()
             settings.set("/app/player/playSimulations", bool(play))
             for e, cam in enumerate(cameras):
+                visible, points, backward = crowd.visible[e], crowd.points[e], crowd.backward[e]
+                view = cam.in_view(points)
+                if clip_t[e] > 2 * frame_dt and prev_people[e] is not None:
+                    was_visible, was_in_view = prev_people[e]
+                    people_events[e][0] += int((visible & ~was_visible & view).sum())
+                    people_events[e][1] += int((~visible & was_visible & was_in_view).sum())
+                    people_events[e][2] += int((backward & visible & view).sum())
+                prev_people[e] = (visible, view)
                 frame = cam.frame()
                 if frame is not None and clip_t[e] > 2 * frame_dt:  # skip the first frames after a teleport
                     title = TITLES[args.scenarios[e]]
