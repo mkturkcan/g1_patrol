@@ -5,12 +5,15 @@
   The last ``num_frames`` maps are stacked so moving people are visible.
 * :class:`depth_frames` stacks the last ``num_frames`` depth images with sensor noise, missing pixels and occasional
   occlusions (a hand over the camera, glare), so the camera-only policy learns to cope with a degraded view.
+* :class:`accumulated_height_map` integrates the returns of either sensor over the last seconds into a robot-centred
+  height map (odometry is taken as known), so that structures stay in the map after they leave the field of view.
 
 Both return 2D observation groups (channels, height, width) for a CNN encoder.
 """
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -136,3 +139,136 @@ class depth_frames(ManagerTermBase):
         depth = depth.clamp(0.0, 1.0)
         self.frames = torch.cat([depth[:, None], self.frames[:, :-1]], dim=1)
         return self.frames.clone()
+
+
+class accumulated_height_map(ManagerTermBase):
+    """Height map accumulated over the last ``memory_s`` seconds, in the robot's heading frame (3, cells, cells).
+
+    The returns of each scan are binned into a world-aligned grid that scrolls with the robot; the robot's motion between
+    scans is taken as known (on the robot it comes from lidar-inertial or visual-inertial odometry). Observed cells take
+    the highest return of the latest scan; a cell is forgotten ``memory_s`` seconds after it was last observed. The
+    output is resampled into the robot's heading frame (rows: forward, columns: left) with three channels: the
+    accumulated map, the current scan and the previous scan (motion-compensated, so moving pedestrians are visible).
+    Heights are relative to the robot's ground level and clipped to ``z_range``; unknown cells are ``unknown_value``.
+
+    ``sensor_cfg`` may name a lidar (:class:`RayCaster`) or a depth camera (:class:`RayCasterCamera`); for a camera,
+    ``noise_std`` (relative range noise, growing with distance) and ``dropout`` (missing pixels) degrade the returns
+    as in :class:`depth_frames`.
+    """
+
+    UNKNOWN = -1.0e3
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        p = cfg.params
+        self.res = p.get("resolution", 0.2)
+        self.cells = int(round(p.get("size", 8.0) / self.res))
+        self.map_cells = int(math.ceil(self.cells * math.sqrt(2))) + 2  # the rotated output window fits inside
+        n, m, dev = env.num_envs, self.map_cells, env.device
+        self.height = torch.full((n, m, m), self.UNKNOWN, device=dev)
+        self.age = torch.full((n, m, m), 1.0e3, device=dev)
+        self.prev_scan = torch.full((n, m, m), self.UNKNOWN, device=dev)
+        self.origin = torch.zeros(n, 2, dtype=torch.long, device=dev)  # world cell index of map cell (0, 0)
+        self.fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        # output cell centres in the robot frame
+        c = (torch.arange(self.cells, device=dev, dtype=torch.float) + 0.5) * self.res - self.cells * self.res / 2
+        self.local = torch.stack(torch.meshgrid(c, c, indexing="ij"), dim=-1).view(-1, 2)  # (cells^2, 2): x, y
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        self.fresh[ids] = True
+
+    def _shift(self, grid: torch.Tensor, d: torch.Tensor, fill: float) -> torch.Tensor:
+        """grid[i, j] <- grid[i + d0, j + d1] per env; cells shifted in from outside are ``fill``."""
+        n, m = grid.shape[0], self.map_cells
+        ar = torch.arange(m, device=grid.device)
+        si = ar[None, :, None] + d[:, 0, None, None]
+        sj = ar[None, None, :] + d[:, 1, None, None]
+        valid = (si >= 0) & (si < m) & (sj >= 0) & (sj < m)
+        flat = (si.clamp(0, m - 1) * m + sj.clamp(0, m - 1)).view(n, -1)
+        out = grid.view(n, -1).gather(1, flat).view(n, m, m)
+        return torch.where(valid, out, torch.full_like(out, fill))
+
+    def _points(self, env, sensor_cfg, max_range, noise_std, dropout) -> torch.Tensor:
+        sensor = env.scene.sensors[sensor_cfg.name]
+        # lidars expose their hits in the data buffer, ray-cast cameras on the sensor
+        hits = (sensor.data.ray_hits_w if hasattr(sensor.data, "ray_hits_w") else sensor.ray_hits_w).torch
+        origin = sensor.data.pos_w.torch[:, None]
+        hits = torch.nan_to_num(hits, nan=float("inf"))
+        ray = hits - origin
+        dist = torch.linalg.norm(ray, dim=-1, keepdim=True)
+        ok = torch.isfinite(dist) & (dist < max_range)
+        if noise_std > 0:
+            scale = 1.0 + torch.randn_like(dist) * noise_std * (0.5 + dist / max_range)
+            hits = origin + torch.where(ok, ray * scale, ray)
+        if dropout > 0:
+            ok = ok & (torch.rand_like(dist) >= dropout)
+        return torch.where(ok, hits, torch.full_like(hits, float("inf")))
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        sensor_cfg: SceneEntityCfg,
+        size: float = 8.0,
+        resolution: float = 0.2,
+        memory_s: float = 3.0,
+        max_range: float = 10.0,
+        noise_std: float = 0.0,
+        dropout: float = 0.0,
+        z_range: tuple[float, float] = (-0.5, 2.0),
+        unknown_value: float = -1.0,
+        robot_ground_offset: float = 0.76,
+    ) -> torch.Tensor:
+        robot = env.scene["robot"]
+        root = robot.data.root_pos_w.torch
+        q = robot.data.root_quat_w.torch
+        yaw = torch.atan2(2 * (q[:, 3] * q[:, 2] + q[:, 0] * q[:, 1]), 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2))
+        n, m, res = root.shape[0], self.map_cells, self.res
+
+        # scroll the map with the robot (episodes that just started begin with an empty map)
+        origin = torch.floor(root[:, :2] / res).long() - m // 2
+        if self.fresh.any():
+            f = self.fresh
+            self.height[f], self.age[f], self.prev_scan[f] = self.UNKNOWN, 1.0e3, self.UNKNOWN
+            self.origin[f] = origin[f]
+            self.fresh[:] = False
+        d = origin - self.origin
+        if (d != 0).any():
+            self.height = self._shift(self.height, d, self.UNKNOWN)
+            self.age = self._shift(self.age, d, 1.0e3)
+            self.prev_scan = self._shift(self.prev_scan, d, self.UNKNOWN)
+            self.origin = origin
+
+        # bin the current scan (world heights) into the map grid
+        pts = self._points(env, sensor_cfg, max_range, noise_std, dropout)
+        ci = torch.floor(pts[..., 0] / res) - origin[:, 0, None]
+        cj = torch.floor(pts[..., 1] / res) - origin[:, 1, None]
+        valid = torch.isfinite(pts).all(dim=-1) & (ci >= 0) & (ci < m) & (cj >= 0) & (cj < m)
+        flat = torch.where(valid, ci * m + cj, torch.zeros_like(ci)).long()
+        z = torch.where(valid, pts[..., 2], torch.full_like(ci, self.UNKNOWN))
+        scan = torch.full((n, m * m), self.UNKNOWN, device=root.device).scatter_reduce(1, flat, z, reduce="amax")
+        scan = scan.view(n, m, m)
+        seen = scan > self.UNKNOWN / 2
+
+        # latest observation wins; unobserved cells age and are forgotten after memory_s
+        self.height = torch.where(seen, scan, self.height)
+        self.age = torch.where(seen, torch.zeros_like(self.age), self.age + env.step_dt)
+        self.height = torch.where(self.age > memory_s, torch.full_like(self.height, self.UNKNOWN), self.height)
+
+        # resample the three grids into the robot's heading frame
+        c, s = torch.cos(yaw)[:, None], torch.sin(yaw)[:, None]
+        lx, ly = self.local[None, :, 0], self.local[None, :, 1]
+        wx = root[:, 0, None] + c * lx - s * ly
+        wy = root[:, 1, None] + s * lx + c * ly
+        gi = (torch.floor(wx / res).long() - origin[:, 0, None]).clamp(0, m - 1)
+        gj = (torch.floor(wy / res).long() - origin[:, 1, None]).clamp(0, m - 1)
+        idx = gi * m + gj
+        ground = root[:, 2, None] - robot_ground_offset
+        out = []
+        for grid in (self.height, scan, self.prev_scan):
+            v = grid.view(n, -1).gather(1, idx)
+            known = v > self.UNKNOWN / 2
+            v = torch.where(known, (v - ground).clamp(*z_range), torch.full_like(v, unknown_value))
+            out.append(v.view(n, self.cells, self.cells))
+        self.prev_scan = scan
+        return torch.stack(out, dim=1)

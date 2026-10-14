@@ -1,10 +1,11 @@
-"""Overview video for the project page: scenarios, sensing, architecture, workflow and results (1920 x 1080, 30 fps).
+"""Overview video for the project page: scenarios, commands, sensing, architecture, workflow and results (1920 x 1080).
 
 Inputs are the demo renders (scripts/demo/nyc_demo.py), the figures (make_diagrams.py), the point cloud and sensor
 images in docs/, and the evaluation results. Text is set in Google Sans (pass the TTF directory).
 
 Usage:
-    python scripts/figures/make_video.py --renders <renders dir> --fonts <dir with GoogleSans-*.ttf> --out docs/media/overview.mp4
+    python scripts/figures/make_video.py --renders <renders dir> --fonts <dir with GoogleSans-*.ttf> \
+        --gait_before <clip> --gait_after <clip> --out docs/media/overview.mp4
 """
 
 import argparse
@@ -28,11 +29,11 @@ TITLE = {"sidewalk": "Sidewalk", "scaffold": "Sidewalk shed", "crosswalk": "Cros
 
 SHOTS = [  # (scenario, render clip, start s, caption)
     ("sidewalk", "side/sidewalk_L6_side_ep01_goal_reached.mp4", 1.5, "Sidewalk, level 7. Two-way pedestrian flow and street furniture along the curb."),
-    ("scaffold", "chase/scaffold_L6_chase_ep01_goal_reached.mp4", 2.0, "Sidewalk shed, level 7. Scaffold posts and guard rails narrow the walkway."),
-    ("crosswalk", "chase/crosswalk_L7_chase_ep03_goal_reached.mp4", 1.0, "Crosswalk, level 8. Curbs, potholes and opposing pedestrian flows."),
+    ("scaffold", "chase/scaffold_L6_chase_ep02_goal_reached.mp4", 2.0, "Sidewalk shed, level 7. Scaffold posts and guard rails narrow the walkway."),
+    ("crosswalk", "chase/crosswalk_L7_chase_ep06_goal_reached.mp4", 1.0, "Crosswalk, level 8. Curbs, potholes and opposing pedestrian flows."),
     ("construction", "drone/construction_L7_drone_ep01_goal_reached.mp4", 3.0, "Construction zone, level 8. Chicane of fences and jersey barriers."),
     ("bottleneck", "chase/bottleneck_L9_chase_ep01_goal_reached.mp4", 3.0, "Doorway, level 10. Pedestrians exit a subway stairwell next to the route."),
-    ("plaza", "drone/plaza_L9_drone_ep01_goal_reached.mp4", 2.0, "Plaza, level 10. Crossing flows and stationary pedestrians."),
+    ("plaza", "drone/plaza_L9_drone_ep02_goal_reached.mp4", 2.0, "Plaza, level 10. Crossing flows and stationary pedestrians."),
 ]
 
 
@@ -205,7 +206,58 @@ def results_chart(fonts_dir, results, size):
         ax.spines[side].set_visible(False)
     ax.spines["bottom"].set_color("#dadce0")
     ax.tick_params(colors="#5f6368", length=0)
-    ax.legend(loc="lower right", fontsize=16, frameon=False, title="difficulty", title_fontsize=16)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=3, fontsize=16, frameon=False)
+    fig.tight_layout()
+    fig.canvas.draw()
+    img = Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3])
+    plt.close(fig)
+    return img
+
+
+POLICY_TITLE = {"teacher": "Teacher (privileged state)", "lidar": "Lidar student", "camera": "Camera student"}
+
+
+def by_difficulty(per_scenario):
+    """Success rate per difficulty bucket over all scenario types (episode-weighted)."""
+    out = {}
+    for lv in ("easy", "medium", "hard"):
+        eps = sum(per_scenario[k][lv]["eps"] for k in TITLE)
+        out[lv] = sum(per_scenario[k][lv]["goal"] * per_scenario[k][lv]["eps"] for k in TITLE) / max(eps, 1)
+    return out
+
+
+def policies_chart(fonts_dir, policies, summary, size):
+    """Success rate per policy: all tiles and per difficulty bucket."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+
+    for w in (400, 500):
+        font_manager.fontManager.addfont(os.path.join(fonts_dir, f"GoogleSans-{w}.ttf"))
+    plt.rcParams["font.family"] = "Google Sans"
+    keys = [k for k in POLICY_TITLE if k in policies]
+    fig, ax = plt.subplots(figsize=(size[0] / 100, size[1] / 100), dpi=100)
+    colors = {"all": "#5f6368", "easy": "#aecbfa", "medium": "#4285f4", "hard": "#174ea6"}
+    bh = 0.2
+    for j, lv in enumerate(["all", "easy", "medium", "hard"]):
+        vals = [100 * (summary[k]["goal"] if lv == "all" else by_difficulty(policies[k])[lv]) for k in keys]
+        ys = np.arange(len(keys)) + (j - 1.5) * bh
+        ax.barh(ys, vals, height=bh * 0.9, color=colors[lv], label="all tiles" if lv == "all" else lv)
+        for y, v in zip(ys, vals):
+            ax.text(v + 1, y, f"{v:.0f}%", va="center", fontsize=15, color="#202124")
+    ax.set_yticks(np.arange(len(keys)), [POLICY_TITLE[k] for k in keys], fontsize=20)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 108)
+    ax.set_xticks([0, 25, 50, 75, 100], ["0%", "25%", "50%", "75%", "100%"], fontsize=15)
+    ax.xaxis.grid(True, color="#dadce0")
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color("#dadce0")
+    ax.tick_params(colors="#5f6368", length=0)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=4, fontsize=16, frameon=False)
     fig.tight_layout()
     fig.canvas.draw()
     img = Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3])
@@ -218,10 +270,13 @@ def main():
     parser.add_argument("--renders", required=True)
     parser.add_argument("--fonts", required=True)
     parser.add_argument("--results", default=os.path.join(DOCS, "data", "results.json"))
+    parser.add_argument("--gait_before", default=None, help="Clip of the earlier teacher (clamped commands).")
+    parser.add_argument("--gait_after", default=None, help="Clip of the final teacher, same scenario and seed.")
     parser.add_argument("--out", default=os.path.join(DOCS, "media", "overview.mp4"))
     args = parser.parse_args()
     fonts = Fonts(args.fonts)
-    results = json.load(open(args.results))
+    data = json.load(open(args.results))
+    policies, summary = data["policies"], data["summary"]
     writer = imageio.get_writer(args.out, fps=FPS, codec="libx264", quality=None, macro_block_size=8, pixelformat="yuv420p",
                                 ffmpeg_params=["-crf", "23", "-preset", "slow", "-movflags", "+faststart"])
     last = [None]
@@ -254,10 +309,42 @@ def main():
         c = Clip(os.path.join(args.renders, clip), start + 3.0)
         segment(5.0, lambda t, c=c, cap=cap: caption(fit(c.frame(t), W, H), fonts, cap))
 
+    # velocity commands: earlier teacher (clamped) and final teacher side by side
+    if args.gait_before and args.gait_after and "teacher_v2" in summary:
+        before, after = Clip(args.gait_before, 1.0), Clip(args.gait_after, 1.0)
+        m0, m1 = summary["teacher_v2"]["motion"], summary["teacher"]["motion"]
+        pct = lambda v: f"{100 * v:.0f}%"
+        lines = [
+            ("Lateral command above 0.25 m/s", pct(m0["fraction_lateral_above_0.25mps"]), pct(m1["fraction_lateral_above_0.25mps"])),
+            ("Command at a range limit", pct(m0["fraction_saturated"]), pct(m1["fraction_saturated"])),
+            ("Yaw-rate command change", f'{m0["yaw_rate_command_change_radps2"]:.1f} rad/s²', f'{m1["yaw_rate_command_change_radps2"]:.1f} rad/s²'),
+            ("Falls", f'{100 * summary["teacher_v2"]["fall"]:.1f}%', f'{100 * summary["teacher"]["fall"]:.1f}%'),
+        ]
+
+        def gait(t):
+            img = section_title(Image.new("RGB", (W, H), BG), fonts, "Velocity commands: clamped (left) and smoothed (right)")
+            d = ImageDraw.Draw(img)
+            pw, ph = 880, 495
+            for k, (clip, label) in enumerate(((before, "Earlier teacher: clamped commands"), (after, "Final teacher: tanh range, low-pass filter"))):
+                x = 64 + k * (pw + 48)
+                img.paste(fit(clip.frame(t), pw, ph), (x, 170))
+                d.rounded_rectangle((x, 170, x + pw, 170 + ph), radius=10, outline=RULE, width=2)
+                d.text((x, 170 + ph + 36), label, font=fonts(28, 500), fill=INK, anchor="lm")
+            y = 170 + ph + 100
+            for name, a, b in lines:
+                d.text((64, y), name, font=fonts(26), fill=INK2, anchor="lm")
+                d.text((64 + pw, y), a, font=fonts(26, 500), fill=INK, anchor="rm")
+                d.text((64 + 2 * pw + 48, y), b, font=fonts(26, 500), fill=INK, anchor="rm")
+                y += 46
+            return img
+
+        segment(9.0, gait)
+
     # sensing
     cloud = cloud_frames(os.path.join(DOCS, "data", "cloud_crosswalk.bin"), int(7 * FPS), (1100, 820))
-    lidar = Image.open(os.path.join(DOCS, "media", "sensor_lidar.png")).convert("RGB").resize((330, 330), Image.NEAREST)
-    depth = Image.open(os.path.join(DOCS, "media", "sensor_depth.png")).convert("RGB").resize((556, 330), Image.NEAREST)
+    lidar = Image.open(os.path.join(DOCS, "media", "sensor_lidar_accumulated.png")).convert("RGB").resize((330, 330), Image.NEAREST)
+    depth = Image.open(os.path.join(DOCS, "media", "sensor_depth.png")).convert("RGB").resize((340, 202), Image.NEAREST)
+    depth_map = Image.open(os.path.join(DOCS, "media", "sensor_depth_map.png")).convert("RGB").resize((202, 202), Image.NEAREST)
 
     def sensing(t):
         img = section_title(Image.new("RGB", (W, H), BG), fonts, "Onboard sensing")
@@ -265,9 +352,10 @@ def main():
         img.paste(cloud[min(len(cloud) - 1, int(t * FPS))], (40, 190))
         d.text((96, 1030), "Simulated Livox MID-360 returns around the robot (pedestrians in orange)", font=fonts(26), fill=INK2, anchor="lm")
         img.paste(lidar, (1240, 190))
-        d.text((1240, 548), "Lidar student input: elevation map, 8 m × 8 m", font=fonts(24), fill=INK2, anchor="lm")
-        img.paste(depth, (1240, 610))
-        d.text((1240, 968), "Camera student input: D435i depth, 64 × 38", font=fonts(24), fill=INK2, anchor="lm")
+        d.text((1240, 548), "Lidar student: height map accumulated over 3 s", font=fonts(24), fill=INK2, anchor="lm")
+        img.paste(depth, (1240, 640))
+        img.paste(depth_map, (1600, 640))
+        d.text((1240, 878), "Camera student: depth images and height map", font=fonts(24), fill=INK2, anchor="lm")
         return img
 
     segment(7.0, sensing)
@@ -288,17 +376,30 @@ def main():
         segment(6.5, figure)
 
     # results
-    chart = results_chart(args.fonts, results, (1500, 800))
+    chart = results_chart(args.fonts, policies["teacher"], (1500, 800))
+    te = summary["teacher"]
+    note = (f"Teacher, {te['episodes']:,} evaluation episodes on 120 tiles: {100 * te['goal']:.1f}% success, "
+            f"{100 * te['ped']:.1f}% pedestrian contact, {100 * te['obst']:.1f}% obstacle contact, {100 * te['fall']:.1f}% falls")
 
     def results_frame(t):
-        img = section_title(Image.new("RGB", (W, H), BG), fonts, "Success rate by scenario and difficulty")
+        img = section_title(Image.new("RGB", (W, H), BG), fonts, "Teacher: success rate by scenario and difficulty")
         img.paste(chart, (210, 160))
-        d = ImageDraw.Draw(img)
-        d.text((96, 1010), "Teacher policy, 13,238 evaluation episodes on 120 tiles: 79.1% success, 11.9% pedestrian contact, 7.9% obstacle contact, 0.7% falls",
-               font=fonts(26), fill=INK2, anchor="lm")
+        ImageDraw.Draw(img).text((96, 1010), note, font=fonts(26), fill=INK2, anchor="lm")
         return img
 
     segment(6.0, results_frame)
+
+    if len(policies) > 1:
+        pchart = policies_chart(args.fonts, policies, summary, (1500, 760))
+
+        def policies_frame(t):
+            img = section_title(Image.new("RGB", (W, H), BG), fonts, "Teacher and students: success rate")
+            img.paste(pchart, (210, 170))
+            ImageDraw.Draw(img).text((96, 1010), "Students observe proprioception, the goal and one onboard sensor; all policies are evaluated on the same 120 tiles",
+                                     font=fonts(26), fill=INK2, anchor="lm")
+            return img
+
+        segment(6.0, policies_frame)
 
     end = card(fonts, "github.com/mkturkcan/g1_patrol", "Code, configurations and evaluation scripts")
     segment(3.5, lambda t: end)

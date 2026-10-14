@@ -129,6 +129,9 @@ h3.sub { font-size: 1.22rem; margin-block: 40px 14px; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 4vw, 48px); align-items: start; }
 @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
 .stack { display: grid; gap: 12px; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }
+.pair .spec { margin-top: 8px; font-size: 0.88rem; color: var(--muted); }
 ul.facts { margin: 0; padding-left: 1.2em; display: grid; gap: 12px; color: var(--text-2); font-size: 0.98rem; }
 ul.facts b { color: var(--text); font-weight: 500; }
 
@@ -159,9 +162,15 @@ tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 760px) { .inputs { grid-template-columns: 1fr; } }
 .inputs img { width: 100%; image-rendering: pixelated; border-radius: 10px; }
 .inputs .spec { margin-top: 8px; font-size: 0.88rem; color: var(--muted); }
+.inputs4 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.684fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .inputs4 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.inputs4 img { width: 100%; height: auto; image-rendering: pixelated; border-radius: 10px; }
+.inputs4 .spec { margin-top: 8px; font-size: 0.88rem; color: var(--muted); }
 
 /* charts */
 .chart-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.88rem; color: var(--text-2); }
+.chart-head { display: flex; justify-content: space-between; align-items: center; gap: 12px 24px; flex-wrap: wrap; }
+.chart-head .seg { width: fit-content; }
 .chart-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
 .chart-title { font-weight: 500; font-size: 0.98rem; }
 .chart { position: relative; margin-top: 10px; }
@@ -232,32 +241,33 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
 
   <section id="abstract" class="col abstract">
     <h2>Abstract</h2>
-    <p>We study goal-directed navigation of a Unitree G1 humanoid in dense urban pedestrian environments. We construct a procedurally generated suite of New York City street scenarios (sidewalks, sidewalk sheds, crosswalks, construction zones, doorways and pedestrian plazas) at ten difficulty levels, populated by pedestrians that follow a social-force model in which some pedestrians react to the robot only at close range. Control is hierarchical: a locomotion policy trained with the actuator limits of the physical robot tracks velocity commands at 50 Hz, and a navigation policy issues these commands at 10 Hz. A navigation teacher with privileged state is trained with PPO and distilled into student policies that observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). Evaluated on 13,238 episodes over all 120 scenario tiles, the teacher reaches the goal in 79.1% of episodes, with pedestrian contact in 11.9%, obstacle contact in 7.9% and falls in 0.7%. Success decreases to 44% and 50% on the narrowest sidewalks and sidewalk sheds. All experiments are conducted in simulation (Isaac Lab 3.0, Isaac Sim 6.1).</p>
+    <p>We study goal-directed navigation of a Unitree G1 humanoid in dense urban pedestrian environments. We construct a procedurally generated suite of New York City street scenarios (sidewalks, sidewalk sheds, crosswalks, construction zones, doorways and pedestrian plazas) at ten difficulty levels, populated by pedestrians that follow a social-force model in which some pedestrians react to the robot only at close range. Control is hierarchical: a locomotion policy trained with the actuator limits of the physical robot tracks velocity commands at 50 Hz, and a navigation policy issues these commands at 10 Hz through a tanh mapping and a low-pass filter. A navigation teacher with privileged state is trained with PPO under a success-based curriculum and distilled into student policies that observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera) through height maps accumulated over 3 s. Over all 120 scenario tiles, the teacher reaches the goal in 76.6% of episodes, the lidar student in 72.1% and the camera student in 69.8%, with falls in at most 0.2% of episodes. Compared with an earlier teacher that outputs clamped commands (77.2% success), the share of time with lateral commands above 0.25 m/s decreases from 97% to 21% and the fall rate from 0.9% to 0.2%. Success is lowest on the narrowest sidewalks (27–32% on hard tiles). All experiments are conducted in simulation (Isaac Lab 3.0, Isaac Sim 6.1).</p>
   </section>
 
   <section id="video" class="wide">
     <h2 class="col" style="padding:0">Video</h2>
     <figure>
       <div class="media"><video controls playsinline preload="metadata" poster="media/overview.jpg" src="media/overview.mp4" aria-label="Overview video"></video></div>
-      <figcaption><b>Figure 2.</b> Overview: scenario types, rollouts of the teacher policy, onboard sensing, architecture, training workflow and evaluation results (70 s).</figcaption>
+      <figcaption><b>Figure 2.</b> Overview: scenario types, rollouts of the teacher policy, velocity commands of the earlier and the final teacher, onboard sensing, architecture, training workflow and evaluation results (85 s).</figcaption>
     </figure>
   </section>
 
   <section id="method" class="wide">
     <div class="col" style="padding:0">
       <h2>Method</h2>
-      <p class="prose">The navigation policy outputs a velocity command (forward velocity, lateral velocity and yaw rate) at 10 Hz. A frozen locomotion policy converts the command into joint position targets for the 37 joints of the G1 at 50 Hz, which are tracked by PD controllers; the simulator runs at 200 Hz. The teacher observes privileged simulator state. Student policies observe proprioception, the goal position and one onboard sensor, and are trained to reproduce the teacher's commands.</p>
+      <p class="prose">The navigation policy outputs a velocity command (forward velocity, lateral velocity and yaw rate) at 10 Hz. The output is mapped into the command ranges by a tanh (forward −0.4 to 1.0 m/s, lateral ±0.4 m/s, yaw rate ±1.0 rad/s) and low-pass filtered: at each step the command moves halfway to the requested value. A frozen locomotion policy converts the command into joint position targets for the 37 joints of the G1 at 50 Hz, which are tracked by PD controllers; the simulator runs at 200 Hz. The teacher observes privileged simulator state. Student policies observe proprioception, the goal position and one onboard sensor, and are trained to reproduce the teacher's commands.</p>
     </div>
     <figure class="space">
       <div class="media diagram"><img src="figures/architecture.png" alt="Architecture: simulation, privileged and onboard observations, teacher and student navigation policies, frozen locomotion policy and the robot" width="3200" height="1520" loading="lazy"></div>
       <figcaption><b>Figure 3.</b> Policy architecture. Numbers after the observation terms are input dimensions. The student is trained by distillation (mean squared error between student and teacher commands); at deployment only the student path is used.</figcaption>
     </figure>
     <div class="col space" style="padding:0">
-      <p class="prose">Training proceeds in three stages; each stage is frozen before the next is trained (Figure 4, Table 1). The locomotion policy is trained on uneven city terrain with the torque and velocity limits of the G1 actuators, gait-phase and posture rewards, and random pushes. The teacher is trained with PPO on the scenario suite under a difficulty curriculum. The students are trained by distillation from the teacher.</p>
+      <p class="prose">Training proceeds in three stages; each stage is frozen before the next is trained (Figure 4, Table 1). The locomotion policy is trained on uneven city terrain with the torque and velocity limits of the G1 actuators, gait-phase and posture rewards, and random pushes. The teacher is trained with PPO on the scenario suite under an adaptive curriculum, initialized from an earlier teacher whose output layer is scaled by 0.3; the collision-risk reward (Table 2) is added after 2,050 iterations and training continues for 1,200 iterations. The students are trained by distillation from the teacher.</p>
+      <p class="prose">The curriculum keeps an exponential moving average of the success rate on each tile. A level is unlocked once the next-easier level of the same tile column reaches 50% success. When an episode ends, the robot's next tile is drawn with a uniformly random scenario type and a level drawn from the unlocked levels with probability proportional to <i>s</i>(1 − <i>s</i>) + 0.02, where <i>s</i> is the tile's success rate; this concentrates training on levels the policy solves about half of the time. A fifth of the draws are uniform over the unlocked levels and 5% uniform over all levels. During distillation the curriculum follows the student's success rate.</p>
     </div>
     <figure class="space">
       <div class="media diagram"><img src="figures/workflow.png" alt="Workflow: scenario generation, locomotion training, teacher training, student distillation and evaluation" width="3200" height="1400" loading="lazy"></div>
-      <figcaption><b>Figure 4.</b> Training workflow. The curriculum moves each robot to a harder tile after it reaches the goal and to an easier tile after a contact or fall. The frozen locomotion policy executes the commands of all navigation policies.</figcaption>
+      <figcaption><b>Figure 4.</b> Training workflow. The curriculum draws each robot's next tile according to the success rates of the tiles. The frozen locomotion policy executes the commands of all navigation policies.</figcaption>
     </figure>
     <div class="col space" style="padding:0">
       <div class="tablewrap">
@@ -265,14 +275,15 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
           <caption><b>Table 1.</b> Training setup. Rollout length is the number of policy steps per robot and iteration.</caption>
           <thead><tr><th></th><th>Locomotion policy</th><th>Teacher</th><th>Students</th></tr></thead>
           <tbody>
-            <tr><td>Algorithm</td><td>PPO</td><td>PPO</td><td>Distillation (action MSE)</td></tr>
+            <tr><td>Algorithm</td><td>PPO</td><td>PPO</td><td>Distillation (MSE of tanh-mapped actions)</td></tr>
             <tr><td>Simulator</td><td>Newton (MuJoCo-Warp)</td><td>Isaac Sim PhysX</td><td>Isaac Sim PhysX</td></tr>
             <tr><td>Policy rate</td><td>50 Hz</td><td>10 Hz</td><td>10 Hz</td></tr>
             <tr><td>Parallel robots</td><td>4,096, then 16,384</td><td>8,192</td><td>8,192</td></tr>
             <tr><td>Rollout length</td><td>24</td><td>32</td><td>32</td></tr>
-            <tr><td>Iterations</td><td>4,000 + 3,000</td><td>3,350</td><td>1,500</td></tr>
-            <tr><td>Network</td><td>MLP 512-256-128</td><td>MLP 512-256-128</td><td>CNN 16-32-32, MLP 512-256-128</td></tr>
-            <tr><td>Hardware, time</td><td>1 GPU 44 min, 4 GPUs 31 min</td><td>4 GPUs, 4.9 h</td><td>4 GPUs (in progress)</td></tr>
+            <tr><td>Iterations</td><td>4,000 + 3,000</td><td>2,050 + 1,200</td><td>1,500</td></tr>
+            <tr><td>Entropy coefficient</td><td>0.008</td><td>0.001</td><td>–</td></tr>
+            <tr><td>Network</td><td>MLP 512-256-128</td><td>MLP 512-256-128</td><td>CNN 16-32-32 per image input, MLP 512-256-128</td></tr>
+            <tr><td>Hardware, time</td><td>1 GPU 44 min, 4 GPUs 31 min</td><td>4 GPUs, 6.2 h</td><td>4 GPUs shared by both students, 5.8 h</td></tr>
           </tbody>
         </table>
       </div>
@@ -297,7 +308,7 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
     <div class="split">
       <figure class="stack">
         <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/plaza_drone.jpg" data-src="media/plaza_drone.mp4" aria-label="Plaza scenario, level 10, top view"></video></div>
-        <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/crosswalk_side.jpg" data-src="media/crosswalk_side.mp4" aria-label="Crosswalk scenario, level 8, side view"></video></div>
+        <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/crosswalk_drone.jpg" data-src="media/crosswalk_drone.mp4" aria-label="Crosswalk scenario, level 8, top view"></video></div>
         <figcaption><b>Figure 7.</b> Plaza at level 10 (top) and crosswalk at level 8 (bottom).</figcaption>
       </figure>
       <ul class="facts">
@@ -316,15 +327,20 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
           <caption><b>Table 2.</b> Reward terms of the navigation policy. Rewards are multiplied by the control period (0.1 s). Contact is declared when the robot footprint (radius 0.25 m) intersects a pedestrian (radius 0.25 m) or a structure.</caption>
           <thead><tr><th>Term</th><th>Definition</th><th class="num">Weight</th></tr></thead>
           <tbody>
-            <tr><td>Progress</td><td class="def">Reduction of distance to the goal per second, clipped to ±1.5 m/s</td><td class="num">2.0</td></tr>
+            <tr><td>Progress</td><td class="def">Reduction of distance to the goal per second, clipped to ±1.0 m/s</td><td class="num">2.0</td></tr>
             <tr><td>Goal reached</td><td class="def">Within 0.5 m of the goal (terminates)</td><td class="num">100</td></tr>
             <tr><td>Contact</td><td class="def">Pedestrian or obstacle contact (terminates)</td><td class="num">−100</td></tr>
             <tr><td>Fall</td><td class="def">Torso contact with the ground (terminates)</td><td class="num">−200</td></tr>
             <tr><td>Personal space</td><td class="def">Penetration of a 0.5 m clearance to the nearest pedestrian (m)</td><td class="num">−4</td></tr>
+            <tr><td>Collision risk</td><td class="def">Predicted contacts within 2 s under constant relative velocity: (1 − <i>d</i>/0.6 m)(1 − <i>t</i>/2 s) per pedestrian, with <i>t</i> and <i>d</i> the time and center distance of closest approach</td><td class="num">−4</td></tr>
             <tr><td>Obstacle margin</td><td class="def">Penetration of a 0.15 m margin to the nearest structure (m)</td><td class="num">−4</td></tr>
             <tr><td>Pedestrian delay</td><td class="def">Total speed lost by pedestrians slowing for the robot (m/s)</td><td class="num">−1</td></tr>
             <tr><td>Roadway</td><td class="def">Robot in the roadway outside a crosswalk</td><td class="num">−2</td></tr>
-            <tr><td>Action rate</td><td class="def">Squared change of the velocity command</td><td class="num">−0.1</td></tr>
+            <tr><td>Command rate</td><td class="def">Squared change of the velocity command between control steps</td><td class="num">−2.0</td></tr>
+            <tr><td>Lateral command</td><td class="def">Squared lateral velocity command</td><td class="num">−1.5</td></tr>
+            <tr><td>Backward command</td><td class="def">Squared negative part of the forward velocity command</td><td class="num">−2.0</td></tr>
+            <tr><td>Yaw-rate command</td><td class="def">Squared yaw-rate command</td><td class="num">−0.15</td></tr>
+            <tr><td>Policy output</td><td class="def">Squared norm of the policy output before the tanh</td><td class="num">−0.01</td></tr>
           </tbody>
         </table>
       </div>
@@ -335,6 +351,7 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
     <div class="col" style="padding:0">
       <h2>Sensing</h2>
       <p class="prose">The student policies use only the sensors installed on the G1, at the poses given in the robot's URDF. The MID-360 is mounted inverted in the head, about 1.1 m above the ground, with a vertical field of view of −52° to +7°; it is simulated with 32 channels at 1° horizontal resolution and a 10 m range. The D435i is pitched 47.6° downward.</p>
+      <p class="prose">Each student receives a height map built from its sensor's returns (Figure 9). Returns are binned into a world-aligned grid that moves with the robot; the robot's motion between scans is taken from the simulator, in place of lidar-inertial or visual-inertial odometry. A cell holds the highest return of its latest observation and is cleared 3 s after it was last observed. The policy receives this accumulated map together with the current and the previous scan, resampled into the robot's heading frame; the camera student additionally receives the last three depth images.</p>
     </div>
     <figure class="space">
       <div class="viewer" id="viewer" role="img" aria-label="Interactive 3D point cloud of simulated MID-360 returns around the robot">
@@ -352,65 +369,86 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
       <figcaption><b>Figure 8.</b> Simulated MID-360 returns at level 8 (interactive). Points on pedestrians are highlighted. For visibility the scan is rendered with 96 channels at 0.5° resolution; the policy input uses 32 channels at 1°. The ring marks a 1 m radius around the robot.</figcaption>
     </figure>
     <figure class="space">
-      <div class="inputs">
+      <div class="inputs4">
         <div>
-          <img src="media/sensor_lidar.png" alt="Lidar elevation map with concentric scan rings, a wall and pedestrians" width="400" height="400" loading="lazy">
-          <p class="spec">(a) Lidar student: elevation map, 8 m × 8 m, 0.2 m cells, robot-centred and heading-aligned.</p>
+          <img src="media/sensor_lidar_accumulated.png" alt="Lidar height map accumulated over 3 s with a wall, a curb and pedestrians" width="400" height="400" loading="lazy">
+          <p class="spec">(a) Lidar: accumulated map</p>
+        </div>
+        <div>
+          <img src="media/sensor_lidar_scan.png" alt="Lidar height map from the current scan only, with scan rings and an unobserved area around the robot" width="400" height="400" loading="lazy">
+          <p class="spec">(b) Lidar: current scan</p>
         </div>
         <div>
           <img src="media/sensor_depth.png" alt="Depth image with ground, a nearby pedestrian and missing pixels" width="640" height="380" loading="lazy">
-          <p class="spec">(b) Camera student: depth image, 64 × 38 px, 87° × 58° field of view, maximum range 6 m.</p>
+          <p class="spec">(c) Camera: depth image, 64 × 38</p>
+        </div>
+        <div>
+          <img src="media/sensor_depth_map.png" alt="Height map accumulated from depth images, covering the area in front of the robot" width="400" height="400" loading="lazy">
+          <p class="spec">(d) Camera: accumulated map</p>
         </div>
       </div>
-      <figcaption><b>Figure 9.</b> Student observations. Elevation maps store the highest return per cell; unobserved cells are black. Depth images include distance-dependent noise, 5% missing pixels and random rectangular occlusions. With the default camera pitch the ground is visible between approximately 0.3 m and 3.4 m ahead of the robot.</figcaption>
+      <figcaption><b>Figure 9.</b> Student observations. Height maps cover 8 m × 8 m around the robot at 0.2 m resolution, aligned with its heading (forward is up; the triangle marks the robot); each cell holds the highest return relative to the ground, and unobserved cells are black. The accumulated map keeps a cell for 3 s after it was last observed, using the robot's odometry, and fills the gaps between scan lines and the blind zone below the sensor; the policy also receives the current and the previous scan. Depth images include distance-dependent noise, 5% missing pixels and random rectangular occlusions. With the default camera pitch the ground is visible between approximately 0.3 m and 3.4 m ahead of the robot.</figcaption>
     </figure>
   </section>
 
   <section id="results" class="wide">
     <div class="col" style="padding:0">
       <h2>Results</h2>
-      <p class="prose">The final teacher policy is evaluated with the curriculum disabled and robots distributed uniformly over all 120 tiles (2,400 robots, 60 s of simulated time, 13,238 completed episodes, PhysX). Pedestrian motion and policy inputs are as in training; random pushes are disabled.</p>
+      <p class="prose" id="resultsIntro">All navigation policies are evaluated with the curriculum disabled and robots distributed uniformly over all 120 tiles (2,400 robots, 60 s of simulated time, PhysX). Pedestrian motion and policy inputs are as in training; random pushes are disabled. The earlier teacher is evaluated on the same tiles with its own command interface: outputs clamped to forward −0.6 to 1.2 m/s, lateral ±0.6 m/s and yaw rate ±1.2 rad/s, without filtering.</p>
     </div>
     <figure class="space">
-      <div class="chart-legend"><span><i style="background:var(--d-easy)"></i>easy (levels 1–4)</span><span><i style="background:var(--d-medium)"></i>medium (5–7)</span><span><i style="background:var(--d-hard)"></i>hard (8–10)</span></div>
+      <div class="chart-head">
+        <div class="seg" role="group" aria-label="Policy" id="policySeg"></div>
+        <div class="chart-legend"><span><i style="background:var(--d-easy)"></i>easy (levels 1–4)</span><span><i style="background:var(--d-medium)"></i>medium (5–7)</span><span><i style="background:var(--d-hard)"></i>hard (8–10)</span></div>
+      </div>
       <div class="chart" id="barChart"></div>
       <details class="table">
         <summary>Show values as a table</summary>
         <div class="tablewrap"><table id="resultsTable"></table></div>
       </details>
-      <figcaption><b>Figure 10.</b> Success rate (episodes reaching the goal) by scenario type and difficulty. Hover a bar for contact and fall rates and episode counts.</figcaption>
+      <figcaption><b>Figure 10.</b> Success rate (episodes reaching the goal) of the selected policy by scenario type and difficulty. Hover a bar for contact and fall rates and episode counts.</figcaption>
     </figure>
 
     <div class="col space" style="padding:0">
       <div class="tablewrap">
-        <table>
-          <caption><b>Table 3.</b> Episode outcomes over all tiles.</caption>
-          <thead><tr><th>Outcome</th><th class="num">Share of episodes</th></tr></thead>
-          <tbody>
-            <tr><td>Goal reached</td><td class="num">79.1%</td></tr>
-            <tr><td>Pedestrian contact</td><td class="num">11.9%</td></tr>
-            <tr><td>Obstacle contact</td><td class="num">7.9%</td></tr>
-            <tr><td>Fall</td><td class="num">0.7%</td></tr>
-            <tr><td>Time-out (40 s)</td><td class="num">0.4%</td></tr>
-            <tr><td>Mean time to goal (successful episodes)</td><td class="num">10.5 s</td></tr>
-          </tbody>
-        </table>
+        <table id="outcomesTable"><caption><b>Table 3.</b> Episode outcomes over all tiles (2,400 robots, 60 s, curriculum disabled). The first column is the earlier teacher, which outputs clamped commands without filtering.</caption><thead><tr><th>Outcome</th><th class="num">Teacher, clamped commands</th><th class="num">Teacher</th><th class="num">Lidar student</th><th class="num">Camera student</th></tr></thead><tbody><tr><td>Goal reached</td><td class="num">77.2%</td><td class="num">76.6%</td><td class="num">72.1%</td><td class="num">69.8%</td></tr><tr><td>Pedestrian contact</td><td class="num">13.1%</td><td class="num">15.3%</td><td class="num">16.1%</td><td class="num">17.8%</td></tr><tr><td>Obstacle contact</td><td class="num">8.5%</td><td class="num">7.5%</td><td class="num">11.3%</td><td class="num">12.3%</td></tr><tr><td>Fall</td><td class="num">0.9%</td><td class="num">0.2%</td><td class="num">0.1%</td><td class="num">0.1%</td></tr><tr><td>Time-out (40 s)</td><td class="num">0.3%</td><td class="num">0.4%</td><td class="num">0.4%</td><td class="num">0.1%</td></tr><tr><td>Mean time to goal (successful episodes)</td><td class="num">10.5 s</td><td class="num">13.3 s</td><td class="num">13.3 s</td><td class="num">13.4 s</td></tr><tr><td>Time within 0.5 m of a pedestrian</td><td class="num">9.9%</td><td class="num">11.9%</td><td class="num">13.9%</td><td class="num">14.3%</td></tr><tr><td>Completed episodes</td><td class="num">13,392</td><td class="num">10,228</td><td class="num">10,438</td><td class="num">10,786</td></tr></tbody></table>
       </div>
-      <p class="prose space">Pedestrian contacts are mostly initiated by the robot: in 67.8% of them the robot approached faster than the pedestrian, and 33.7% involve pedestrians that perceive the robot, which by construction do not reduce their clearance below 0.1 m themselves. Success is lowest on hard sidewalk (43.9%) and sidewalk-shed (50.1%) tiles, where the walkway admits one person at a time and the policy often does not wait for oncoming pedestrians to pass.</p>
+      <p class="prose space" id="resultsText">The lidar and camera students reach 94% and 91% of the teacher's success rate. Most of their additional failures are obstacle contacts on hard construction-zone and sidewalk tiles (Figure 10). Two changes between the first and the final students, accumulating the height map over 3 s and computing the distillation loss on tanh-mapped actions, reduced obstacle contacts of the camera student from 24.4% to 12.3% and increased its success rate from 60.4% to 69.8%; the success rate of the lidar student increased from 70.0% to 72.1%. Pedestrian contact is the most frequent failure for all policies. On hard sidewalk tiles, where the walkway admits one person at a time, success is 27–32%.</p>
     </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table id="motionTable"><caption><b>Table 4.</b> Velocity commands and posture during the evaluation (time averages). A requested command is at a range limit when it lies within 5% of the range of a command component (average over the three components).</caption><thead><tr><th>Quantity</th><th class="num">Teacher, clamped commands</th><th class="num">Teacher</th><th class="num">Lidar student</th><th class="num">Camera student</th></tr></thead><tbody><tr><td>Forward command (m/s)</td><td class="num">1.15</td><td class="num">0.94</td><td class="num">0.93</td><td class="num">0.94</td></tr><tr><td>|Lateral command| (m/s)</td><td class="num">0.58</td><td class="num">0.15</td><td class="num">0.12</td><td class="num">0.10</td></tr><tr><td>Time with |lateral command| > 0.25 m/s</td><td class="num">96.7%</td><td class="num">20.6%</td><td class="num">8.6%</td><td class="num">5.9%</td></tr><tr><td>|Yaw-rate command| (rad/s)</td><td class="num">0.54</td><td class="num">0.27</td><td class="num">0.21</td><td class="num">0.20</td></tr><tr><td>Time with |yaw-rate command| > 0.8 rad/s</td><td class="num">28.9%</td><td class="num">5.4%</td><td class="num">1.0%</td><td class="num">0.7%</td></tr><tr><td>Requested command at a range limit</td><td class="num">70.1%</td><td class="num">37.4%</td><td class="num">28.9%</td><td class="num">28.5%</td></tr><tr><td>Yaw-rate command change (rad/s²)</td><td class="num">2.77</td><td class="num">0.81</td><td class="num">0.42</td><td class="num">0.40</td></tr><tr><td>Planar speed (m/s)</td><td class="num">1.16</td><td class="num">0.88</td><td class="num">0.86</td><td class="num">0.87</td></tr><tr><td>Torso tilt</td><td class="num">3.9°</td><td class="num">3.4°</td><td class="num">3.4°</td><td class="num">3.4°</td></tr><tr><td>Knee flexion</td><td class="num">40.2°</td><td class="num">38.5°</td><td class="num">38.4°</td><td class="num">38.5°</td></tr></tbody></table>
+      </div>
+      <p class="prose space" id="motionText">The earlier teacher commands lateral velocities above 0.25 m/s 97% of the time and requests a range limit 70% of the time, so the robot moves diagonally at high speed (Figure 11). With the tanh mapping, the low-pass filter and the command penalties of Table 2, these shares are 21% and 37% for the final teacher, the mean rate of change of the yaw-rate command is 3.4 times lower, and the fall rate decreases from 0.9% to 0.2%. Success is 0.6 percentage points lower, and successful episodes take 13.3 s instead of 10.5 s at a mean speed of 0.88 m/s instead of 1.16 m/s. The students' commands change more slowly than the teacher's.</p>
+    </div>
+
+    <figure class="space">
+      <div class="pair">
+        <div>
+          <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/gait_clamped.jpg" data-src="media/gait_clamped.mp4" aria-label="Earlier teacher with clamped commands on a sidewalk tile, side view"></video></div>
+          <p class="spec">(a) Earlier teacher: clamped commands</p>
+        </div>
+        <div>
+          <div class="frame"><video class="lazy" muted loop playsinline preload="none" poster="media/gait_smoothed.jpg" data-src="media/gait_smoothed.mp4" aria-label="Final teacher with tanh-mapped, filtered commands on a sidewalk tile, side view"></video></div>
+          <p class="spec">(b) Final teacher: tanh range, low-pass filter</p>
+        </div>
+      </div>
+      <figcaption><b>Figure 11.</b> Sidewalk tile at level 5, side camera, successful episodes of the earlier and the final teacher. The earlier teacher commands lateral velocities above 0.25 m/s most of the time and moves diagonally along the walkway.</figcaption>
+    </figure>
 
     <figure class="space">
       <div class="charts2">
         <div><p class="chart-title">Mean curriculum level</p><div class="chart" id="levelChart"></div></div>
         <div><p class="chart-title">Success rate at the current curriculum level</p><div class="chart" id="goalChart"></div></div>
       </div>
-      <figcaption><b>Figure 11.</b> Training curves of the teacher over PPO iterations 350–3,350 (averages over 25 iterations and 8,192 robots). Training was resumed at iteration 350 after changes to the scenario generator, which reset the curriculum. The success rate remains near 68% while the mean level rises from 3.7 to 7.4.</figcaption>
+      <figcaption id="curvesCaption"><b>Figure 12.</b> Training curves of the teacher (averages over 25 iterations and 8,192 robots). The collision-risk reward is added at iteration 2,050, where training is restarted and the curriculum state is reset. The success rate is measured at the robots' current curriculum levels, which the curriculum keeps near the levels that the policy solves about half of the time.</figcaption>
     </figure>
 
     <div class="col space" style="padding:0">
       <div class="tablewrap">
         <table>
-          <caption><b>Table 4.</b> Locomotion policy on city terrain: 256 robots for 20 s each (85 robot-minutes), random velocity commands. Tracking errors are mean absolute errors; knee flexion and torso tilt are time averages.</caption>
+          <caption><b>Table 5.</b> Locomotion policy on city terrain: 256 robots for 20 s each (85 robot-minutes), random velocity commands. Tracking errors are mean absolute errors; knee flexion and torso tilt are time averages.</caption>
           <thead><tr><th>Metric</th><th class="num">Newton</th><th class="num">Newton, pushes ≤ 1 m/s</th><th class="num">PhysX</th></tr></thead>
           <tbody>
             <tr><td>Forward velocity error (m/s)</td><td class="num">0.100</td><td class="num">0.119</td><td class="num">0.103</td></tr>
@@ -430,9 +468,10 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
     <h2>Limitations</h2>
     <ul class="facts">
       <li>All results are in simulation; the policies have not been deployed on hardware.</li>
-      <li>The reported navigation results are for the privileged teacher. Training of the lidar student is in progress; the camera student has not been trained yet.</li>
+      <li>The students' height maps use the simulated robot motion in place of an odometry estimate; odometry drift is not modeled.</li>
+      <li>The locomotion policy observes a terrain height scan around the robot, which is not provided by the G1's sensors.</li>
       <li>Pedestrians are kinematic and scripted; contact ends the episode, and physical interaction between robot and pedestrians is not modeled.</li>
-      <li>Performance on the narrowest corridors (hard sidewalk and sidewalk-shed tiles) remains low.</li>
+      <li>Success on the narrowest corridors remains low: 27–32% on hard sidewalk tiles and 49–52% on hard sidewalk-shed tiles.</li>
       <li>With the default mounting, the D435i observes the ground only up to about 3.4 m ahead, which limits anticipation for a camera-only policy.</li>
     </ul>
   </section>
@@ -469,14 +508,15 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
 </dialog>
 
 <script>
-const RESULTS = {"sidewalk":{"easy":{"goal":0.889,"ped":0.089,"obst":0.019,"fall":0.0028,"eps":720},"medium":{"goal":0.695,"ped":0.171,"obst":0.134,"fall":0.0,"eps":603},"hard":{"goal":0.439,"ped":0.261,"obst":0.3,"fall":0.0,"eps":713}},"scaffold":{"easy":{"goal":0.975,"ped":0.017,"obst":0.009,"fall":0.0,"eps":826},"medium":{"goal":0.824,"ped":0.098,"obst":0.079,"fall":0.0,"eps":675},"hard":{"goal":0.501,"ped":0.245,"obst":0.244,"fall":0.01,"eps":603}},"crosswalk":{"easy":{"goal":0.916,"ped":0.076,"obst":0.004,"fall":0.0038,"eps":1320},"medium":{"goal":0.685,"ped":0.222,"obst":0.083,"fall":0.0098,"eps":711},"hard":{"goal":0.588,"ped":0.281,"obst":0.09,"fall":0.041,"eps":877}},"construction":{"easy":{"goal":0.877,"ped":0.048,"obst":0.076,"fall":0.0,"eps":673},"medium":{"goal":0.767,"ped":0.082,"obst":0.13,"fall":0.0021,"eps":477},"hard":{"goal":0.632,"ped":0.136,"obst":0.132,"fall":0.0106,"eps":470}},"bottleneck":{"easy":{"goal":0.904,"ped":0.044,"obst":0.052,"fall":0.0,"eps":800},"medium":{"goal":0.89,"ped":0.098,"obst":0.01,"fall":0.002,"eps":502},"hard":{"goal":0.852,"ped":0.138,"obst":0.006,"fall":0.0039,"eps":507}},"plaza":{"easy":{"goal":0.882,"ped":0.042,"obst":0.073,"fall":0.0024,"eps":1250},"medium":{"goal":0.83,"ped":0.097,"obst":0.05,"fall":0.0232,"eps":818},"hard":{"goal":0.84,"ped":0.095,"obst":0.051,"fall":0.0144,"eps":693}}};
-const CURVES = {"iteration":[362,387,412,437,462,487,512,537,562,587,612,637,662,687,712,737,762,787,812,837,862,887,912,937,962,987,1012,1037,1062,1087,1112,1137,1162,1187,1212,1237,1262,1287,1312,1337,1362,1387,1412,1437,1462,1487,1512,1537,1562,1587,1612,1637,1662,1687,1712,1737,1762,1787,1812,1837,1862,1887,1912,1937,1962,1987,2012,2037,2062,2087,2112,2137,2162,2187,2212,2237,2262,2287,2312,2337,2362,2387,2412,2437,2462,2487,2512,2537,2562,2587,2612,2637,2662,2687,2712,2737,2762,2787,2812,2837,2862,2887,2912,2937,2962,2987,3012,3037,3062,3087,3112,3137,3162,3187,3212,3237,3262,3287,3312,3337],"goal":[0.6829,0.6124,0.5879,0.5967,0.5923,0.6152,0.6065,0.5989,0.6079,0.6159,0.6142,0.6184,0.6275,0.6249,0.6307,0.6349,0.6378,0.6334,0.6417,0.6528,0.6455,0.6533,0.6545,0.66,0.6545,0.6533,0.647,0.6584,0.6545,0.6582,0.6567,0.6615,0.6454,0.6567,0.6593,0.6562,0.6575,0.6647,0.6639,0.6595,0.658,0.6599,0.6554,0.6554,0.6612,0.6657,0.6627,0.6547,0.6689,0.6703,0.6713,0.6676,0.6652,0.6713,0.6667,0.6601,0.6637,0.6567,0.6505,0.6638,0.6657,0.6592,0.6659,0.6646,0.6734,0.6693,0.6806,0.671,0.6774,0.6719,0.6727,0.6759,0.6744,0.6708,0.6812,0.6744,0.6783,0.6769,0.6717,0.677,0.6811,0.6723,0.6806,0.6713,0.6779,0.6891,0.6832,0.6903,0.6845,0.6797,0.6815,0.6831,0.6801,0.6809,0.6843,0.6825,0.6882,0.6811,0.6879,0.6822,0.6787,0.6737,0.6775,0.6788,0.6778,0.6832,0.6753,0.6726,0.6702,0.6726,0.6831,0.6784,0.6734,0.6834,0.6866,0.6811,0.6854,0.6835,0.6806,0.6821],"level":[3.664,6.429,6.771,6.847,6.801,6.893,6.966,6.894,6.938,7.029,7.126,7.092,7.111,7.112,7.123,7.174,7.224,7.279,7.308,7.255,7.365,7.357,7.334,7.321,7.313,7.319,7.409,7.383,7.343,7.348,7.323,7.375,7.41,7.393,7.424,7.451,7.431,7.364,7.385,7.43,7.411,7.398,7.398,7.379,7.41,7.41,7.46,7.408,7.378,7.4,7.387,7.363,7.408,7.377,7.442,7.428,7.427,7.436,7.395,7.375,7.463,7.415,7.507,7.396,7.382,7.418,7.361,7.41,7.47,7.434,7.404,7.424,7.433,7.388,7.447,7.467,7.423,7.44,7.38,7.461,7.418,7.431,7.419,7.472,7.399,7.471,7.436,7.389,7.398,7.374,7.414,7.425,7.457,7.457,7.441,7.395,7.37,7.413,7.461,7.461,7.453,7.38,7.367,7.439,7.495,7.387,7.413,7.442,7.492,7.404,7.433,7.443,7.452,7.512,7.436,7.468,7.466,7.504,7.424,7.417]};
+const RESULTS = {"teacher":{"sidewalk":{"easy":{"goal":0.9131,"ped":0.0566,"obst":0.0303,"fall":0.0,"eps":495},"medium":{"goal":0.787,"ped":0.1412,"obst":0.0718,"fall":0.0,"eps":432},"hard":{"goal":0.281,"ped":0.4514,"obst":0.2661,"fall":0.0,"eps":669}},"scaffold":{"easy":{"goal":0.9882,"ped":0.0079,"obst":0.0039,"fall":0.0,"eps":508},"medium":{"goal":0.8652,"ped":0.1079,"obst":0.027,"fall":0.0,"eps":445},"hard":{"goal":0.5022,"ped":0.1942,"obst":0.2902,"fall":0.0134,"eps":448}},"crosswalk":{"easy":{"goal":0.9165,"ped":0.0709,"obst":0.0117,"fall":0.001,"eps":1030},"medium":{"goal":0.6597,"ped":0.2279,"obst":0.1124,"fall":0.0,"eps":623},"hard":{"goal":0.4847,"ped":0.4237,"obst":0.0857,"fall":0.0059,"eps":852}},"construction":{"easy":{"goal":0.8842,"ped":0.0639,"obst":0.0519,"fall":0.0,"eps":501},"medium":{"goal":0.7941,"ped":0.1123,"obst":0.0936,"fall":0.0,"eps":374},"hard":{"goal":0.6504,"ped":0.1707,"obst":0.0596,"fall":0.0,"eps":369}},"bottleneck":{"easy":{"goal":0.9162,"ped":0.0692,"obst":0.0146,"fall":0.0,"eps":549},"medium":{"goal":0.8533,"ped":0.1253,"obst":0.0213,"fall":0.0,"eps":375},"hard":{"goal":0.8094,"ped":0.1593,"obst":0.0287,"fall":0.0026,"eps":383}},"plaza":{"easy":{"goal":0.9203,"ped":0.0356,"obst":0.044,"fall":0.0,"eps":954},"medium":{"goal":0.8409,"ped":0.0961,"obst":0.0535,"fall":0.0094,"eps":635},"hard":{"goal":0.7645,"ped":0.1314,"obst":0.1024,"fall":0.0017,"eps":586}}},"lidar":{"sidewalk":{"easy":{"goal":0.9357,"ped":0.0643,"obst":0.0,"fall":0.0,"eps":482},"medium":{"goal":0.7838,"ped":0.1781,"obst":0.0356,"fall":0.0,"eps":421},"hard":{"goal":0.272,"ped":0.3269,"obst":0.4011,"fall":0.0,"eps":728}},"scaffold":{"easy":{"goal":0.9708,"ped":0.0233,"obst":0.0058,"fall":0.0,"eps":514},"medium":{"goal":0.8034,"ped":0.1501,"obst":0.0465,"fall":0.0,"eps":473},"hard":{"goal":0.5248,"ped":0.2703,"obst":0.205,"fall":0.0,"eps":444}},"crosswalk":{"easy":{"goal":0.9031,"ped":0.094,"obst":0.0029,"fall":0.0,"eps":1042},"medium":{"goal":0.6155,"ped":0.2294,"obst":0.1551,"fall":0.0,"eps":632},"hard":{"goal":0.4625,"ped":0.3829,"obst":0.1487,"fall":0.0059,"eps":854}},"construction":{"easy":{"goal":0.873,"ped":0.1008,"obst":0.0262,"fall":0.0,"eps":496},"medium":{"goal":0.616,"ped":0.1222,"obst":0.2594,"fall":0.0,"eps":401},"hard":{"goal":0.4779,"ped":0.1818,"obst":0.2312,"fall":0.0026,"eps":385}},"bottleneck":{"easy":{"goal":0.9239,"ped":0.0594,"obst":0.0167,"fall":0.0,"eps":539},"medium":{"goal":0.8678,"ped":0.1074,"obst":0.022,"fall":0.0,"eps":363},"hard":{"goal":0.7444,"ped":0.213,"obst":0.0376,"fall":0.005,"eps":399}},"plaza":{"easy":{"goal":0.7796,"ped":0.0445,"obst":0.1759,"fall":0.0,"eps":1012},"medium":{"goal":0.8498,"ped":0.1198,"obst":0.0304,"fall":0.0,"eps":626},"hard":{"goal":0.6683,"ped":0.1834,"obst":0.1483,"fall":0.0,"eps":627}}},"camera":{"sidewalk":{"easy":{"goal":0.9396,"ped":0.0583,"obst":0.0021,"fall":0.0,"eps":480},"medium":{"goal":0.8063,"ped":0.1622,"obst":0.0315,"fall":0.0,"eps":413},"hard":{"goal":0.3207,"ped":0.4534,"obst":0.2259,"fall":0.0,"eps":686}},"scaffold":{"easy":{"goal":0.8891,"ped":0.0164,"obst":0.0945,"fall":0.0,"eps":550},"medium":{"goal":0.752,"ped":0.1311,"obst":0.1168,"fall":0.0,"eps":488},"hard":{"goal":0.4946,"ped":0.3619,"obst":0.1435,"fall":0.0,"eps":467}},"crosswalk":{"easy":{"goal":0.8988,"ped":0.0934,"obst":0.0039,"fall":0.0029,"eps":1038},"medium":{"goal":0.6133,"ped":0.2173,"obst":0.1695,"fall":0.0,"eps":649},"hard":{"goal":0.4502,"ped":0.425,"obst":0.1203,"fall":0.0023,"eps":873}},"construction":{"easy":{"goal":0.9274,"ped":0.0705,"obst":0.0021,"fall":0.0,"eps":482},"medium":{"goal":0.5902,"ped":0.1122,"obst":0.2951,"fall":0.0,"eps":410},"hard":{"goal":0.2333,"ped":0.2069,"obst":0.5556,"fall":0.0,"eps":720}},"bottleneck":{"easy":{"goal":0.9194,"ped":0.0714,"obst":0.0092,"fall":0.0,"eps":546},"medium":{"goal":0.8153,"ped":0.1768,"obst":0.0079,"fall":0.0,"eps":379},"hard":{"goal":0.7115,"ped":0.2518,"obst":0.0342,"fall":0.0024,"eps":409}},"plaza":{"easy":{"goal":0.8381,"ped":0.0351,"obst":0.1268,"fall":0.0,"eps":970},"medium":{"goal":0.8271,"ped":0.1309,"obst":0.0388,"fall":0.0,"eps":619},"hard":{"goal":0.7018,"ped":0.1862,"obst":0.112,"fall":0.0,"eps":607}}}};
+const POLICY_NAMES = { teacher: "Teacher", lidar: "Lidar student", camera: "Camera student" };
+const CURVES = {"iteration":[12,37,62,87,112,137,162,187,212,237,262,287,312,337,362,387,412,437,462,487,512,537,562,587,612,637,662,687,712,737,762,787,812,837,862,887,912,937,962,987,1012,1037,1062,1087,1112,1137,1162,1187,1212,1237,1262,1287,1312,1337,1362,1387,1412,1437,1462,1487,1512,1537,1562,1587,1612,1637,1662,1687,1712,1737,1762,1787,1812,1837,1862,1887,1912,1937,1962,1987,2012,2037,2062,2087,2112,2137,2162,2187,2212,2237,2262,2287,2312,2337,2362,2387,2412,2437,2462,2487,2512,2537,2562,2587,2612,2637,2662,2687,2712,2737,2762,2787,2812,2837,2862,2887,2912,2937,2962,2987,3012,3037,3062,3087,3112,3137,3162,3187,3212,3237],"goal":[0.6126,0.7948,0.764,0.7347,0.7396,0.7401,0.7333,0.7371,0.7404,0.7404,0.7447,0.7359,0.7522,0.7409,0.7507,0.7523,0.7469,0.755,0.7534,0.7482,0.7558,0.749,0.7584,0.7462,0.7452,0.7412,0.7504,0.7439,0.7505,0.7507,0.7547,0.7466,0.7533,0.7509,0.7584,0.7546,0.7524,0.7487,0.7531,0.7398,0.7526,0.755,0.7474,0.7518,0.7517,0.7447,0.7439,0.7473,0.7552,0.7533,0.7533,0.7462,0.7467,0.7454,0.7485,0.7484,0.7532,0.7458,0.7501,0.7402,0.7464,0.7484,0.7409,0.7477,0.7404,0.7441,0.7476,0.7483,0.7451,0.7451,0.7476,0.7509,0.7444,0.7405,0.7549,0.7489,0.7454,0.7551,0.7578,0.7535,0.753,0.7561,0.6881,0.7956,0.7676,0.7548,0.7534,0.7525,0.7532,0.7439,0.7489,0.7465,0.7601,0.741,0.753,0.7433,0.7492,0.7588,0.7535,0.7566,0.7521,0.7608,0.7547,0.766,0.7462,0.7599,0.7516,0.7472,0.7646,0.7479,0.7563,0.7507,0.7523,0.7586,0.7569,0.7532,0.764,0.7575,0.7521,0.7624,0.7639,0.7547,0.7625,0.7598,0.7519,0.7557,0.75,0.7508,0.7639,0.7555],"level":[3.12,4.625,5.308,5.525,5.546,5.566,5.58,5.536,5.617,5.676,5.684,5.673,5.708,5.66,5.669,5.786,5.79,5.721,5.772,5.752,5.771,5.761,5.799,5.843,5.933,6.023,5.942,6.015,5.908,5.997,6.046,6.035,6.108,6.03,6.015,5.929,5.886,6.024,5.854,5.967,5.811,5.952,6.001,5.907,6.071,6.058,6.063,5.86,5.99,5.792,5.866,5.791,5.807,5.735,5.907,5.817,5.808,5.885,5.953,5.972,5.891,5.96,6.046,5.959,6.023,6.091,6.008,5.871,5.866,5.905,5.918,5.87,5.994,5.968,5.894,5.922,5.944,5.858,5.981,5.941,5.957,6.032,3.681,5.219,5.818,6.042,5.983,5.998,5.951,5.992,5.97,5.996,5.859,5.947,5.963,5.935,5.924,5.933,5.963,6.068,5.902,5.898,6.006,6.026,6.096,6.03,6.051,5.988,6.083,6.13,6.062,6.062,5.974,6.025,6.064,5.991,5.976,5.995,5.982,6.046,6.079,6.182,6.103,6.048,6.094,6.063,6.115,5.947,6.012,6.083]};
 const SCENES = [
   { key: "sidewalk", letter: "W", title: "Sidewalk", angles: ["side", "chase"],
     text: "Two-way pedestrian flow. Walkway width decreases from 5.0 m to 2.6 m. Street furniture along the curb; pedestrians exit doorways." },
   { key: "scaffold", letter: "S", title: "Sidewalk shed", angles: ["chase", "side"],
     text: "Scaffold tunnel with 9 cm posts and guard rails. Walkway width decreases from 2.4 m to 1.25 m." },
-  { key: "crosswalk", letter: "X", title: "Crosswalk", angles: ["chase", "side"],
+  { key: "crosswalk", letter: "X", title: "Crosswalk", angles: ["chase", "drone"],
     text: "Curb cuts or 10–18 cm curbs, potholes and opposing pedestrian flows. Leaving the crosswalk is penalized." },
   { key: "construction", letter: "C", title: "Construction zone", angles: ["drone", "chase"],
     text: "Chicane of fences and jersey barriers over steel plates. Clear width decreases from 1.8 m to 1.0 m." },
@@ -539,7 +579,7 @@ lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
   const host = document.getElementById("scenes");
   const expandIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>';
   for (const s of SCENES) {
-    const r = RESULTS[s.key];
+    const r = RESULTS.teacher[s.key];
     const el = document.createElement("article");
     el.className = "scene";
     const angle = s.angles[0];
@@ -601,7 +641,9 @@ function tooltip(host) {
   return t;
 }
 
+let barPolicy = "teacher";
 function drawBars() {
+  const R = RESULTS[barPolicy];
   const host = document.getElementById("barChart");
   host.querySelectorAll("svg").forEach((n) => n.remove());
   const W = Math.max(300, host.clientWidth);
@@ -613,7 +655,7 @@ function drawBars() {
   const H = top + keys.length * bandH + axisH;
   const x0 = labelW + 8, x1 = W - 44;
   const sx = (v) => x0 + v * (x1 - x0);
-  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Success rate by scenario type and difficulty" }, host);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Success rate of the ${POLICY_NAMES[barPolicy].toLowerCase()} by scenario type and difficulty` }, host);
   for (const v of [0, 0.25, 0.5, 0.75, 1]) {
     svgEl("line", { x1: sx(v), x2: sx(v), y1: top, y2: H - axisH + 4, class: "grid" }, svg);
     const t = svgEl("text", { x: sx(v), y: H - 8, "text-anchor": v === 0 ? "start" : "middle" }, svg); t.textContent = pct(v);
@@ -629,7 +671,7 @@ function drawBars() {
     const lt = svgEl("text", { x: 10, y: ly - 0.5, "text-anchor": "middle", style: `font: 700 10px var(--font); fill: ${k === "plaza" ? "#111" : "#fff"}` }, g); lt.textContent = s.letter;
     const tl = svgEl("text", { x: 28, y: ly, class: "lab" }, g); tl.textContent = s.title;
     levels.forEach(([lv, color], j) => {
-      const d = RESULTS[k][lv];
+      const d = R[k][lv];
       const y = yb + j * (barH + gap);
       const w = Math.max(6, sx(d.goal) - x0);
       svgEl("path", { d: `M${x0},${y} h${w - 4} a4,4 0 0 1 4,4 v${barH - 8} a4,4 0 0 1 -4,4 h${-(w - 4)} z`, fill: css(color) }, g);
@@ -647,7 +689,7 @@ function drawBars() {
   });
   const tb = document.getElementById("resultsTable");
   tb.innerHTML = `<thead><tr><th>Scenario</th><th>Difficulty</th><th class="num">Success</th><th class="num">Pedestrian contact</th><th class="num">Obstacle contact</th><th class="num">Fall</th><th class="num">Episodes</th></tr></thead><tbody>${
-    keys.map((k) => levels.map(([lv]) => { const d = RESULTS[k][lv]; return `<tr><td>${names[k].title}</td><td>${lv}</td><td class="num">${pct1(d.goal)}</td><td class="num">${pct1(d.ped)}</td><td class="num">${pct1(d.obst)}</td><td class="num">${pct1(d.fall)}</td><td class="num">${d.eps.toLocaleString()}</td></tr>`; }).join("")).join("")}</tbody>`;
+    keys.map((k) => levels.map(([lv]) => { const d = R[k][lv]; return `<tr><td>${names[k].title}</td><td>${lv}</td><td class="num">${pct1(d.goal)}</td><td class="num">${pct1(d.ped)}</td><td class="num">${pct1(d.obst)}</td><td class="num">${pct1(d.fall)}</td><td class="num">${d.eps.toLocaleString()}</td></tr>`; }).join("")).join("")}</tbody>`;
 }
 
 function drawLine(id, values, yMin, yMax, yTicks, fmt) {
@@ -656,15 +698,16 @@ function drawLine(id, values, yMin, yMax, yTicks, fmt) {
   const W = Math.max(280, host.clientWidth), H = 220;
   const m = { l: 42, r: 12, t: 10, b: 26 };
   const its = CURVES.iteration;
-  const sx = (v) => m.l + (v - 350) / (3350 - 350) * (W - m.l - m.r);
+  const xMin = 0, xMax = Math.ceil(its[its.length - 1] / 500) * 500;
+  const sx = (v) => m.l + (v - xMin) / (xMax - xMin) * (W - m.l - m.r);
   const sy = (v) => m.t + (1 - (v - yMin) / (yMax - yMin)) * (H - m.t - m.b);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": host.parentElement.querySelector(".chart-title").textContent }, host);
   for (const v of yTicks) {
     svgEl("line", { x1: m.l, x2: W - m.r, y1: sy(v), y2: sy(v), class: "grid" }, svg);
     const t = svgEl("text", { x: m.l - 8, y: sy(v) + 4, "text-anchor": "end" }, svg); t.textContent = fmt(v);
   }
-  for (const v of [350, 1000, 2000, 3000]) {
-    const t = svgEl("text", { x: sx(v), y: H - 6, "text-anchor": v === 350 ? "start" : "middle" }, svg); t.textContent = v.toLocaleString();
+  for (let v = xMin; v <= xMax; v += 1000) {
+    const t = svgEl("text", { x: sx(v), y: H - 6, "text-anchor": v === xMin ? "start" : "middle" }, svg); t.textContent = v.toLocaleString();
   }
   const pts = its.map((it, i) => [sx(it), sy(values[i])]);
   const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("");
@@ -690,6 +733,22 @@ function drawLine(id, values, yMin, yMax, yTicks, fmt) {
   });
   hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
 }
+
+(function policySeg() {
+  const host = document.getElementById("policySeg");
+  const keys = Object.keys(POLICY_NAMES).filter((k) => k in RESULTS);
+  if (keys.length < 2) { host.hidden = true; return; }
+  for (const k of keys) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = POLICY_NAMES[k]; b.setAttribute("aria-pressed", String(k === barPolicy));
+    b.addEventListener("click", () => {
+      barPolicy = k;
+      host.querySelectorAll("button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+      drawBars();
+    });
+    host.appendChild(b);
+  }
+})();
 
 function drawCharts() {
   drawBars();

@@ -141,30 +141,30 @@ def architecture(icons: str, out: str):
     s.group(370, 40, 360, 330, "Privileged observations (teacher)")
     obs = [("flag-triangle-right", "Goal position  ·  2", "pink"), ("users", "10 nearest pedestrians: p, v  ·  50", "cyan"),
            ("scan-line", "Obstacle distance, 2 × 72 sectors  ·  144", "yellow"), ("map", "Height scan, 11 × 11  ·  121", "orange"),
-           ("activity", "Velocity, gravity, roadway, action  ·  15", "lavender")]
+           ("activity", "Velocity, gravity, roadway, command  ·  15", "lavender")]
     for k, (ic, lab, fill) in enumerate(obs):
         s.item(386, 80 + 56 * k, 328, 44, lab, fill, ic, size=14.5)
     s.group(370, 400, 360, 250, "Onboard observations (students)")
-    s.image(media("sensor_lidar.png"), 386, 440, 120, 120)
+    s.image(media("sensor_lidar_accumulated.png"), 386, 440, 120, 120)
     s.image(media("sensor_depth.png"), 524, 440, 190, 113)
-    s.text(446, 578, "MID-360 elevation map\n40 × 40 × 2", size=13, color="#333")
-    s.text(619, 578, "D435i depth\n64 × 38 × 3", size=13, color="#333")
-    s.item(386, 600, 328, 36, "Goal, velocity, gravity, action  ·  14", "lavender", size=14)
+    s.text(446, 578, "MID-360 height map\n3 × 40 × 40", size=13, color="#333")
+    s.text(619, 578, "D435i depth 3 × 38 × 64,\nheight map 3 × 40 × 40", size=13, color="#333")
+    s.item(386, 600, 328, 36, "Goal, velocity, gravity, command  ·  14", "lavender", size=14)
 
     # navigation policy: teacher (top) and student (bottom) both produce the velocity command (middle)
     s.group(780, 40, 330, 610, "Navigation policy, 10 Hz")
     s.text(800, 88, "Teacher  π_{T}", size=15, weight=500, anchor="start")
     s.item(800, 104, 250, 52, "MLP  512 · 256 · 128", "green", "brain-circuit")
-    s.item(800, 300, 250, 60, "Velocity command\nv_{x}, v_{y}, ω_{z}", "lavender")
+    s.item(800, 290, 250, 76, "Velocity command v_{x}, v_{y}, ω_{z}\ntanh into command range,\nlow-pass filter", "lavender", size=14)
     s.text(800, 394, "Student  π_{S}", size=15, weight=500, anchor="start")
     s.item(800, 412, 250, 52, "MLP  512 · 256 · 128", "green", "brain-circuit")
-    s.item(800, 520, 250, 48, "CNN encoder  16 · 32 · 32", "orange", "layers")
-    s.arrow([(925, 156), (925, 297)])
+    s.item(800, 520, 250, 48, "CNN encoders  16 · 32 · 32", "orange", "layers")
+    s.arrow([(925, 156), (925, 287)])
     s.arrow([(925, 520), (925, 467)])
-    s.arrow([(925, 412), (925, 363)])
+    s.arrow([(925, 412), (925, 369)])
     # distillation: the student is trained to reproduce the teacher's command
     s.arrow([(1050, 130), (1078, 130), (1078, 438), (1053, 438)], dash="7 6", sw=2)
-    s.text(1094, 214, "distillation (action MSE)", size=13, color="#333", rotate=90)
+    s.text(1094, 214, "distillation (command MSE)", size=13, color="#333", rotate=90)
 
     # locomotion policy
     s.group(1160, 190, 250, 330, "Locomotion policy, 50 Hz")
@@ -222,18 +222,18 @@ def workflow(icons: str, out: str):
     x = xs[2]
     s.image(media("stills/plaza.jpg"), x + 16, Y + 46, 248, 140)
     s.item(x + 16, Y + 206, 248, 44, "PPO, PhysX", "lavender", "cpu", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "3,350 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "3,250 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
     s.item(x + 16, Y + 334, 248, 60, "Privileged state:\npedestrians, obstacles", "cyan", "users", size=14)
-    s.item(x + 16, Y + 406, 248, 44, "Curriculum, 10 levels", "orange", "target", size=14)
+    s.item(x + 16, Y + 406, 248, 44, "Adaptive curriculum", "orange", "target", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Teacher  π_{T}", "green", "brain-circuit")
 
     # students
     x = xs[3]
-    s.image(media("sensor_lidar.png"), x + 16, Y + 46, 140, 140)
+    s.image(media("sensor_lidar_accumulated.png"), x + 16, Y + 46, 140, 140)
     s.image(media("sensor_depth.png"), x + 164, Y + 46, 100, 140)
-    s.item(x + 16, Y + 206, 248, 44, "Action matching to π_{T}", "lavender", "graduation-cap", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "MID-360 lidar\nelevation map", "yellow", "radar", size=14)
-    s.item(x + 16, Y + 334, 248, 60, "D435i depth camera\nnoise, dropout, occlusion", "orange", "camera", size=14)
+    s.item(x + 16, Y + 206, 248, 44, "Command matching to π_{T}", "lavender", "graduation-cap", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "MID-360 lidar\nheight map, 3 s memory", "yellow", "radar", size=14)
+    s.item(x + 16, Y + 334, 248, 60, "D435i depth images\nand height map", "orange", "camera", size=14)
     s.item(x + 16, Y + 406, 248, 44, "CNN + MLP", "cyan", "layers", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Students  π_{S}", "green", "brain-circuit")
 
@@ -241,9 +241,9 @@ def workflow(icons: str, out: str):
     x = xs[4]
     s.image(media("stills/bottleneck.jpg"), x + 16, Y + 46, 248, 140)
     s.item(x + 16, Y + 206, 248, 60, "120 tiles\ncurriculum disabled", "lavender", "map", size=14)
-    s.item(x + 16, Y + 278, 248, 60, "Success, contact\nand fall rates", "yellow", "target", size=14)
+    s.item(x + 16, Y + 278, 248, 60, "Outcome rates and\ncommand statistics", "yellow", "target", size=14)
     s.item(x + 16, Y + 350, 248, 60, "RTX rendering with\nanimated pedestrians", "orange", "camera", size=14)
-    s.item(x + 16, Y + 422, 248, 44, "13,238 episodes", "cyan", "layers", size=14)
+    s.item(x + 16, Y + 422, 248, 60, "2,400 robots × 60 s\nper policy", "cyan", "layers", size=14)
 
     # flow between stages
     mid = Y + 290
@@ -251,7 +251,7 @@ def workflow(icons: str, out: str):
         s.arrow([(a + W, mid), (b - 3, mid)])
     # curriculum feedback: teacher -> scenario generation (over the top)
     s.arrow([(xs[2] + W / 2, Y), (xs[2] + W / 2, 44), (xs[0] + W / 2, 44), (xs[0] + W / 2, Y - 3)], dash="7 6", sw=2)
-    s.text((xs[0] + xs[2] + W) / 2, 30, "curriculum: harder tile after success, easier tile after contact or fall", size=14, color="#333")
+    s.text((xs[0] + xs[2] + W) / 2, 30, "curriculum: tiles drawn by success rate; a level unlocks at 50% success on the level below", size=14, color="#333")
     # frozen walker feeds the teacher and students
     s.arrow([(xs[1] + W / 2, Y + H), (xs[1] + W / 2, 672), (xs[3] + W / 2, 672), (xs[3] + W / 2, Y + H + 3)], dash="7 6", sw=2)
     s.arrow([(xs[2] + W / 2, 672), (xs[2] + W / 2, Y + H + 3)], dash="7 6", sw=2)

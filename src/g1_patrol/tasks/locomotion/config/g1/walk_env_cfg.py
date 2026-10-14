@@ -355,7 +355,9 @@ class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
         self.commands.base_velocity.ranges.lin_vel_y = (-0.6, 0.6)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.2, 1.2)
         self.commands.base_velocity.rel_standing_envs = 0.15
-        # rewards: stronger posture, smoothness and calm upper body than the base G1 recipe
+        # rewards: tighter velocity tracking; stronger posture, smoothness and calm upper body than the base G1 recipe.
+        # The released policy was trained 4,000 iterations with tracking weight 1.0, then 3,000 iterations with 1.5.
+        self.rewards.track_lin_vel_xy_exp.weight = 1.5
         self.rewards.flat_orientation_l2.weight = -2.0
         self.rewards.ang_vel_xy_l2.weight = -0.1
         self.rewards.lin_vel_z_l2.weight = -0.2

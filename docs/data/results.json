@@ -1,140 +1,514 @@
 {
- "sidewalk": {
-  "easy": {
-   "goal": 0.8889,
-   "ped": 0.0889,
-   "obst": 0.0194,
-   "fall": 0.0028,
-   "eps": 720
+ "policies": {
+  "teacher": {
+   "sidewalk": {
+    "easy": {
+     "goal": 0.9131,
+     "ped": 0.0566,
+     "obst": 0.0303,
+     "fall": 0.0,
+     "eps": 495
+    },
+    "medium": {
+     "goal": 0.787,
+     "ped": 0.1412,
+     "obst": 0.0718,
+     "fall": 0.0,
+     "eps": 432
+    },
+    "hard": {
+     "goal": 0.281,
+     "ped": 0.4514,
+     "obst": 0.2661,
+     "fall": 0.0,
+     "eps": 669
+    }
+   },
+   "scaffold": {
+    "easy": {
+     "goal": 0.9882,
+     "ped": 0.0079,
+     "obst": 0.0039,
+     "fall": 0.0,
+     "eps": 508
+    },
+    "medium": {
+     "goal": 0.8652,
+     "ped": 0.1079,
+     "obst": 0.027,
+     "fall": 0.0,
+     "eps": 445
+    },
+    "hard": {
+     "goal": 0.5022,
+     "ped": 0.1942,
+     "obst": 0.2902,
+     "fall": 0.0134,
+     "eps": 448
+    }
+   },
+   "crosswalk": {
+    "easy": {
+     "goal": 0.9165,
+     "ped": 0.0709,
+     "obst": 0.0117,
+     "fall": 0.001,
+     "eps": 1030
+    },
+    "medium": {
+     "goal": 0.6597,
+     "ped": 0.2279,
+     "obst": 0.1124,
+     "fall": 0.0,
+     "eps": 623
+    },
+    "hard": {
+     "goal": 0.4847,
+     "ped": 0.4237,
+     "obst": 0.0857,
+     "fall": 0.0059,
+     "eps": 852
+    }
+   },
+   "construction": {
+    "easy": {
+     "goal": 0.8842,
+     "ped": 0.0639,
+     "obst": 0.0519,
+     "fall": 0.0,
+     "eps": 501
+    },
+    "medium": {
+     "goal": 0.7941,
+     "ped": 0.1123,
+     "obst": 0.0936,
+     "fall": 0.0,
+     "eps": 374
+    },
+    "hard": {
+     "goal": 0.6504,
+     "ped": 0.1707,
+     "obst": 0.0596,
+     "fall": 0.0,
+     "eps": 369
+    }
+   },
+   "bottleneck": {
+    "easy": {
+     "goal": 0.9162,
+     "ped": 0.0692,
+     "obst": 0.0146,
+     "fall": 0.0,
+     "eps": 549
+    },
+    "medium": {
+     "goal": 0.8533,
+     "ped": 0.1253,
+     "obst": 0.0213,
+     "fall": 0.0,
+     "eps": 375
+    },
+    "hard": {
+     "goal": 0.8094,
+     "ped": 0.1593,
+     "obst": 0.0287,
+     "fall": 0.0026,
+     "eps": 383
+    }
+   },
+   "plaza": {
+    "easy": {
+     "goal": 0.9203,
+     "ped": 0.0356,
+     "obst": 0.044,
+     "fall": 0.0,
+     "eps": 954
+    },
+    "medium": {
+     "goal": 0.8409,
+     "ped": 0.0961,
+     "obst": 0.0535,
+     "fall": 0.0094,
+     "eps": 635
+    },
+    "hard": {
+     "goal": 0.7645,
+     "ped": 0.1314,
+     "obst": 0.1024,
+     "fall": 0.0017,
+     "eps": 586
+    }
+   }
   },
-  "medium": {
-   "goal": 0.6949,
-   "ped": 0.1708,
-   "obst": 0.1343,
-   "fall": 0.0,
-   "eps": 603
+  "lidar": {
+   "sidewalk": {
+    "easy": {
+     "goal": 0.9357,
+     "ped": 0.0643,
+     "obst": 0.0,
+     "fall": 0.0,
+     "eps": 482
+    },
+    "medium": {
+     "goal": 0.7838,
+     "ped": 0.1781,
+     "obst": 0.0356,
+     "fall": 0.0,
+     "eps": 421
+    },
+    "hard": {
+     "goal": 0.272,
+     "ped": 0.3269,
+     "obst": 0.4011,
+     "fall": 0.0,
+     "eps": 728
+    }
+   },
+   "scaffold": {
+    "easy": {
+     "goal": 0.9708,
+     "ped": 0.0233,
+     "obst": 0.0058,
+     "fall": 0.0,
+     "eps": 514
+    },
+    "medium": {
+     "goal": 0.8034,
+     "ped": 0.1501,
+     "obst": 0.0465,
+     "fall": 0.0,
+     "eps": 473
+    },
+    "hard": {
+     "goal": 0.5248,
+     "ped": 0.2703,
+     "obst": 0.205,
+     "fall": 0.0,
+     "eps": 444
+    }
+   },
+   "crosswalk": {
+    "easy": {
+     "goal": 0.9031,
+     "ped": 0.094,
+     "obst": 0.0029,
+     "fall": 0.0,
+     "eps": 1042
+    },
+    "medium": {
+     "goal": 0.6155,
+     "ped": 0.2294,
+     "obst": 0.1551,
+     "fall": 0.0,
+     "eps": 632
+    },
+    "hard": {
+     "goal": 0.4625,
+     "ped": 0.3829,
+     "obst": 0.1487,
+     "fall": 0.0059,
+     "eps": 854
+    }
+   },
+   "construction": {
+    "easy": {
+     "goal": 0.873,
+     "ped": 0.1008,
+     "obst": 0.0262,
+     "fall": 0.0,
+     "eps": 496
+    },
+    "medium": {
+     "goal": 0.616,
+     "ped": 0.1222,
+     "obst": 0.2594,
+     "fall": 0.0,
+     "eps": 401
+    },
+    "hard": {
+     "goal": 0.4779,
+     "ped": 0.1818,
+     "obst": 0.2312,
+     "fall": 0.0026,
+     "eps": 385
+    }
+   },
+   "bottleneck": {
+    "easy": {
+     "goal": 0.9239,
+     "ped": 0.0594,
+     "obst": 0.0167,
+     "fall": 0.0,
+     "eps": 539
+    },
+    "medium": {
+     "goal": 0.8678,
+     "ped": 0.1074,
+     "obst": 0.022,
+     "fall": 0.0,
+     "eps": 363
+    },
+    "hard": {
+     "goal": 0.7444,
+     "ped": 0.213,
+     "obst": 0.0376,
+     "fall": 0.005,
+     "eps": 399
+    }
+   },
+   "plaza": {
+    "easy": {
+     "goal": 0.7796,
+     "ped": 0.0445,
+     "obst": 0.1759,
+     "fall": 0.0,
+     "eps": 1012
+    },
+    "medium": {
+     "goal": 0.8498,
+     "ped": 0.1198,
+     "obst": 0.0304,
+     "fall": 0.0,
+     "eps": 626
+    },
+    "hard": {
+     "goal": 0.6683,
+     "ped": 0.1834,
+     "obst": 0.1483,
+     "fall": 0.0,
+     "eps": 627
+    }
+   }
   },
-  "hard": {
-   "goal": 0.439,
-   "ped": 0.2609,
-   "obst": 0.3001,
-   "fall": 0.0,
-   "eps": 713
+  "camera": {
+   "sidewalk": {
+    "easy": {
+     "goal": 0.9396,
+     "ped": 0.0583,
+     "obst": 0.0021,
+     "fall": 0.0,
+     "eps": 480
+    },
+    "medium": {
+     "goal": 0.8063,
+     "ped": 0.1622,
+     "obst": 0.0315,
+     "fall": 0.0,
+     "eps": 413
+    },
+    "hard": {
+     "goal": 0.3207,
+     "ped": 0.4534,
+     "obst": 0.2259,
+     "fall": 0.0,
+     "eps": 686
+    }
+   },
+   "scaffold": {
+    "easy": {
+     "goal": 0.8891,
+     "ped": 0.0164,
+     "obst": 0.0945,
+     "fall": 0.0,
+     "eps": 550
+    },
+    "medium": {
+     "goal": 0.752,
+     "ped": 0.1311,
+     "obst": 0.1168,
+     "fall": 0.0,
+     "eps": 488
+    },
+    "hard": {
+     "goal": 0.4946,
+     "ped": 0.3619,
+     "obst": 0.1435,
+     "fall": 0.0,
+     "eps": 467
+    }
+   },
+   "crosswalk": {
+    "easy": {
+     "goal": 0.8988,
+     "ped": 0.0934,
+     "obst": 0.0039,
+     "fall": 0.0029,
+     "eps": 1038
+    },
+    "medium": {
+     "goal": 0.6133,
+     "ped": 0.2173,
+     "obst": 0.1695,
+     "fall": 0.0,
+     "eps": 649
+    },
+    "hard": {
+     "goal": 0.4502,
+     "ped": 0.425,
+     "obst": 0.1203,
+     "fall": 0.0023,
+     "eps": 873
+    }
+   },
+   "construction": {
+    "easy": {
+     "goal": 0.9274,
+     "ped": 0.0705,
+     "obst": 0.0021,
+     "fall": 0.0,
+     "eps": 482
+    },
+    "medium": {
+     "goal": 0.5902,
+     "ped": 0.1122,
+     "obst": 0.2951,
+     "fall": 0.0,
+     "eps": 410
+    },
+    "hard": {
+     "goal": 0.2333,
+     "ped": 0.2069,
+     "obst": 0.5556,
+     "fall": 0.0,
+     "eps": 720
+    }
+   },
+   "bottleneck": {
+    "easy": {
+     "goal": 0.9194,
+     "ped": 0.0714,
+     "obst": 0.0092,
+     "fall": 0.0,
+     "eps": 546
+    },
+    "medium": {
+     "goal": 0.8153,
+     "ped": 0.1768,
+     "obst": 0.0079,
+     "fall": 0.0,
+     "eps": 379
+    },
+    "hard": {
+     "goal": 0.7115,
+     "ped": 0.2518,
+     "obst": 0.0342,
+     "fall": 0.0024,
+     "eps": 409
+    }
+   },
+   "plaza": {
+    "easy": {
+     "goal": 0.8381,
+     "ped": 0.0351,
+     "obst": 0.1268,
+     "fall": 0.0,
+     "eps": 970
+    },
+    "medium": {
+     "goal": 0.8271,
+     "ped": 0.1309,
+     "obst": 0.0388,
+     "fall": 0.0,
+     "eps": 619
+    },
+    "hard": {
+     "goal": 0.7018,
+     "ped": 0.1862,
+     "obst": 0.112,
+     "fall": 0.0,
+     "eps": 607
+    }
+   }
   }
  },
- "scaffold": {
-  "easy": {
-   "goal": 0.9746,
-   "ped": 0.0169,
-   "obst": 0.0085,
-   "fall": 0.0,
-   "eps": 826
+ "summary": {
+  "teacher_v2": {
+   "goal": 0.7719534050179212,
+   "ped": 0.13067502986857826,
+   "obst": 0.08549880525686977,
+   "fall": 0.008661887694145758,
+   "episodes": 13392,
+   "motion": {
+    "forward_command_mps": 1.1509414911270142,
+    "abs_lateral_command_mps": 0.5774475932121277,
+    "abs_yaw_rate_command_radps": 0.5430306196212769,
+    "fraction_lateral_above_0.25mps": 0.9667143225669861,
+    "fraction_backward": 0.02131129615008831,
+    "fraction_yaw_rate_above_0.8radps": 0.2894521653652191,
+    "fraction_saturated": 0.7014864683151245,
+    "forward_command_change_mps2": 0.17823278903961182,
+    "lateral_command_change_mps2": 0.4204764664173126,
+    "yaw_rate_command_change_radps2": 2.7677104473114014,
+    "planar_speed_mps": 1.1612743139266968,
+    "torso_tilt_deg": 3.9151318073272705,
+    "knee_flexion_deg": 40.185035705566406
+   }
   },
-  "medium": {
-   "goal": 0.8237,
-   "ped": 0.0978,
-   "obst": 0.0785,
-   "fall": 0.0,
-   "eps": 675
+  "teacher": {
+   "goal": 0.7658388736800938,
+   "ped": 0.15262025811497848,
+   "obst": 0.07518576456785295,
+   "fall": 0.0019554165037152915,
+   "episodes": 10228,
+   "motion": {
+    "forward_command_mps": 0.9443115592002869,
+    "abs_lateral_command_mps": 0.15260104835033417,
+    "abs_yaw_rate_command_radps": 0.2654106318950653,
+    "fraction_lateral_above_0.25mps": 0.20556844770908356,
+    "fraction_backward": 0.016024267300963402,
+    "fraction_yaw_rate_above_0.8radps": 0.054074231535196304,
+    "fraction_saturated": 0.3740959167480469,
+    "forward_command_change_mps2": 0.16588465869426727,
+    "lateral_command_change_mps2": 0.4346824288368225,
+    "yaw_rate_command_change_radps2": 0.8060992360115051,
+    "planar_speed_mps": 0.8836255669593811,
+    "torso_tilt_deg": 3.399409294128418,
+    "knee_flexion_deg": 38.531890869140625
+   }
   },
-  "hard": {
-   "goal": 0.5008,
-   "ped": 0.2454,
-   "obst": 0.2438,
-   "fall": 0.01,
-   "eps": 603
-  }
- },
- "crosswalk": {
-  "easy": {
-   "goal": 0.9159,
-   "ped": 0.0765,
-   "obst": 0.0038,
-   "fall": 0.0038,
-   "eps": 1320
+  "lidar": {
+   "goal": 0.7214025675416746,
+   "ped": 0.16066296225330523,
+   "obst": 0.11295267292584786,
+   "fall": 0.0007664303506418854,
+   "episodes": 10438,
+   "motion": {
+    "forward_command_mps": 0.9288873076438904,
+    "abs_lateral_command_mps": 0.12053703516721725,
+    "abs_yaw_rate_command_radps": 0.20780164003372192,
+    "fraction_lateral_above_0.25mps": 0.08604760468006134,
+    "fraction_backward": 0.012088323943316936,
+    "fraction_yaw_rate_above_0.8radps": 0.010155010968446732,
+    "fraction_saturated": 0.2893432378768921,
+    "forward_command_change_mps2": 0.1343008279800415,
+    "lateral_command_change_mps2": 0.19387461245059967,
+    "yaw_rate_command_change_radps2": 0.4189969003200531,
+    "planar_speed_mps": 0.8606631755828857,
+    "torso_tilt_deg": 3.358564615249634,
+    "knee_flexion_deg": 38.36100387573242
+   }
   },
-  "medium": {
-   "goal": 0.685,
-   "ped": 0.2222,
-   "obst": 0.083,
-   "fall": 0.0098,
-   "eps": 711
-  },
-  "hard": {
-   "goal": 0.5884,
-   "ped": 0.2805,
-   "obst": 0.0901,
-   "fall": 0.041,
-   "eps": 877
-  }
- },
- "construction": {
-  "easy": {
-   "goal": 0.8767,
-   "ped": 0.0475,
-   "obst": 0.0758,
-   "fall": 0.0,
-   "eps": 673
-  },
-  "medium": {
-   "goal": 0.7673,
-   "ped": 0.0818,
-   "obst": 0.13,
-   "fall": 0.0021,
-   "eps": 477
-  },
-  "hard": {
-   "goal": 0.6319,
-   "ped": 0.1362,
-   "obst": 0.1319,
-   "fall": 0.0106,
-   "eps": 470
-  }
- },
- "bottleneck": {
-  "easy": {
-   "goal": 0.9038,
-   "ped": 0.0437,
-   "obst": 0.0525,
-   "fall": 0.0,
-   "eps": 800
-  },
-  "medium": {
-   "goal": 0.8904,
-   "ped": 0.0976,
-   "obst": 0.01,
-   "fall": 0.002,
-   "eps": 502
-  },
-  "hard": {
-   "goal": 0.8521,
-   "ped": 0.1381,
-   "obst": 0.0059,
-   "fall": 0.0039,
-   "eps": 507
-  }
- },
- "plaza": {
-  "easy": {
-   "goal": 0.8824,
-   "ped": 0.0424,
-   "obst": 0.0728,
-   "fall": 0.0024,
-   "eps": 1250
-  },
-  "medium": {
-   "goal": 0.8301,
-   "ped": 0.0966,
-   "obst": 0.0501,
-   "fall": 0.0232,
-   "eps": 818
-  },
-  "hard": {
-   "goal": 0.8398,
-   "ped": 0.0952,
-   "obst": 0.0505,
-   "fall": 0.0144,
-   "eps": 693
+  "camera": {
+   "goal": 0.6976636380493232,
+   "ped": 0.178286667902837,
+   "obst": 0.12265900241053217,
+   "fall": 0.0005562766549230484,
+   "episodes": 10786,
+   "motion": {
+    "forward_command_mps": 0.9387865662574768,
+    "abs_lateral_command_mps": 0.10365847498178482,
+    "abs_yaw_rate_command_radps": 0.1979491263628006,
+    "fraction_lateral_above_0.25mps": 0.059073518961668015,
+    "fraction_backward": 0.0024759031366556883,
+    "fraction_yaw_rate_above_0.8radps": 0.0071106296963989735,
+    "fraction_saturated": 0.2852967381477356,
+    "forward_command_change_mps2": 0.13927298784255981,
+    "lateral_command_change_mps2": 0.1808920055627823,
+    "yaw_rate_command_change_radps2": 0.39588770270347595,
+    "planar_speed_mps": 0.8656452894210815,
+    "torso_tilt_deg": 3.363614797592163,
+    "knee_flexion_deg": 38.52804946899414
+   }
   }
  }
 }

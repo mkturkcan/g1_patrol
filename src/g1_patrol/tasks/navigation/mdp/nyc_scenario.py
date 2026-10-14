@@ -154,6 +154,22 @@ class NycScenarioCommand(CommandTerm):
         gap = d - self.cfg.pedestrian_radius - self.cfg.robot_radius
         return torch.where(self.visible_peds(), gap, torch.full_like(gap, 1e3)).amin(dim=1)
 
+    def collision_risk(self, horizon: float = 2.0, margin: float = 0.1) -> torch.Tensor:
+        """Predicted robot-pedestrian contacts under constant relative velocity, summed over visible pedestrians.
+
+        For each pedestrian, the time ``t`` (clipped to ``[0, horizon]``) and center distance ``d`` of closest approach
+        are predicted from the current relative position and velocity; the risk is ``(1 - d / reach) (1 - t / horizon)``
+        where ``d`` is below ``reach`` (sum of the radii plus ``margin``), else zero. It is reduced by slowing down or stepping out of a
+        pedestrian's path, including the path of pedestrians that do not react to the robot.
+        """
+        rel = self.ped_pos - self.robot_pos().unsqueeze(1)
+        vel = self.ped_vel - self.robot.data.root_lin_vel_w.torch[:, None, :2]
+        t = (-(rel * vel).sum(-1) / (vel * vel).sum(-1).clamp(min=1e-6)).clamp(min=0.0, max=horizon)
+        closest = torch.linalg.norm(rel + vel * t.unsqueeze(-1), dim=-1)
+        reach = self.cfg.pedestrian_radius + self.cfg.robot_radius + margin
+        risk = (1.0 - closest / reach).clamp(min=0.0) * (1.0 - t / horizon)
+        return (risk * self.visible_peds()).sum(dim=1)
+
     def record_contacts(self):
         """Remember, per env, whether the nearest pedestrian noticed the robot and who closed the gap faster."""
         rel = self.ped_pos - self.robot_pos().unsqueeze(1)
@@ -485,6 +501,10 @@ class NycScenarioCommand(CommandTerm):
         vel = self.ped_vel + (v_des + force - self.ped_vel) * min(dt / cfg.relaxation_time, 1.0)
         speed = torch.linalg.norm(vel, dim=-1, keepdim=True)
         vel = vel * (cfg.max_pedestrian_speed / speed.clamp(min=cfg.max_pedestrian_speed))
+        # people do not walk backwards: forces may slow a pedestrian down or move it sideways, but not push it back
+        # along its walking direction (standing pedestrians have no walking direction and are only nudged)
+        along = (vel * heading).sum(-1)
+        vel = vel - (along + cfg.max_backward_speed).clamp(max=0.0)[..., None] * heading
         # aware pedestrians never walk into the robot (crowd pressure included): cap their closing speed so they keep
         # at least ``aware_min_gap`` over the next step; contact then only happens if the robot closes in itself
         u_r = to_robot / d_r[..., None]
@@ -564,6 +584,8 @@ class NycScenarioCommandCfg(CommandTermCfg):
     distracted_reaction_distance: float = 1.0
     distracted_swerve_speed: float = 0.7
     """Look-ahead (m) and peak sideways speed (m/s) with which pedestrians step around a robot in their path."""
+    max_backward_speed: float = 0.05
+    """Largest speed (m/s) at which a walking pedestrian may move against its walking direction."""
     aware_min_gap: float = 0.1
     """Aware pedestrians never move closer than this (m) to the robot by themselves."""
     spawn_clearance: float = 1.5

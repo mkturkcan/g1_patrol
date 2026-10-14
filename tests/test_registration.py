@@ -18,11 +18,6 @@ def test_task_registrations():
             "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkFlatEnvCfg",
             "default_agent": "rsl_rl",
         },
-        "G1Patrol-Walk-Rough": {
-            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
-            "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkRoughEnvCfg",
-            "default_agent": "rsl_rl",
-        },
         "G1Patrol-Walk-Street": {
             "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
             "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkStreetEnvCfg",

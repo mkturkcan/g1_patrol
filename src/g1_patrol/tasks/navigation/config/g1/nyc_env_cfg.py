@@ -110,7 +110,12 @@ class ActionsCfg:
         low_level_decimation=WALKER_ENV_CFG.decimation,
         low_level_actions=WALKER_ENV_CFG.actions.joint_pos,
         low_level_observations=WALKER_ENV_CFG.observations.policy,
-        command_ranges=((-0.6, 1.2), (-0.6, 0.6), (-1.2, 1.2)),
+        # a walking pace rather than the walker's limits; squashed and low-pass filtered so the walker never sees
+        # saturated or jittering commands
+        command_ranges=((-0.4, 1.0), (-0.4, 0.4), (-1.0, 1.0)),
+        squash="tanh",
+        smoothing=0.5,
+        debug_vis=False,
     )
     # moves the pedestrians at every physics step; takes no policy inputs
     pedestrians = mdp.PedestrianMotionActionCfg(asset_name="pedestrians", scenario_name="nyc")
@@ -150,19 +155,26 @@ class ObservationsCfg:
 class RewardsCfg:
     # terms are scaled by the step length (0.1 s): weight 2 on progress pays 2 per meter gained,
     # weights of +-100 on one-step events pay +-10
-    progress = RewTerm(func=mdp.nyc_goal_progress, weight=2.0, params={"command_name": "nyc"})
+    progress = RewTerm(func=mdp.nyc_goal_progress, weight=2.0, params={"command_name": "nyc", "max_speed": 1.0})
     success = RewTerm(func=mdp.nyc_goal_reached, weight=100.0, params={"command_name": "nyc"})
     collision = RewTerm(func=mdp.is_terminated_term, weight=-100.0, params={"term_keys": ".*_collision"})
     fall = RewTerm(func=mdp.is_terminated_term, weight=-200.0, params={"term_keys": "fall"})
     personal_space = RewTerm(
         func=mdp.personal_space, weight=-4.0, params={"command_name": "nyc", "comfort_distance": 0.5}
     )
+    # predicted contacts within 2 s: rewards stepping out of the way of pedestrians before contact
+    collision_risk = RewTerm(func=mdp.collision_risk, weight=-4.0, params={"command_name": "nyc", "horizon": 2.0})
     obstacle_margin = RewTerm(func=mdp.obstacle_margin, weight=-4.0, params={"command_name": "nyc", "margin": 0.15})
     # give way: pay for every m/s of walking speed pedestrians lose because the robot is in their way
     pedestrian_delay = RewTerm(func=mdp.pedestrian_delay, weight=-1.0, params={"command_name": "nyc"})
     # stay on the sidewalk / crosswalk
     street = RewTerm(func=mdp.in_street, weight=-2.0, params={"command_name": "nyc"})
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    # walking like a pedestrian: forward and steady, turning instead of sidestepping, no backing up
+    command_rate = RewTerm(func=mdp.command_rate, weight=-2.0)
+    command_lateral = RewTerm(func=mdp.command_lateral, weight=-1.5)
+    command_backward = RewTerm(func=mdp.command_backward, weight=-2.0)
+    command_yaw_rate = RewTerm(func=mdp.command_yaw_rate, weight=-0.15)
+    policy_output = RewTerm(func=mdp.policy_output_l2, weight=-0.01)
 
 
 @configclass
@@ -179,7 +191,7 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    levels = CurrTerm(func=mdp.nyc_levels)
+    levels = CurrTerm(func=mdp.nyc_adaptive_curriculum)
 
 
 @configclass
@@ -298,9 +310,11 @@ class StudentProprioCfg(ObsGroup):
 
 @configclass
 class LidarMapCfg(ObsGroup):
+    """MID-360 height map: accumulated over 3 s, current scan, previous scan (3 x 40 x 40)."""
+
     lidar_map = ObsTerm(
-        func=mdp.lidar_elevation_map,
-        params={"sensor_cfg": SceneEntityCfg("mid360"), "size": 8.0, "resolution": 0.2, "num_frames": 2},
+        func=mdp.accumulated_height_map,
+        params={"sensor_cfg": SceneEntityCfg("mid360"), "size": 8.0, "resolution": 0.2, "memory_s": 3.0, "max_range": 10.0},
     )
 
     def __post_init__(self):
@@ -320,6 +334,28 @@ class DepthCfg(ObsGroup):
 
 
 @configclass
+class DepthMapCfg(ObsGroup):
+    """Height map from the D435i depth returns: accumulated over 3 s, current frame, previous frame (3 x 40 x 40)."""
+
+    depth_map = ObsTerm(
+        func=mdp.accumulated_height_map,
+        params={
+            "sensor_cfg": SceneEntityCfg("d435i"),
+            "size": 8.0,
+            "resolution": 0.2,
+            "memory_s": 3.0,
+            "max_range": 6.0,
+            "noise_std": 0.02,
+            "dropout": 0.05,
+        },
+    )
+
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True
+
+
+@configclass
 class LidarStudentObservationsCfg(ObservationsCfg):
     student: StudentProprioCfg = StudentProprioCfg()
     lidar_map: LidarMapCfg = LidarMapCfg()
@@ -329,6 +365,7 @@ class LidarStudentObservationsCfg(ObservationsCfg):
 class CameraStudentObservationsCfg(ObservationsCfg):
     student: StudentProprioCfg = StudentProprioCfg()
     depth: DepthCfg = DepthCfg()
+    depth_map: DepthMapCfg = DepthMapCfg()
 
 
 @configclass

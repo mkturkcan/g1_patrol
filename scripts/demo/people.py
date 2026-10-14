@@ -163,21 +163,21 @@ class AnimatedCrowd:
             if not visible[e, k]:
                 person["yaw"] = None
                 continue
-            speed = float(np.hypot(*vel[e, k]))
-            # face the walking direction; keep the heading while (nearly) standing
-            if speed > 0.15:
-                target = math.atan2(vel[e, k, 1], vel[e, k, 0])
-                if person["yaw"] is None:
-                    person["yaw"] = target
-                else:
-                    diff = (target - person["yaw"] + math.pi) % (2 * math.pi) - math.pi
-                    person["yaw"] += diff * min(1.0, 8.0 * dt)
-            elif person["yaw"] is None:
-                person["yaw"] = 0.0
-            # walk-cycle phase follows the actual speed; idle when slow
-            person["walk_phase"] += speed / (WALK_SPEED * person["stride"]) * dt * FPS / len(person["walk"]["rot"])
+            v = vel[e, k]
+            speed = float(np.hypot(*v))
+            if person["yaw"] is None:
+                person["yaw"] = math.atan2(v[1], v[0]) if speed > 0.05 else 0.0
+            # turn towards the direction of motion while walking, at a speed-dependent turn rate; when the path
+            # reverses, pivot quickly instead of stepping backwards
+            if speed > 0.1:
+                diff = (math.atan2(v[1], v[0]) - person["yaw"] + math.pi) % (2 * math.pi) - math.pi
+                rate = (4.0 + 8.0 * min(1.0, speed)) * dt * (2.5 if abs(diff) > math.pi / 2 else 1.0)
+                person["yaw"] += max(-rate, min(rate, diff))
+            # the walk cycle follows the speed along the facing direction (it runs backwards if the person steps back)
+            along = float(v[0] * math.cos(person["yaw"]) + v[1] * math.sin(person["yaw"]))
+            person["walk_phase"] += along / (WALK_SPEED * person["stride"]) * dt * FPS / len(person["walk"]["rot"])
             person["idle_phase"] += dt * FPS / len(person["idle"]["rot"])
-            target_blend = min(1.0, speed / 0.5)
+            target_blend = min(1.0, abs(along) / 0.5)
             person["blend"] += (target_blend - person["blend"]) * min(1.0, 6.0 * dt)
             rot_w, trans_w = _sample(person["walk"], person["walk_phase"])
             rot_i, trans_i = _sample(person["idle"], person["idle_phase"])

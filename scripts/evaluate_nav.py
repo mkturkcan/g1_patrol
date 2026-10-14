@@ -39,6 +39,21 @@ from evaluate import cli_args, parse_args, resolve_checkpoint
 
 OUTCOMES = ("goal_reached", "pedestrian_collision", "obstacle_collision", "fall", "time_out")
 LEVEL_BUCKETS = {"easy": (0, 3), "medium": (4, 6), "hard": (7, 9)}
+MOTION_TERMS = (
+    "forward_command_mps",  # mean forward velocity command
+    "abs_lateral_command_mps",
+    "abs_yaw_rate_command_radps",
+    "fraction_lateral_above_0.25mps",
+    "fraction_backward",  # forward command below -0.05 m/s
+    "fraction_yaw_rate_above_0.8radps",
+    "fraction_saturated",  # requested command within 5% of its range limit (mean over the 3 components)
+    "forward_command_change_mps2",  # mean |d command / dt|
+    "lateral_command_change_mps2",
+    "yaw_rate_command_change_radps2",
+    "planar_speed_mps",
+    "torso_tilt_deg",
+    "knee_flexion_deg",
+)
 
 
 def main(argv: list[str]) -> None:
@@ -103,6 +118,13 @@ def main(argv: list[str]) -> None:
         cell_close = torch.zeros(num_cells, device=dev)
         cell_goal_time = torch.zeros(num_cells, device=dev)
 
+        # motion quality: the velocity commands sent to the walker and the walker's posture
+        walker = base_env.action_manager.get_term("walker") if nyc else None
+        robot = base_env.scene["robot"]
+        knees = [i for i, n in enumerate(robot.joint_names) if "knee" in n]
+        motion = torch.zeros(len(MOTION_TERMS), device=dev)
+        motion_steps = torch.zeros((), device=dev)
+
         obs = env.get_observations()
         with torch.inference_mode():
             for _ in range(args_cli.num_steps):
@@ -115,6 +137,22 @@ def main(argv: list[str]) -> None:
                 obs, _, dones, _ = env.step(policy(obs))
                 policy.reset(dones)
                 steps_in_episode += 1
+                if walker is not None:
+                    live = base_env.episode_length_buf > 1  # skip the first step after a reset
+                    cmd, step = walker.command, (walker.command - walker.prev_command).abs() / base_env.step_dt
+                    span = walker._high - walker._low
+                    saturated = torch.minimum(walker.target - walker._low, walker._high - walker.target) < 0.05 * span
+                    gravity = robot.data.projected_gravity_b.torch
+                    values = torch.stack([
+                        cmd[:, 0], cmd[:, 1].abs(), cmd[:, 2].abs(),
+                        (cmd[:, 1].abs() > 0.25).float(), (cmd[:, 0] < -0.05).float(), (cmd[:, 2].abs() > 0.8).float(),
+                        saturated.float().mean(dim=1), step[:, 0], step[:, 1], step[:, 2],
+                        torch.linalg.norm(robot.data.root_lin_vel_b.torch[:, :2], dim=1),
+                        torch.rad2deg(torch.acos((-gravity[:, 2]).clamp(-1.0, 1.0))),
+                        torch.rad2deg(robot.data.joint_pos.torch[:, knees].abs().mean(dim=1)),
+                    ], dim=1)
+                    motion += (values * live[:, None]).sum(dim=0)
+                    motion_steps += live.sum()
 
                 cell_steps += torch.bincount(cell, minlength=num_cells)
                 if nyc:
@@ -176,6 +214,7 @@ def main(argv: list[str]) -> None:
                     "time_in_street": float(cell_street[i] / cell_steps[i].clamp(min=1)),
                 }
             metrics["per_scenario"] = per_cell
+            metrics["motion"] = {k: float(v) for k, v in zip(MOTION_TERMS, motion / motion_steps.clamp(min=1))}
 
         print("\n[RESULT] Navigation metrics:")
         print(json.dumps({k: v for k, v in metrics.items() if k != "per_scenario"}, indent=2))

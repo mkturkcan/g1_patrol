@@ -50,11 +50,15 @@ class G1NycTeacherPPORunnerCfg(G1CrowdNavPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "g1_nyc_teacher"
         self.max_iterations = 3000
+        # with tanh-squashed commands, extra action noise costs little once saturated and the entropy bonus would
+        # inflate it steadily: keep the bonus small
+        self.algorithm.entropy_coef = 0.001
 
 
 @configclass
 class G1NycLidarDistillationRunnerCfg(RslRlDistillationRunnerCfg):
-    """Distil the privileged teacher into a student that sees only the MID-360 height map (DAgger-style).
+    """Distil the privileged teacher into a student that sees only the MID-360 height map (DAgger-style). The loss
+    compares the tanh-squashed actions (:class:`CommandSpaceDistillation`).
 
     Train with ``--checkpoint <teacher model_XXXX.pt>``; the teacher network must match
     :class:`G1NycTeacherPPORunnerCfg`'s actor.
@@ -80,7 +84,12 @@ class G1NycLidarDistillationRunnerCfg(RslRlDistillationRunnerCfg):
         obs_normalization=True,
         distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
     )
-    algorithm = RslRlDistillationAlgorithmCfg(num_learning_epochs=2, learning_rate=5.0e-4, gradient_length=16)
+    algorithm = RslRlDistillationAlgorithmCfg(
+        class_name="g1_patrol.tasks.navigation.config.g1.agents.distillation:CommandSpaceDistillation",
+        num_learning_epochs=2,
+        learning_rate=5.0e-4,
+        gradient_length=16,
+    )
 
 
 @configclass
@@ -88,4 +97,4 @@ class G1NycCameraDistillationRunnerCfg(G1NycLidarDistillationRunnerCfg):
     """Distil the teacher into a camera-only student (stacked D435i depth frames)."""
 
     experiment_name = "g1_nyc_camera_student"
-    obs_groups = {"student": ["student", "depth"], "teacher": ["policy"]}
+    obs_groups = {"student": ["student", "depth", "depth_map"], "teacher": ["policy"]}
