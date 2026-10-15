@@ -26,7 +26,8 @@ def main(argv):
     parser.add_argument("--out", required=True, help="Output TorchScript file.")
     cli_args.add_rsl_rl_args(parser)
     add_launcher_args(parser)
-    args, _ = setup_preset_cli(parser, argv)
+    args, remaining = setup_preset_cli(parser, argv)
+    sys.argv = [sys.argv[0], *remaining]  # Hydra overrides only
     env_cfg, agent_cfg = resolve_task_config(args.task, "rsl_rl_cfg_entry_point", play_mode=True)
     env_cfg.scene.num_envs = 4
     with launch_simulation(env_cfg, args):

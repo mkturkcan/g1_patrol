@@ -69,6 +69,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--push_interval", type=float, nargs=2, default=(4.0, 8.0), help="Seconds between shoves (min max)."
     )
+    parser.add_argument(
+        "--full_terrain",
+        action="store_true",
+        help="Evaluate on as many random terrain tiles as in training (play mode keeps only 5 x 5).",
+    )
+    parser.add_argument(
+        "--nav_commands",
+        action="store_true",
+        help="Draw commands from the navigation policy's ranges (forward -0.4 to 1.0 m/s, lateral +-0.15 m/s, "
+        "yaw rate +-1.0 rad/s) instead of the walker's training ranges.",
+    )
     cli_args.add_rsl_rl_args(parser)
     add_launcher_args(parser)
     args_cli, remaining_args = setup_preset_cli(parser, argv)
@@ -120,6 +131,13 @@ def main(argv: list[str]) -> None:
     installed_version = check_rsl_rl_version()
 
     env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent, play_mode=not args_cli.train_env_cfg)
+    generator = env_cfg.scene.terrain.terrain_generator
+    if args_cli.full_terrain and generator is not None:
+        train_generator = resolve_task_config(args_cli.task, args_cli.agent, play_mode=False)[0].scene.terrain.terrain_generator
+        generator.num_rows, generator.num_cols = train_generator.num_rows, train_generator.num_cols
+    if args_cli.nav_commands:
+        ranges = env_cfg.commands.base_velocity.ranges
+        ranges.lin_vel_x, ranges.lin_vel_y, ranges.ang_vel_z = (-0.4, 1.0), (-0.15, 0.15), (-1.0, 1.0)
     if args_cli.push_velocity > 0:
         v = args_cli.push_velocity
         env_cfg.events.push_robot = EventTermCfg(
@@ -165,6 +183,14 @@ def main(argv: list[str]) -> None:
         scanner = base_env.scene.sensors.get("height_scanner")
         gravity = torch.tensor([0.0, 0.0, -1.0], device=device).expand(base_env.num_envs, 3)
         posture = {"torso_tilt_deg": 0.0, "pelvis_height_m": 0.0, "knee_bend_rad": 0.0, "hip_roll_abs_rad": 0.0}
+        # smoothness probes: leg power, change of joint targets, torso roll/pitch rate, peak foot force / body weight
+        leg_ids, _ = robot.find_joints([".*_hip_.*", ".*_knee_joint", ".*_ankle_.*"])
+        contact = base_env.scene.sensors.get("contact_forces")
+        feet_ids = contact.find_bodies(".*_ankle_roll_link")[0] if contact is not None else []
+        weight = float(robot.data.default_mass.torch[0].sum()) * 9.81
+        smooth = {"leg_power_w": 0.0, "joint_target_change_rad": 0.0, "torso_roll_pitch_rate_radps": 0.0, "peak_foot_force_bw": 0.0}
+        action_scale = float(base_env.cfg.actions.joint_pos.scale)
+        prev_action = None
 
         # accumulators
         lin_err_sum = torch.zeros(2, device=device)
@@ -182,7 +208,8 @@ def main(argv: list[str]) -> None:
             for step in range(args_cli.num_steps):
                 # command that the action is computed from
                 command = base_env.command_manager.get_command("base_velocity").clone()
-                obs, _, dones, _ = env.step(policy(obs))
+                action = policy(obs)
+                obs, _, dones, _ = env.step(action)
                 policy.reset(dones)
 
                 # tracking error in the heading (yaw) frame, skipping envs that were just reset
@@ -211,6 +238,17 @@ def main(argv: list[str]) -> None:
                 posture["pelvis_height_m"] += float(height[alive].sum())
                 posture["knee_bend_rad"] += float(joint_pos[:, knee_ids].mean(dim=1)[alive].sum())
                 posture["hip_roll_abs_rad"] += float(joint_pos[:, hip_roll_ids].abs().mean(dim=1)[alive].sum())
+                power = (robot.data.applied_torque.torch[:, leg_ids] * robot.data.joint_vel.torch[:, leg_ids]).abs().sum(dim=1)
+                smooth["leg_power_w"] += float(power[alive].sum())
+                if prev_action is not None:
+                    rate = (action - prev_action).abs().mean(dim=1) * action_scale  # joint targets, rad per step
+                    smooth["joint_target_change_rad"] += float(rate[alive].sum())
+                prev_action = action.clone()
+                w_torso = math_utils.quat_apply_inverse(robot.data.body_quat_w.torch[:, torso_id], robot.data.body_ang_vel_w.torch[:, torso_id])
+                smooth["torso_roll_pitch_rate_radps"] += float(w_torso[:, :2].norm(dim=1)[alive].sum())
+                if contact is not None:
+                    foot_force = contact.data.net_forces_w.torch[:, feet_ids, 2].abs().amax(dim=1)
+                    smooth["peak_foot_force_bw"] += float((foot_force / weight)[alive].sum())
 
                 falls = term_manager.get_term("base_contact")
                 num_falls += int(falls.sum())
@@ -237,6 +275,8 @@ def main(argv: list[str]) -> None:
             "num_envs": args_cli.num_envs,
             "sim_seconds_per_env": sim_seconds,
             "push_velocity": args_cli.push_velocity,
+            "full_terrain": args_cli.full_terrain,
+            "nav_commands": args_cli.nav_commands,
             "mean_abs_err_lin_vel_x": float(lin_err_sum[0] / num_samples),
             "mean_abs_err_lin_vel_y": float(lin_err_sum[1] / num_samples),
             "mean_abs_err_ang_vel_z": float(ang_err_sum / num_samples),
@@ -246,10 +286,12 @@ def main(argv: list[str]) -> None:
             "timeouts": num_timeouts,
             "falls_per_robot_minute": num_falls / robot_minutes,
             **{f"mean_{k}": v / num_samples for k, v in posture.items()},
+            **{f"mean_{k}": v / num_samples for k, v in smooth.items()},
         }
         print("\n[RESULT] Evaluation metrics:")
         print(json.dumps(metrics, indent=2))
         suffix = f"_push{args_cli.push_velocity:g}" if args_cli.push_velocity > 0 else ""
+        suffix += ("_fullterrain" if args_cli.full_terrain else "") + ("_navcmd" if args_cli.nav_commands else "")
         with open(os.path.join(out_dir, f"metrics{suffix}.json"), "w") as f:
             json.dump(metrics, f, indent=2)
 

@@ -151,9 +151,10 @@ class accumulated_height_map(ManagerTermBase):
     accumulated map, the current scan and the previous scan (motion-compensated, so moving pedestrians are visible).
     Heights are relative to the robot's ground level and clipped to ``z_range``; unknown cells are ``unknown_value``.
 
-    ``sensor_cfg`` may name a lidar (:class:`RayCaster`) or a depth camera (:class:`RayCasterCamera`); for a camera,
-    ``noise_std`` (relative range noise, growing with distance) and ``dropout`` (missing pixels) degrade the returns
-    as in :class:`depth_frames`.
+    ``sensor_cfg`` may name a lidar (:class:`RayCaster`) or a depth camera (:class:`RayCasterCamera`); ``noise_std``
+    (relative range noise, growing with distance) and ``dropout`` (missing returns) degrade the returns as in
+    :class:`depth_frames`. The robot's pose estimate drifts from its true pose as a random walk of ``drift_pos`` (m)
+    and ``drift_yaw`` (rad) per step, so that older parts of the map are misaligned as with real odometry.
     """
 
     UNKNOWN = -1.0e3
@@ -170,6 +171,7 @@ class accumulated_height_map(ManagerTermBase):
         self.prev_scan = torch.full((n, m, m), self.UNKNOWN, device=dev)
         self.origin = torch.zeros(n, 2, dtype=torch.long, device=dev)  # world cell index of map cell (0, 0)
         self.fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        self.pose_error = torch.zeros(n, 3, device=dev)  # odometry drift: x, y, yaw
         # output cell centres in the robot frame
         c = (torch.arange(self.cells, device=dev, dtype=torch.float) + 0.5) * self.res - self.cells * self.res / 2
         self.local = torch.stack(torch.meshgrid(c, c, indexing="ij"), dim=-1).view(-1, 2)  # (cells^2, 2): x, y
@@ -218,12 +220,22 @@ class accumulated_height_map(ManagerTermBase):
         z_range: tuple[float, float] = (-0.5, 2.0),
         unknown_value: float = -1.0,
         robot_ground_offset: float = 0.76,
+        drift_pos: float = 0.0,
+        drift_yaw: float = 0.0,
     ) -> torch.Tensor:
         robot = env.scene["robot"]
-        root = robot.data.root_pos_w.torch
+        true_root = robot.data.root_pos_w.torch
         q = robot.data.root_quat_w.torch
-        yaw = torch.atan2(2 * (q[:, 3] * q[:, 2] + q[:, 0] * q[:, 1]), 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2))
-        n, m, res = root.shape[0], self.map_cells, self.res
+        true_yaw = torch.atan2(2 * (q[:, 3] * q[:, 2] + q[:, 0] * q[:, 1]), 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2))
+        n, m, res = true_root.shape[0], self.map_cells, self.res
+        # estimated pose: the true pose plus a drifting odometry error (zero at the start of an episode)
+        self.pose_error[self.fresh] = 0.0
+        if drift_pos > 0 or drift_yaw > 0:
+            step = torch.randn(n, 3, device=true_root.device) * torch.tensor([drift_pos, drift_pos, drift_yaw], device=true_root.device)
+            self.pose_error += torch.where(self.fresh[:, None], torch.zeros_like(step), step)
+        root = true_root.clone()
+        root[:, :2] += self.pose_error[:, :2]
+        yaw = true_yaw + self.pose_error[:, 2]
 
         # scroll the map with the robot (episodes that just started begin with an empty map)
         origin = torch.floor(root[:, :2] / res).long() - m // 2
@@ -239,8 +251,12 @@ class accumulated_height_map(ManagerTermBase):
             self.prev_scan = self._shift(self.prev_scan, d, self.UNKNOWN)
             self.origin = origin
 
-        # bin the current scan (world heights) into the map grid
+        # bin the current scan (world heights) into the map grid, placed with the estimated pose
         pts = self._points(env, sensor_cfg, max_range, noise_std, dropout)
+        rel = pts - true_root[:, None]
+        c, s = torch.cos(self.pose_error[:, 2])[:, None], torch.sin(self.pose_error[:, 2])[:, None]
+        pts = torch.stack([root[:, None, 0] + c * rel[..., 0] - s * rel[..., 1],
+                           root[:, None, 1] + s * rel[..., 0] + c * rel[..., 1], pts[..., 2]], dim=-1)
         ci = torch.floor(pts[..., 0] / res) - origin[:, 0, None]
         cj = torch.floor(pts[..., 1] / res) - origin[:, 1, None]
         valid = torch.isfinite(pts).all(dim=-1) & (ci >= 0) & (ci < m) & (cj >= 0) & (cj < m)

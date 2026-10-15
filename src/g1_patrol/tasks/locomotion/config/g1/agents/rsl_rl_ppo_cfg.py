@@ -56,7 +56,12 @@ class G1WalkStreetPPORunnerCfg(G1WalkRoughPPORunnerCfg):
 
 @configclass
 class G1WalkCityPPORunnerCfg(G1WalkRoughPPORunnerCfg):
+    """Blind walker: the actor sees the proprioceptive history, the critic the privileged state (asymmetric)."""
+
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "g1_walk_city"
-        self.max_iterations = 4000
+        self.max_iterations = 10000
+        self.obs_groups = {"actor": ["policy"], "critic": ["critic"]}
+        self.actor.obs_normalization = True
+        self.critic.obs_normalization = True

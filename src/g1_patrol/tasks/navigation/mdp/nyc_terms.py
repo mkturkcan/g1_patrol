@@ -78,6 +78,33 @@ def in_street(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     return _scenario(env, command_name).in_street().float()
 
 
+def social_speed(
+    env: ManagerBasedRLEnv, command_name: str, slow_speed: float = 0.3, near: float = 0.3, far: float = 1.5
+) -> torch.Tensor:
+    """How much (m/s) the robot walks faster than people do near others: at most ``slow_speed`` within ``near`` of a
+    pedestrian (gap between bodies), rising linearly to 1 m/s at ``far``."""
+    s = _scenario(env, command_name)
+    allowed = slow_speed + (1.0 - slow_speed) * ((s.pedestrian_clearance() - near) / (far - near)).clamp(0.0, 1.0)
+    speed = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1)
+    return (speed - allowed).clamp(min=0.0)
+
+
+def obstacle_speed(
+    env: ManagerBasedRLEnv, command_name: str, slow_speed: float = 0.4, near: float = 0.1, far: float = 0.4
+) -> torch.Tensor:
+    """How much (m/s) the robot walks faster than people do in tight spaces: at most ``slow_speed`` within ``near`` of
+    a structure, rising linearly to 1 m/s at ``far``."""
+    s = _scenario(env, command_name)
+    allowed = slow_speed + (1.0 - slow_speed) * ((s.obstacle_clearance() - near) / (far - near)).clamp(0.0, 1.0)
+    speed = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1)
+    return (speed - allowed).clamp(min=0.0)
+
+
+def street_margin(env: ManagerBasedRLEnv, command_name: str, margin: float = 0.3) -> torch.Tensor:
+    """How far (m) the robot is inside a safety margin along the curb of the roadway."""
+    return (margin - _scenario(env, command_name).street_clearance()).clamp(min=0.0)
+
+
 def _walker(env: ManagerBasedRLEnv, action_name: str) -> WalkerPolicyAction:
     return env.action_manager.get_term(action_name)
 
@@ -127,6 +154,11 @@ def nyc_pedestrian_collision(env: ManagerBasedRLEnv, command_name: str) -> torch
 
 def nyc_obstacle_collision(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     return _scenario(env, command_name).obstacle_clearance() < 0.0
+
+
+def nyc_roadway(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """The robot has stepped into the roadway outside a crosswalk."""
+    return _scenario(env, command_name).in_street()
 
 
 """

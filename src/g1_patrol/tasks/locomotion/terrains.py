@@ -53,44 +53,38 @@ CITY_TERRAINS_CFG = TerrainGeneratorCfg(
     use_cache=False,
     sub_terrains={
         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.05),
-        # sidewalk curbs and building steps
-        "curb_up": terrain_gen.MeshPitTerrainCfg(proportion=0.11, pit_depth_range=(0.05, 0.20), platform_width=3.0),
-        "curb_down": terrain_gen.MeshBoxTerrainCfg(proportion=0.11, box_height_range=(0.05, 0.20), platform_width=3.0),
+        # sidewalk curbs and building steps (up and down, up to 20 cm)
+        "curb_up": terrain_gen.MeshPitTerrainCfg(proportion=0.16, pit_depth_range=(0.05, 0.20), platform_width=3.0),
+        "curb_down": terrain_gen.MeshBoxTerrainCfg(proportion=0.16, box_height_range=(0.05, 0.20), platform_width=3.0),
         # door sills, hoses, cable protectors, kerb strips
         "sills": terrain_gen.MeshRailsTerrainCfg(
-            proportion=0.07, rail_thickness_range=(0.08, 0.3), rail_height_range=(0.03, 0.15), platform_width=3.0
+            proportion=0.08, rail_thickness_range=(0.08, 0.3), rail_height_range=(0.03, 0.12), platform_width=3.0
         ),
         # potholes and bumps: cuboids sunk into / raised from the pavement
         "potholes": terrain_gen.HfDiscreteObstaclesTerrainCfg(
             proportion=0.14,
             obstacle_height_mode="choice",
             obstacle_width_range=(0.3, 1.0),
-            obstacle_height_range=(0.04, 0.14),
+            obstacle_height_range=(0.04, 0.12),
             num_obstacles=30,
             platform_width=1.5,
             border_width=0.25,
         ),
         # broken pavement and cobblestones
         "uneven": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.12, noise_range=(0.01, 0.06), noise_step=0.01, border_width=0.25
+            proportion=0.13, noise_range=(0.01, 0.05), noise_step=0.01, border_width=0.25
         ),
         "cobbles": terrain_gen.MeshRandomGridTerrainCfg(
-            proportion=0.08, grid_width=0.3, grid_height_range=(0.01, 0.06), platform_width=2.0
-        ),
-        # subway and stoop stairs
-        "stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
-            proportion=0.08, step_height_range=(0.05, 0.18), step_width=0.3, platform_width=3.0, border_width=1.0
-        ),
-        "stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.08, step_height_range=(0.05, 0.18), step_width=0.3, platform_width=3.0, border_width=1.0
+            proportion=0.08, grid_width=0.3, grid_height_range=(0.01, 0.05), platform_width=2.0
         ),
         # curb cuts, driveways, cambered streets
         "ramp": terrain_gen.HfPyramidSlopedTerrainCfg(
-            proportion=0.08, slope_range=(0.0, 0.25), platform_width=2.0, border_width=0.25
+            proportion=0.10, slope_range=(0.0, 0.25), platform_width=2.0, border_width=0.25
         ),
         "ramp_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-            proportion=0.08, slope_range=(0.0, 0.25), platform_width=2.0, border_width=0.25
+            proportion=0.10, slope_range=(0.0, 0.25), platform_width=2.0, border_width=0.25
         ),
     },
 )
-"""New York street surfaces: curbs, sills, potholes and bumps, broken pavement, cobblestones, stairs and curb cuts."""
+"""City surfaces for the blind walker: curbs, sills, potholes, broken pavement, cobblestones and ramps. No staircases:
+the navigation routes avoid stairs and subway stairwells are fenced off."""

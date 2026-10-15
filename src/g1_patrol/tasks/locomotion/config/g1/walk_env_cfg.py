@@ -7,13 +7,18 @@ The MDP (scene, observations, actions, events, terminations, physics backend pre
 generic locomotion velocity environment; this module only specialises it for the G1.
 """
 
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass, replace
+from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import (
     CurriculumCfg,
@@ -170,6 +175,8 @@ class G1WalkRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
     def play_mode(self):
         super().play_mode()
+        # evaluate with the robot's sensor noise (Isaac Lab's play mode turns observation corruption off)
+        self.observations.policy.enable_corruption = True
         _follow_robot_camera(self)
 
 
@@ -261,20 +268,37 @@ FEET = ".*_ankle_roll_link"
 
 
 def realistic_g1(prim_path: str = "{ENV_REGEX_NS}/Robot") -> ArticulationCfg:
-    """The G1 with motor torque/speed limits close to the real robot's and firmer ankles.
+    """The G1 with motor models close to the real robot's.
 
-    Isaac Lab's default G1 allows 300 Nm at every leg joint, 2-3x what the real motors produce, which lets a policy
-    get away with a crouched, high-effort gait that would not transfer.
+    Leg and ankle joints are explicit PD controllers at the gains Unitree uses on the robot (hip 100, knee 150,
+    ankle 40 Nm/rad), with the real motors' torque and speed limits and 0-20 ms of actuation latency. Isaac Lab's
+    default G1 allows 300 Nm at every leg joint, 2-3x what the real motors produce, which lets a policy get away with a
+    crouched, high-effort gait that would not transfer.
     """
     robot = replace(G1_MINIMAL_CFG, prim_path=prim_path, joint_ordering="mjwarp", body_ordering="mjwarp")
     actuators = dict(robot.actuators)
-    actuators["legs"] = replace(
-        actuators["legs"],
-        joint_effort_limit={".*_hip_.*": 88.0, ".*_knee_joint": 139.0, "torso_joint": 88.0},
+    legs_effort = {".*_hip_.*": 88.0, ".*_knee_joint": 139.0, "torso_joint": 88.0}
+    actuators["legs"] = DelayedPDActuatorCfg(
+        joint_names_expr=actuators["legs"].joint_names_expr,
+        stiffness={".*_hip_.*": 100.0, ".*_knee_joint": 150.0, "torso_joint": 200.0},
+        damping={".*_hip_.*": 2.0, ".*_knee_joint": 4.0, "torso_joint": 5.0},
+        armature=0.01,
+        actuator_effort_limit=legs_effort,
+        joint_effort_limit=legs_effort,
         joint_velocity_limit={".*_hip_.*": 32.0, ".*_knee_joint": 20.0, "torso_joint": 32.0},
+        min_delay=0,
+        max_delay=4,  # physics steps of 5 ms
     )
-    actuators["feet"] = replace(
-        actuators["feet"], joint_effort_limit=50.0, joint_velocity_limit=37.0, stiffness=40.0, damping=2.0
+    actuators["feet"] = DelayedPDActuatorCfg(
+        joint_names_expr=actuators["feet"].joint_names_expr,
+        stiffness=40.0,
+        damping=2.0,
+        armature=0.01,
+        actuator_effort_limit=50.0,
+        joint_effort_limit=50.0,
+        joint_velocity_limit=37.0,
+        min_delay=0,
+        max_delay=4,
     )
     actuators["arms"] = replace(
         actuators["arms"],
@@ -289,12 +313,66 @@ def realistic_g1(prim_path: str = "{ENV_REGEX_NS}/Robot") -> ArticulationCfg:
 
 
 @configclass
-class CityObservationsCfg(ObservationsCfg):
+class BlindObservationsCfg(ObservationsCfg):
+    """The walker sees only what the G1 measures (IMU, joint encoders), its last action, the command and the gait
+    clock, with sensor noise, per-episode sensor biases (IMU mounting and gyro bias, encoder offsets), 0-20 ms of
+    latency and 5 control steps of history. The critic additionally sees the base velocity and the terrain
+    (asymmetric actor-critic, training only)."""
+
     @configclass
-    class PolicyCfg(ObservationsCfg.PolicyCfg):
+    class PolicyCfg(ObsGroup):
+        base_ang_vel = ObsTerm(
+            func=mdp.base_ang_vel,
+            noise=NoiseModelWithAdditiveBiasCfg(
+                noise_cfg=Unoise(n_min=-0.2, n_max=0.2), bias_noise_cfg=Unoise(n_min=-0.02, n_max=0.02)
+            ),
+            delay_max_lag=1,
+        )
+        projected_gravity = ObsTerm(
+            func=mdp.projected_gravity,
+            noise=NoiseModelWithAdditiveBiasCfg(
+                noise_cfg=Unoise(n_min=-0.05, n_max=0.05), bias_noise_cfg=Unoise(n_min=-0.03, n_max=0.03)
+            ),
+            delay_max_lag=1,
+        )
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        joint_pos = ObsTerm(
+            func=mdp.joint_pos_rel,
+            noise=NoiseModelWithAdditiveBiasCfg(
+                noise_cfg=Unoise(n_min=-0.01, n_max=0.01), bias_noise_cfg=Unoise(n_min=-0.02, n_max=0.02)
+            ),
+            delay_max_lag=1,
+        )
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-1.5, n_max=1.5), delay_max_lag=1)
+        actions = ObsTerm(func=mdp.last_action)
         gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": GAIT_PERIOD})
 
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+            self.history_length = 5
+            self.flatten_history_dim = True
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        actions = ObsTerm(func=mdp.last_action)
+        gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": GAIT_PERIOD})
+        height_scan = ObsTerm(
+            func=mdp.height_scan, params={"sensor_cfg": SceneEntityCfg("height_scanner")}, clip=(-1.0, 1.0)
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
 
 
 @configclass
@@ -340,9 +418,34 @@ class G1CityRewards(G1WalkRewards):
 
 
 @configclass
+class G1BlindCityRewards(G1CityRewards):
+    """City rewards plus smoothness (mechanical power, impacts, jerky targets) and curb safety for a blind walker."""
+
+    joint_power = RewTerm(
+        func=mdp.joint_power,
+        weight=-2.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_.*", ".*_knee_joint", ".*_ankle_.*"])},
+    )
+    feet_impact = RewTerm(
+        func=mdp.feet_impact, weight=-1.0, params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET)}
+    )
+    feet_stumble = RewTerm(
+        func=mdp.feet_stumble, weight=-1.0, params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET)}
+    )
+    action_jerk = RewTerm(func=mdp.action_second_difference, weight=-0.002)
+    # hold the commanded line: no sustained sideways or heading drift (1 s low-pass removes the gait's sway)
+    velocity_drift = RewTerm(
+        func=mdp.velocity_drift, weight=-10.0, params={"command_name": "base_velocity", "time_constant": 1.0}
+    )
+
+
+@configclass
 class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
-    observations: CityObservationsCfg = CityObservationsCfg()
-    rewards: G1CityRewards = G1CityRewards()
+    """Blind walker for the navigation tasks: proprioception only, deployment-like motors and latencies, randomized
+    dynamics, smooth gait shaping, on curbs, sills, potholes, cobblestones and ramps, with shoves."""
+
+    observations: BlindObservationsCfg = BlindObservationsCfg()
+    rewards: G1BlindCityRewards = G1BlindCityRewards()
     curriculum: StreetCurriculumCfg = StreetCurriculumCfg()
 
     def __post_init__(self):
@@ -350,13 +453,21 @@ class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
         # scene
         self.scene.robot = realistic_g1()
         self.scene.terrain.terrain_generator = CITY_TERRAINS_CFG
-        # commands: brisk New York walking pace, sidestepping and backing off to make room, and frequent standing
-        self.commands.base_velocity.ranges.lin_vel_x = (-0.6, 1.2)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.6, 0.6)
+        # contact friction = the robot's (randomized) foot friction in both simulators: MuJoCo-Warp takes the larger of
+        # the two coefficients, so a ground at 1.0 would hide every value below it; a low ground coefficient combined
+        # with "max" (PhysX) resolves to the robot's value, as the multiplied 1.0 ground of the navigation tasks does
+        self.scene.terrain.physics_material = sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="max", restitution_combine_mode="multiply", static_friction=0.1, dynamic_friction=0.1
+        )
+        self.sim.physics_material = self.scene.terrain.physics_material
+        # actions: smaller joint offsets per unit action (smoother, as on the real robot)
+        self.actions.joint_pos.scale = 0.25
+        # commands: walking pace, small sidesteps, turning, backing off, and frequent standing
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.5, 1.1)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.3, 0.3)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.2, 1.2)
         self.commands.base_velocity.rel_standing_envs = 0.15
-        # rewards: tighter velocity tracking; stronger posture, smoothness and calm upper body than the base G1 recipe.
-        # The released policy was trained 4,000 iterations with tracking weight 1.0, then 3,000 iterations with 1.5.
+        # rewards: tighter velocity tracking; stronger posture, smoothness and calm upper body than the base G1 recipe
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
         self.rewards.flat_orientation_l2.weight = -2.0
         self.rewards.ang_vel_xy_l2.weight = -0.1
@@ -364,12 +475,39 @@ class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
         self.rewards.action_rate_l2.weight = -0.01
         self.rewards.feet_air_time.weight = 0.1
         self.rewards.feet_slide.weight = -0.2
+        self.rewards.feet_clearance.params["target_height"] = 0.10  # blind: lift the feet clear of curbs and sills
         self.rewards.joint_deviation_hip.weight = -0.3
         self.rewards.joint_deviation_arms.weight = -0.2
         self.rewards.joint_deviation_torso.weight = -0.3
-        # events: wider friction (wet/painted/metal surfaces), motor gain spread, shoves every 4-8 s (curriculum)
-        self.events.physics_material.params["static_friction_range"] = (0.4, 1.2)
-        self.events.physics_material.params["dynamic_friction_range"] = (0.3, 1.0)
+        # events: friction of wet, painted and metal surfaces, a payload of up to 5 kg and the torso's center of mass,
+        # link masses, motor gains and strength, joint friction and armature, shoves every 4-8 s (curriculum)
+        self.events.physics_material.params["static_friction_range"] = (0.3, 1.2)
+        self.events.physics_material.params["dynamic_friction_range"] = (0.25, 1.0)
+        self.events.add_base_mass.params.update(
+            {"mass_distribution_params": (-1.0, 5.0), "operation": "add", "distribution": "uniform"}
+        )
+        self.events.motor_strength = EventTerm(
+            func=mdp.randomize_motor_strength,
+            mode="startup",
+            params={"asset_cfg": SceneEntityCfg("robot"), "actuators": ["legs", "feet"], "strength_range": (0.8, 1.0)},
+        )
+        self.events.base_com = EventTerm(
+            func=mdp.randomize_rigid_body_com,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+                "com_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (-0.03, 0.03)},
+            },
+        )
+        self.events.link_masses = EventTerm(
+            func=mdp.randomize_rigid_body_mass,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="pelvis|.*_(hip|knee|ankle)_.*"),
+                "mass_distribution_params": (0.9, 1.1),
+                "operation": "scale",
+            },
+        )
         self.events.actuator_gains = EventTerm(
             func=mdp.randomize_actuator_gains,
             mode="startup",
@@ -379,6 +517,17 @@ class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
                 "damping_distribution_params": (0.85, 1.15),
                 "operation": "scale",
             },
+        )
+        leg_joints = SceneEntityCfg("robot", joint_names=[".*_hip_.*", ".*_knee_joint", ".*_ankle_.*"])
+        self.events.joint_friction = EventTerm(
+            func=mdp.randomize_joint_parameters,
+            mode="startup",
+            params={"asset_cfg": leg_joints, "friction_distribution_params": (0.0, 0.3), "operation": "abs"},
+        )
+        self.events.joint_armature = EventTerm(
+            func=mdp.randomize_joint_parameters,
+            mode="startup",
+            params={"asset_cfg": leg_joints, "armature_distribution_params": (0.8, 1.2), "operation": "scale"},
         )
         self.events.push_robot.interval_range_s = (4.0, 8.0)
 

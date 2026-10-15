@@ -31,9 +31,9 @@ SHOTS = [  # (scenario, render clip, start s, caption)
     ("sidewalk", "side/sidewalk_L6_side_ep01_goal_reached.mp4", 1.5, "Sidewalk, level 7. Two-way pedestrian flow and street furniture along the curb."),
     ("scaffold", "chase/scaffold_L6_chase_ep01_goal_reached.mp4", 2.0, "Sidewalk shed, level 7. Scaffold posts and guard rails narrow the walkway."),
     ("crosswalk", "chase/crosswalk_L7_chase_ep04_goal_reached.mp4", 1.0, "Crosswalk, level 8. Curbs, potholes and opposing pedestrian flows."),
-    ("construction", "drone/construction_L7_drone_ep01_goal_reached.mp4", 3.0, "Construction zone, level 8. Chicane of fences and jersey barriers."),
-    ("bottleneck", "chase/bottleneck_L9_chase_ep01_goal_reached.mp4", 3.0, "Doorway, level 10. Pedestrians exit a subway stairwell next to the route."),
-    ("plaza", "drone/plaza_L9_drone_ep03_goal_reached.mp4", 2.0, "Plaza, level 10. Crossing flows and stationary pedestrians."),
+    ("construction", "drone_extra2/construction_L3_drone_ep01_goal_reached.mp4", 3.0, "Construction zone, level 4. Chicane of fences and jersey barriers."),
+    ("bottleneck", "drone/bottleneck_L9_drone_ep01_goal_reached.mp4", 3.0, "Doorway, level 10. Pedestrians exit a subway stairwell next to the route."),
+    ("plaza", "drone_extra3/plaza_L8_drone_ep05_goal_reached.mp4", 1.0, "Plaza, level 9. Crossing flows and stationary pedestrians."),
 ]
 
 

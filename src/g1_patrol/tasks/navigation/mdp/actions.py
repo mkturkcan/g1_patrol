@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 
 class WalkerPolicyAction(PreTrainedPolicyAction):
     """:class:`PreTrainedPolicyAction` that maps the navigation policy's output to a smooth velocity command inside
-    the range the walker was trained on, and feeds the walker noise-free observations.
+    the range the walker was trained on, and feeds the walker the observations it was trained with, including sensor
+    noise, latencies and history, so that the navigator learns to drive the walker as it behaves on the robot.
 
     The policy output is squashed into ``command_ranges`` (``tanh``) or clamped to them, then low-pass filtered: each
     navigation step moves the command a fraction ``smoothing`` of the way to the requested value. The command starts
@@ -28,7 +29,6 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
     cfg: WalkerPolicyActionCfg
 
     def __init__(self, cfg: WalkerPolicyActionCfg, env: ManagerBasedRLEnv):
-        cfg.low_level_observations.enable_corruption = False
         super().__init__(cfg, env)
         # the walker is frozen: never track gradients through it, even outside torch.inference_mode()
         self.policy = torch.no_grad()(self.policy)
@@ -54,11 +54,22 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
         self.prev_command[:] = self._raw_actions
         self._raw_actions[:] = self._raw_actions + self.cfg.smoothing * (target - self._raw_actions)
 
+    def apply_actions(self):
+        # as PreTrainedPolicyAction, but recording the walker's observation history and latency buffers at its rate
+        if self._counter % self.cfg.low_level_decimation == 0:
+            low_level_obs = self._low_level_obs_manager.compute_group("ll_policy", update_history=True)
+            self.low_level_actions[:] = self.policy(low_level_obs)
+            self._low_level_action_term.process_actions(self.low_level_actions)
+            self._counter = 0
+        self._low_level_action_term.apply_actions()
+        self._counter += 1
+
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         ids = slice(None) if env_ids is None else env_ids
         self._raw_actions[ids] = 0.0
         self.prev_command[ids] = 0.0
         self.target[ids] = 0.0
+        self._low_level_obs_manager.reset(env_ids)  # the walker's observation history and latencies
 
 
 @configclass

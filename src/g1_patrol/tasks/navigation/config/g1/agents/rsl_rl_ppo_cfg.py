@@ -53,6 +53,8 @@ class G1NycTeacherPPORunnerCfg(G1CrowdNavPPORunnerCfg):
         # with tanh-squashed commands, extra action noise costs little once saturated and the entropy bonus would
         # inflate it steadily: keep the bonus small
         self.algorithm.entropy_coef = 0.001
+        # a 20 s horizon at 10 Hz: waiting a few seconds for a gap must not look like losing most of the episode
+        self.algorithm.gamma = 0.995
 
 
 @configclass

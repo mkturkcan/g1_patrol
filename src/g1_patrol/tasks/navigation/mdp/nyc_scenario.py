@@ -322,6 +322,14 @@ class NycScenarioCommand(CommandTerm):
             out.append(d)
         return torch.cat(out, dim=1)
 
+    def street_clearance(self) -> torch.Tensor:
+        """Distance (m) from the robot's center to the nearest street area (roadway outside crosswalks); 0 inside."""
+        p, f = self.robot_pos(), self.forbidden
+        dx = torch.maximum(f[..., 0] - p[:, None, 0], p[:, None, 0] - f[..., 1]).clamp(min=0.0)
+        dy = torch.maximum(f[..., 2] - p[:, None, 1], p[:, None, 1] - f[..., 3]).clamp(min=0.0)
+        dist = torch.where(self.forbidden_valid, torch.hypot(dx, dy), torch.full_like(dx, 1e3))
+        return dist.amin(dim=1)
+
     def street_features(self) -> torch.Tensor:
         """Whether the robot is in the street, and the vector (heading frame) to the nearest street-area edge."""
         p = self.robot_pos()
@@ -479,8 +487,12 @@ class NycScenarioCommand(CommandTerm):
         mode = torch.where(standing, torch.full_like(mode, STANDING), mode)
         pos = torch.where(standing[..., None], stand_pos, walk_pos)
         timer = torch.where(standing, 5.0 + 20.0 * torch.rand(n, p, device=dev), delay)
-        # nobody starts on top of the robot: those enter later at the start of their path instead
-        near = torch.linalg.norm(pos - self.start[env_ids][:, None], dim=-1) < cfg.spawn_clearance
+        # nobody starts on top of the robot or walking at it from close by (the robot could not react in time): those
+        # enter later at the start of their path instead
+        to_start = self.start[env_ids][:, None] - pos
+        dist = torch.linalg.norm(to_start, dim=-1)
+        approaching = walking & ((u * to_start).sum(-1) > 0.5 * dist)  # heading within 60 deg of the robot
+        near = (dist < cfg.spawn_clearance) | (approaching & (dist < cfg.approach_spawn_clearance))
         mode = torch.where(near, torch.full_like(mode, PARKED), mode)
         timer = torch.where(near & (mode == PARKED), timer.clamp(min=1.0 + 3.0 * torch.rand(n, p, device=dev)), timer)
         self.ped_mode[env_ids] = mode
@@ -687,6 +699,8 @@ class NycScenarioCommandCfg(CommandTermCfg):
     """Aware pedestrians never move closer than this (m) to the robot by themselves."""
     spawn_clearance: float = 1.5
     """Pedestrians never start, or enter the tile, within this distance (m) of the robot."""
+    approach_spawn_clearance: float = 5.0
+    """Pedestrians walking towards the robot's start never start within this distance (m) of it."""
     max_pedestrian_speed: float = 1.8
     repulsion_strength: float = 1.5
     repulsion_range: float = 0.3

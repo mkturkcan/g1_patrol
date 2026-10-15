@@ -169,7 +169,7 @@ def architecture(icons: str, out: str):
     # locomotion policy
     s.group(1160, 190, 250, 330, "Locomotion policy, 50 Hz")
     s.text(1285, 238, "frozen", size=13, color="#555", italic=True)
-    s.item(1176, 258, 218, 62, "Command, joint states,\ngait phase, height scan", "yellow", size=14)
+    s.item(1176, 258, 218, 62, "Command, IMU, joint states,\ngait clock · 5 steps", "yellow", size=14)
     s.item(1176, 348, 218, 50, "MLP  512 · 256 · 128", "green", "brain-circuit")
     s.item(1176, 428, 218, 44, "Joint targets  ·  37", "pink", "footprints")
     s.arrow([(1285, 320), (1285, 345)])
@@ -213,8 +213,8 @@ def workflow(icons: str, out: str):
     x = xs[1]
     s.image(media("stills/sidewalk_side.jpg"), x + 16, Y + 46, 248, 140, crop=(100, 250, 1000, 758))
     s.item(x + 16, Y + 206, 248, 44, "PPO, Newton (MuJoCo-Warp)", "lavender", "cpu", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "7,000 iterations\nup to 16,384 robots", "yellow", "layers", size=14)
-    s.item(x + 16, Y + 334, 248, 60, "Actuator limits, gait\nand posture rewards", "orange", "gauge", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "21,000 iterations\n16,384 robots, 4 GPUs", "yellow", "layers", size=14)
+    s.item(x + 16, Y + 334, 248, 60, "Robot PD gains, latency,\nfriction, payload, bias", "orange", "gauge", size=14)
     s.item(x + 16, Y + 406, 248, 44, "Pushes up to 1.2 m/s", "cyan", "move", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Frozen walker", "green", "footprints")
 
@@ -222,7 +222,7 @@ def workflow(icons: str, out: str):
     x = xs[2]
     s.image(media("stills/plaza.jpg"), x + 16, Y + 46, 248, 140)
     s.item(x + 16, Y + 206, 248, 44, "PPO, PhysX", "lavender", "cpu", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "4,250 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "12,650 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
     s.item(x + 16, Y + 334, 248, 60, "Privileged state:\npedestrians, obstacles", "cyan", "users", size=14)
     s.item(x + 16, Y + 406, 248, 44, "Adaptive curriculum", "orange", "target", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Teacher  π_{T}", "green", "brain-circuit")
@@ -251,7 +251,7 @@ def workflow(icons: str, out: str):
         s.arrow([(a + W, mid), (b - 3, mid)])
     # curriculum feedback: teacher -> scenario generation (over the top)
     s.arrow([(xs[2] + W / 2, Y), (xs[2] + W / 2, 44), (xs[0] + W / 2, 44), (xs[0] + W / 2, Y - 3)], dash="7 6", sw=2)
-    s.text((xs[0] + xs[2] + W) / 2, 30, "curriculum: tiles drawn by success rate; a level unlocks at 50% success on the level below", size=14, color="#333")
+    s.text((xs[0] + xs[2] + W) / 2, 30, "curriculum: tiles drawn by success rate; a level unlocks at 35% success on the level below", size=14, color="#333")
     # frozen walker feeds the teacher and students
     s.arrow([(xs[1] + W / 2, Y + H), (xs[1] + W / 2, 672), (xs[3] + W / 2, 672), (xs[3] + W / 2, Y + H + 3)], dash="7 6", sw=2)
     s.arrow([(xs[2] + W / 2, 672), (xs[2] + W / 2, Y + H + 3)], dash="7 6", sw=2)

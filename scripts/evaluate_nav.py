@@ -37,7 +37,8 @@ from isaaclab_tasks.utils import resolve_task_config
 
 from evaluate import cli_args, parse_args, resolve_checkpoint
 
-OUTCOMES = ("goal_reached", "pedestrian_collision", "obstacle_collision", "fall", "time_out")
+OUTCOMES = ("goal_reached", "pedestrian_collision", "obstacle_collision", "roadway", "fall", "time_out")
+"""Episode outcomes in order of precedence; tasks without a term (e.g. no roadway) skip it."""
 LEVEL_BUCKETS = {"easy": (0, 3), "medium": (4, 6), "hard": (7, 9)}
 MOTION_TERMS = (
     "forward_command_mps",  # mean forward velocity command
@@ -111,7 +112,8 @@ def main(argv: list[str]) -> None:
         else:
             cells = [("all", "all")]
         num_cells = len(cells)
-        counts = {name: torch.zeros(num_cells, device=dev) for name in OUTCOMES}
+        outcomes = [name for name in OUTCOMES if name in term_manager.active_terms]
+        counts = {name: torch.zeros(num_cells, device=dev) for name in outcomes}
         cell_steps = torch.zeros(num_cells, device=dev)
         cell_delay = torch.zeros(num_cells, device=dev)
         cell_street = torch.zeros(num_cells, device=dev)
@@ -161,7 +163,7 @@ def main(argv: list[str]) -> None:
                     close = (scenario.pedestrian_clearance() < 0.5).float()
                     cell_close += torch.bincount(cell, weights=close, minlength=num_cells)
                 assigned = torch.zeros(base_env.num_envs, dtype=torch.bool, device=dev)
-                for name in OUTCOMES:
+                for name in outcomes:
                     ended = term_manager.get_term(name) & ~assigned
                     assigned |= ended
                     counts[name] += torch.bincount(cell[ended], minlength=num_cells)
@@ -175,7 +177,7 @@ def main(argv: list[str]) -> None:
                     contacts["ped_approach"].extend(scenario.contact_ped_approach_speed[hit].tolist())
                 steps_in_episode[dones.bool()] = 0
 
-        totals = {name: int(counts[name].sum()) for name in OUTCOMES}
+        totals = {name: int(counts[name].sum()) for name in outcomes}
         episodes = sum(totals.values())
         metrics = {
             "checkpoint": resume_path,
@@ -183,7 +185,7 @@ def main(argv: list[str]) -> None:
             "physics": type(base_env.cfg.sim.physics).__name__,
             "num_envs": base_env.num_envs,
             "episodes": episodes,
-            **{f"{name}_rate": totals[name] / max(episodes, 1) for name in OUTCOMES},
+            **{f"{name}_rate": totals[name] / max(episodes, 1) for name in outcomes},
             "mean_time_to_goal_s": sum(success_steps) / max(len(success_steps), 1) * base_env.step_dt,
         }
         if crowd_contacts:
@@ -203,10 +205,10 @@ def main(argv: list[str]) -> None:
             metrics["time_in_street"] = float(cell_street.sum() / cell_steps.sum().clamp(min=1))
             per_cell = {}
             for i, (kind, bucket) in enumerate(cells):
-                eps = sum(float(counts[name][i]) for name in OUTCOMES)
+                eps = sum(float(counts[name][i]) for name in outcomes)
                 per_cell[f"{kind}/{bucket}"] = {
                     "episodes": int(eps),
-                    **{f"{name}_rate": float(counts[name][i]) / max(eps, 1) for name in OUTCOMES},
+                    **{f"{name}_rate": float(counts[name][i]) / max(eps, 1) for name in outcomes},
                     "mean_time_to_goal_s": float(cell_goal_time[i] / counts["goal_reached"][i].clamp(min=1))
                     * base_env.step_dt,
                     "mean_pedestrian_delay_mps": float(cell_delay[i] / cell_steps[i].clamp(min=1)),
@@ -219,11 +221,11 @@ def main(argv: list[str]) -> None:
         print("\n[RESULT] Navigation metrics:")
         print(json.dumps({k: v for k, v in metrics.items() if k != "per_scenario"}, indent=2))
         if nyc:
-            print(f"\n{'scenario/difficulty':24s} {'eps':>5s} {'goal':>6s} {'ped':>6s} {'obst':>6s} {'fall':>6s} "
+            print(f"\n{'scenario/difficulty':24s} {'eps':>5s} {'goal':>6s} {'ped':>6s} {'obst':>6s} {'road':>6s} {'fall':>6s} "
                   f"{'tout':>6s} {'t_goal':>7s} {'delay':>6s}")
             for name, m in metrics["per_scenario"].items():
                 print(f"{name:24s} {m['episodes']:5d} {m['goal_reached_rate']:6.2f} {m['pedestrian_collision_rate']:6.2f} "
-                      f"{m['obstacle_collision_rate']:6.2f} {m['fall_rate']:6.2f} {m['time_out_rate']:6.2f} "
+                      f"{m['obstacle_collision_rate']:6.2f} {m.get('roadway_rate', 0.0):6.2f} {m['fall_rate']:6.2f} {m['time_out_rate']:6.2f} "
                       f"{m['mean_time_to_goal_s']:7.1f} {m['mean_pedestrian_delay_mps']:6.3f}")
         tag = metrics["physics"].removesuffix("Cfg").lower() + ("_train_cfg" if args_cli.train_env_cfg else "")
         with open(os.path.join(out_dir, f"nav_metrics_{tag}.json"), "w") as f:
