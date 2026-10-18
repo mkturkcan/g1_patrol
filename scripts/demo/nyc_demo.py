@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import math
 import os
@@ -234,19 +235,41 @@ class Overlay:
 
 
 def _camera_bounds(lay, center, inside_shed: bool = True) -> tuple:
-    """Where a tile's camera may go (world x0, x1, y0, y1, z_max): in front of facades, inside sheds, on the tile."""
-    from g1_patrol.tasks.navigation.nyc.tiles import BUILDING_Y, HALF_L, HALF_W
+    """Where a tile's camera may go (world x0, x1, y0, y1, z_max): in front of the building fronts, inside sheds, on the
+    tile and over the street beside it."""
+    from g1_patrol.tasks.navigation.nyc.tiles import HALF_L, HALF_W
 
     cx, cy = center
-    y0, y1, z1 = -HALF_W - 6.0, HALF_W - 0.5, 6.0
-    if "facade" in lay.box_mats:
-        y1 = BUILDING_Y - 0.35
-    else:
-        y0 = -HALF_W + 0.5
+    y0, y1, z1 = -HALF_W - 6.0, HALF_W + 6.0, 6.0
+    for y, facing in lay.facades:  # facing -1: a front at +y looking towards -y
+        if facing < 0:
+            y1 = min(y1, y - 0.35)
+        else:
+            y0 = max(y0, y + 0.35)
     posts = [c[1] for c, m in zip(lay.circles, lay.circle_mats) if m == "scaffold_steel"]
     if posts and inside_shed:  # inside the sidewalk shed, under its deck
         y0, z1 = min(posts) + 0.55, 2.5
     return cx - HALF_L - 8.0, cx + HALF_L + 8.0, cy + y0, cy + y1, z1
+
+
+def robot_in_structure(lay, links: np.ndarray, radius: float = 0.04) -> tuple[int, str] | None:
+    """The first robot link (tile-local positions, n x 3) inside one of the tile's structures (poles, posts, walls,
+    barriers, fences), each extended by ``radius`` for the thickness of the limbs, as (link index, structure material);
+    None if there is none."""
+    x, y, z = links[:, 0], links[:, 1], links[:, 2]
+    for (cx, cy, r, z0, z1), mat in zip(lay.circles, lay.circle_mats):
+        base = lay.ground(cx, cy)
+        hit = (np.hypot(x - cx, y - cy) < r + radius) & (z > base + z0 - radius) & (z < base + z1 + radius)
+        if np.any(hit):
+            return int(np.argmax(hit)), mat
+    for (cx, cy, yaw, hx, hy, z0, z1), mat in zip(lay.boxes, lay.box_mats):
+        base = lay.ground(cx, cy)
+        c, s_ = math.cos(yaw), math.sin(yaw)
+        lx, ly = c * (x - cx) + s_ * (y - cy), -s_ * (x - cx) + c * (y - cy)
+        hit = (np.abs(lx) < hx + radius) & (np.abs(ly) < hy + radius) & (z > base + z0 - radius) & (z < base + z1 + radius)
+        if np.any(hit):
+            return int(np.argmax(hit)), mat
+    return None
 
 
 def main(argv):
@@ -322,8 +345,11 @@ def main(argv):
         fps = 1.0 / frame_dt
 
         clips = [None] * len(args.scenarios)
-        # people check per clip: characters appearing or vanishing in view, frames of characters moving backwards
-        people_events = [[0, 0, 0] for _ in args.scenarios]
+        # check per clip: characters appearing or vanishing in view, frames of characters moving backwards, frames in
+        # which a part of the robot is inside a structure
+        people_events = [[0, 0, 0, 0] for _ in args.scenarios]
+        touches = [collections.Counter() for _ in args.scenarios]  # (link, structure) of the frames counted above
+        body_names = base.scene["robot"].body_names
         prev_people = [None] * len(args.scenarios)
         clip_t = [0.0] * len(args.scenarios)
         clip_frames = [0] * len(args.scenarios)
@@ -334,7 +360,8 @@ def main(argv):
             path = os.path.join(out_dir, f"{args.scenarios[e]}_L{levels[e]}_{args.camera}_ep{clip_count[e]:02d}.mp4")
             clips[e] = (imageio.get_writer(path, fps=fps, codec="libx264", quality=9, macro_block_size=8), path)
             clip_t[e], clip_frames[e] = 0.0, 0
-            people_events[e], prev_people[e] = [0, 0, 0], None
+            people_events[e], prev_people[e] = [0, 0, 0, 0], None
+            touches[e].clear()
 
         def close_clip(e, outcome):
             writer, path = clips[e]
@@ -344,9 +371,13 @@ def main(argv):
                 return
             final = path.replace(".mp4", f"_{outcome}.mp4")
             os.replace(path, final)
-            appear, vanish, backward = people_events[e]
+            appear, vanish, backward, touching = people_events[e]
             print(f"[DEMO] {os.path.basename(final)} ({clip_t[e]:.1f} s, {clip_frames[e]} frames; people in view: {appear} appeared, "
-                  f"{vanish} vanished, {backward} character-frames moving backwards)", flush=True)
+                  f"{vanish} vanished, {backward} character-frames moving backwards; robot inside a structure in "
+                  f"{touching} frames)", flush=True)
+            if touching:
+                print(f"[DEMO]   robot inside: " + ", ".join(f"{link} in {mat} ({n})" for (link, mat), n in touches[e].most_common()),
+                      flush=True)
 
         import carb
         import omni.kit.app
@@ -366,7 +397,14 @@ def main(argv):
             settings.set("/app/player/playSimulations", False)
             omni.kit.app.get_app().update()
             settings.set("/app/player/playSimulations", bool(play))
+            links = base.scene["robot"].data.body_pos_w.torch.cpu().numpy()
+            origins = terrain.env_origins.cpu().numpy()
             for e, cam in enumerate(cameras):
+                local = links[e] - np.array([centers[e][0], centers[e][1], origins[e][2]])
+                inside = robot_in_structure(generator.layouts[tiles[e]], local) if clip_t[e] > 2 * frame_dt else None
+                if inside is not None:
+                    people_events[e][3] += 1
+                    touches[e][(body_names[inside[0]], inside[1])] += 1
                 visible, points, backward = crowd.visible[e], crowd.points[e], crowd.backward[e]
                 view = cam.in_view(points)
                 if clip_t[e] > 2 * frame_dt and prev_people[e] is not None:

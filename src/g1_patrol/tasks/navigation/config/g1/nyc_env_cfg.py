@@ -27,12 +27,12 @@ from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.sensors.ray_caster import MultiMeshRayCasterCameraCfg, MultiMeshRayCasterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
-from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import MySceneCfg
 
 from g1_patrol.assets import G1_PATROL_ASSETS_DIR
+from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 from g1_patrol.tasks.locomotion.config.g1.walk_env_cfg import G1WalkCityEnvCfg
 
 from ... import mdp
@@ -320,13 +320,13 @@ class StudentProprioCfg(ObsGroup):
     goal = ObsTerm(func=mdp.generated_commands, params={"command_name": "nyc"}, noise=Unoise(n_min=-0.1, n_max=0.1))
     base_lin_vel = ObsTerm(
         func=mdp.base_lin_vel,
-        noise=NoiseModelWithAdditiveBiasCfg(
+        noise=PerEpisodeAdditiveBiasCfg(
             noise_cfg=Unoise(n_min=-0.1, n_max=0.1), bias_noise_cfg=Unoise(n_min=-0.05, n_max=0.05)
         ),
     )
     base_ang_vel = ObsTerm(
         func=mdp.base_ang_vel,
-        noise=NoiseModelWithAdditiveBiasCfg(
+        noise=PerEpisodeAdditiveBiasCfg(
             noise_cfg=Unoise(n_min=-0.2, n_max=0.2), bias_noise_cfg=Unoise(n_min=-0.02, n_max=0.02)
         ),
     )

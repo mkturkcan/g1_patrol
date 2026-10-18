@@ -270,6 +270,34 @@ class NycScenarioCommand(CommandTerm):
         gap = torch.minimum(d_c, d_b) - radius
         return gap.squeeze(1) if squeeze else gap
 
+    def limb_points(self) -> torch.Tensor:
+        """Tile-local positions (n, k, 3) of the robot's arm and hand links; z is the height above the ground below them."""
+        if getattr(self, "_limb_ids", None) is None:
+            self._limb_ids, _ = self.robot.find_bodies(self.cfg.limb_bodies)
+        p = self.robot.data.body_pos_w.torch[:, self._limb_ids]
+        xy = p[..., :2] - self.tile_center[:, None]
+        z = p[..., 2] - self.layout.ground_height(self.tile_row, self.tile_col, xy)
+        return torch.cat([xy, z[..., None]], dim=-1)
+
+    def limb_obstacle_clearance(self) -> torch.Tensor:
+        """Gap between the arm and hand links and the nearest structure that spans their height (n,)."""
+        pts = self.limb_points()
+        xy, h, r = pts[..., :2], pts[..., 2:3], self.cfg.limb_radius
+        circ = self.circles
+        d_c = torch.linalg.norm(xy[:, :, None] - circ[:, None, :, :2], dim=-1) - circ[:, None, :, 2]
+        span_c = self.circle_valid[:, None] & (h > circ[:, None, :, 3] - r) & (h < circ[:, None, :, 4] + r)
+        d_b, _ = box_distance(xy, self.boxes)
+        span_b = self.box_valid[:, None] & (h > self.boxes[:, None, :, 5] - r) & (h < self.boxes[:, None, :, 6] + r)
+        far = torch.full_like(d_c[..., :1], 1e3)
+        gap = torch.minimum(torch.where(span_c, d_c, far).amin(dim=-1), torch.where(span_b, d_b, far).amin(dim=-1))
+        return gap.amin(dim=1) - r
+
+    def limb_pedestrian_clearance(self) -> torch.Tensor:
+        """Gap between the arm and hand links and the nearest pedestrian (n,)."""
+        xy = self.limb_points()[..., :2]
+        d = torch.linalg.norm(self.ped_pos[:, None] - xy[:, :, None], dim=-1) - self.cfg.pedestrian_radius - self.cfg.limb_radius
+        return torch.where(self.visible_peds()[:, None], d, torch.full_like(d, 1e3)).amin(dim=(1, 2))
+
     def in_street(self) -> torch.Tensor:
         p = self.robot_pos()
         f = self.forbidden
@@ -672,6 +700,10 @@ class NycScenarioCommandCfg(CommandTermCfg):
 
     success_threshold: float = 0.5
     robot_radius: float = 0.25
+    limb_bodies: str = ".*_(shoulder_roll|elbow_pitch|elbow_roll|palm|zero|one|two|three|four|five|six)_link"
+    limb_radius: float = 0.04
+    """Arm and hand links (spheres of this radius) checked for contact in addition to the footprint ``robot_radius``: the
+    G1 model has no collision geometry on its arms, and the footprint does not cover their swing."""
     robot_spawn_height: float = 0.8
     robot_nominal_speed: float = 0.8
     """Speed (m/s) used to time pedestrian encounters with the robot."""

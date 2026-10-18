@@ -16,8 +16,8 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass, replace
-from isaaclab.utils.noise import NoiseModelWithAdditiveBiasCfg
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import (
@@ -28,6 +28,8 @@ from isaaclab_tasks.core.velocity.velocity_env_cfg import (
 )
 
 from isaaclab_assets import G1_MINIMAL_CFG
+
+from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 
 from ... import mdp
 from ...terrains import CITY_TERRAINS_CFG, STREET_TERRAINS_CFG
@@ -167,6 +169,8 @@ class G1WalkRoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         )
         # terminations: falling over (torso touching the ground) ends the episode
         self.terminations.base_contact.params["sensor_cfg"].body_names = "torso_link"
+        # a robot whose simulated state became non-finite (a rare solver failure) is reset, see locomotion/env.py
+        self.terminations.non_finite_state = DoneTerm(func=mdp.non_finite_state, time_out=True)
         # events: randomize torso mass, keep the default pushes and reset velocities
         self.events.add_base_mass.params["asset_cfg"].body_names = "torso_link"
         self.events.base_com = None
@@ -323,14 +327,14 @@ class BlindObservationsCfg(ObservationsCfg):
     class PolicyCfg(ObsGroup):
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel,
-            noise=NoiseModelWithAdditiveBiasCfg(
+            noise=PerEpisodeAdditiveBiasCfg(
                 noise_cfg=Unoise(n_min=-0.2, n_max=0.2), bias_noise_cfg=Unoise(n_min=-0.02, n_max=0.02)
             ),
             delay_max_lag=1,
         )
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
-            noise=NoiseModelWithAdditiveBiasCfg(
+            noise=PerEpisodeAdditiveBiasCfg(
                 noise_cfg=Unoise(n_min=-0.05, n_max=0.05), bias_noise_cfg=Unoise(n_min=-0.03, n_max=0.03)
             ),
             delay_max_lag=1,
@@ -338,7 +342,7 @@ class BlindObservationsCfg(ObservationsCfg):
         velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel,
-            noise=NoiseModelWithAdditiveBiasCfg(
+            noise=PerEpisodeAdditiveBiasCfg(
                 noise_cfg=Unoise(n_min=-0.01, n_max=0.01), bias_noise_cfg=Unoise(n_min=-0.02, n_max=0.02)
             ),
             delay_max_lag=1,

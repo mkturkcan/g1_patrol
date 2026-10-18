@@ -1,11 +1,11 @@
-"""Overview video for the project page: scenarios, commands, sensing, architecture, workflow and results (1920 x 1080).
+"""Overview video for the project page: scenarios, sensing, architecture, workflow and results (1920 x 1080).
 
 Inputs are the demo renders (scripts/demo/nyc_demo.py), the figures (make_diagrams.py), the point cloud and sensor
 images in docs/, and the evaluation results. Text is set in Google Sans (pass the TTF directory).
 
 Usage:
     python scripts/figures/make_video.py --renders <renders dir> --fonts <dir with GoogleSans-*.ttf> \
-        --gait_before <clip> --gait_after <clip> --out docs/media/overview.mp4
+        --out docs/media/overview.mp4
 """
 
 import argparse
@@ -28,12 +28,12 @@ TITLE = {"sidewalk": "Sidewalk", "scaffold": "Sidewalk shed", "crosswalk": "Cros
          "construction": "Construction zone", "bottleneck": "Doorway", "plaza": "Plaza"}  # fmt: skip
 
 SHOTS = [  # (scenario, render clip, start s, caption)
-    ("sidewalk", "side/sidewalk_L6_side_ep01_goal_reached.mp4", 1.5, "Sidewalk, level 7. Two-way pedestrian flow and street furniture along the curb."),
+    ("sidewalk", "chase/sidewalk_L6_chase_ep02_goal_reached.mp4", 6.0, "Sidewalk, level 7. Two-way pedestrian flow and street furniture along the curb."),
     ("scaffold", "chase/scaffold_L6_chase_ep01_goal_reached.mp4", 2.0, "Sidewalk shed, level 7. Scaffold posts and guard rails narrow the walkway."),
-    ("crosswalk", "chase/crosswalk_L7_chase_ep04_goal_reached.mp4", 1.0, "Crosswalk, level 8. Curbs, potholes and opposing pedestrian flows."),
-    ("construction", "drone_extra2/construction_L3_drone_ep01_goal_reached.mp4", 3.0, "Construction zone, level 4. Chicane of fences and jersey barriers."),
+    ("crosswalk", "chase2/crosswalk_L7_chase_ep03_goal_reached.mp4", 2.5, "Crosswalk, level 8. Curbs, potholes and opposing pedestrian flows."),
+    ("construction", "drone/construction_L7_drone_ep01_goal_reached.mp4", 4.0, "Construction zone, level 8. Chicane of fences and jersey barriers."),
     ("bottleneck", "drone/bottleneck_L9_drone_ep01_goal_reached.mp4", 3.0, "Doorway, level 10. Pedestrians exit a subway stairwell next to the route."),
-    ("plaza", "drone_extra3/plaza_L8_drone_ep05_goal_reached.mp4", 1.0, "Plaza, level 9. Crossing flows and stationary pedestrians."),
+    ("plaza", "drone2/plaza_L9_drone_ep02_goal_reached.mp4", 4.0, "Plaza, level 10. Crossing flows and stationary pedestrians."),
 ]
 
 
@@ -270,8 +270,6 @@ def main():
     parser.add_argument("--renders", required=True)
     parser.add_argument("--fonts", required=True)
     parser.add_argument("--results", default=os.path.join(DOCS, "data", "results.json"))
-    parser.add_argument("--gait_before", default=None, help="Clip of the earlier teacher (clamped commands).")
-    parser.add_argument("--gait_after", default=None, help="Clip of the final teacher, same scenario and seed.")
     parser.add_argument("--out", default=os.path.join(DOCS, "media", "overview.mp4"))
     args = parser.parse_args()
     fonts = Fonts(args.fonts)
@@ -308,37 +306,6 @@ def main():
     for key, clip, start, cap in SHOTS:
         c = Clip(os.path.join(args.renders, clip), start + 3.0)
         segment(5.0, lambda t, c=c, cap=cap: caption(fit(c.frame(t), W, H), fonts, cap))
-
-    # velocity commands: earlier teacher (clamped) and final teacher side by side
-    if args.gait_before and args.gait_after and "teacher_v2" in summary:
-        before, after = Clip(args.gait_before, 1.0), Clip(args.gait_after, 1.0)
-        m0, m1 = summary["teacher_v2"]["motion"], summary["teacher"]["motion"]
-        pct = lambda v: f"{100 * v:.0f}%"
-        lines = [
-            ("Lateral command above 0.25 m/s", pct(m0["fraction_lateral_above_0.25mps"]), pct(m1["fraction_lateral_above_0.25mps"])),
-            ("Command at a range limit", pct(m0["fraction_saturated"]), pct(m1["fraction_saturated"])),
-            ("Yaw-rate command change", f'{m0["yaw_rate_command_change_radps2"]:.1f} rad/s²', f'{m1["yaw_rate_command_change_radps2"]:.1f} rad/s²'),
-            ("Falls", f'{100 * summary["teacher_v2"]["fall"]:.1f}%', f'{100 * summary["teacher"]["fall"]:.1f}%'),
-        ]
-
-        def gait(t):
-            img = section_title(Image.new("RGB", (W, H), BG), fonts, "Velocity commands: clamped (left) and smoothed (right)")
-            d = ImageDraw.Draw(img)
-            pw, ph = 880, 495
-            for k, (clip, label) in enumerate(((before, "Earlier teacher: clamped commands"), (after, "Final teacher: tanh range, low-pass filter"))):
-                x = 64 + k * (pw + 48)
-                img.paste(fit(clip.frame(t), pw, ph), (x, 170))
-                d.rounded_rectangle((x, 170, x + pw, 170 + ph), radius=10, outline=RULE, width=2)
-                d.text((x, 170 + ph + 36), label, font=fonts(28, 500), fill=INK, anchor="lm")
-            y = 170 + ph + 100
-            for name, a, b in lines:
-                d.text((64, y), name, font=fonts(26), fill=INK2, anchor="lm")
-                d.text((64 + pw, y), a, font=fonts(26, 500), fill=INK, anchor="rm")
-                d.text((64 + 2 * pw + 48, y), b, font=fonts(26, 500), fill=INK, anchor="rm")
-                y += 46
-            return img
-
-        segment(9.0, gait)
 
     # sensing
     cloud = cloud_frames(os.path.join(DOCS, "data", "cloud_crosswalk.bin"), int(7 * FPS), (1100, 820))

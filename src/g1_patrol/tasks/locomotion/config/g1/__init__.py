@@ -10,7 +10,7 @@ from . import agents
 
 gym.register(
     id="G1Patrol-Walk-Flat",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="g1_patrol.tasks.locomotion.env:WalkEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.walk_env_cfg:G1WalkFlatEnvCfg",
@@ -21,7 +21,7 @@ gym.register(
 
 gym.register(
     id="G1Patrol-Walk-Street",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="g1_patrol.tasks.locomotion.env:WalkEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.walk_env_cfg:G1WalkStreetEnvCfg",
@@ -32,7 +32,7 @@ gym.register(
 
 gym.register(
     id="G1Patrol-Walk-City",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="g1_patrol.tasks.locomotion.env:WalkEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.walk_env_cfg:G1WalkCityEnvCfg",

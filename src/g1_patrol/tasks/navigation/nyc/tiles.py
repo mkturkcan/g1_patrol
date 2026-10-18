@@ -48,6 +48,7 @@ class TileLayout:
     paths: list = field(default_factory=list)  # (points, half_width, weight, free_length), walked first to last
     standing: list = field(default_factory=list)  # (x, y)
     forbidden: list = field(default_factory=list)  # (x0, x1, y0, y1) street areas
+    facades: list = field(default_factory=list)  # (y, facing): building fronts along the tile's long edges, facing +-y
     crowd: tuple = (4, 12)  # number of pedestrians at difficulty 0 and 1
     # looks (rendering only)
     circle_mats: list = field(default_factory=list)  # material name per circle
@@ -227,6 +228,19 @@ OFF = HALF_L + OFF_TILE
 """x of the off-tile ends of paths along the street."""
 BUILDING_Y = HALF_W - 0.6
 """Facade line; the building occupies y > BUILDING_Y."""
+EDGE_WALL = 0.3
+"""Depth of the building fronts along both long edges of open tiles (crosswalk, plaza)."""
+ROUTE_Y = HALF_W - EDGE_WALL - 0.8
+"""Ends of the crossing routes: in the middle of the sidewalk's free band between the bollards at the curb and the
+building fronts."""
+
+
+def _edge_facades(lay: TileLayout):
+    """Building fronts along both long edges of an open tile, so that the walkable area ends where the city around it
+    begins (the robot perceives them and stops at them, as at any other facade)."""
+    for side in (1.0, -1.0):
+        lay.box(0.0, side * (HALF_W - EDGE_WALL / 2), 0.0, 2 * HALF_L, EDGE_WALL, 4.0, mat="facade")
+        lay.facades.append((side * (HALF_W - EDGE_WALL), -side))
 
 
 def _sidewalk_street(lay: TileLayout, d: float, width: float, rng: np.random.Generator, doors: int = 2) -> float:
@@ -241,6 +255,7 @@ def _sidewalk_street(lay: TileLayout, d: float, width: float, rng: np.random.Gen
     lay.noise(-HALF_L, HALF_L, -HALF_W, curb_y - 0.1, _lerp(0.005, 0.03, d), rng)
     lay.potholes(-HALF_L, HALF_L, -HALF_W, curb_y - 0.2, int(_lerp(2, 14, d)), _lerp(0.04, 0.12, d), rng)
     lay.forbidden.append((-HALF_L, HALF_L, -HALF_W, curb_y))
+    lay.facades.append((BUILDING_Y, -1.0))
     lay.paint_rect(-HALF_L, HALF_L, curb_y - 0.05, curb_y + 0.3, "curb")
     if curb_y - 2.4 > -HALF_W:  # parking lane line
         lay.paint_rect(-HALF_L, HALF_L, curb_y - 2.5, curb_y - 2.38, "stripe_white")
@@ -361,6 +376,7 @@ def build_crosswalk(d: float, rng: np.random.Generator) -> TileLayout:
         lay.ramp_y(cx - half, cx + half, street[1], street[1] + 1.2, 0.0, curb_h)
         lay.ramp_y(cx - half, cx + half, street[0], street[0] - 1.2, 0.0, curb_h)
     lay.forbidden += [(-HALF_L, cx - half, street[0], street[1]), (cx + half, HALF_L, street[0], street[1])]
+    _edge_facades(lay)
     # looks: curbs, high-visibility zebra bars across the street, stop lines and a yellow center line
     for y in street:
         lay.paint_rect(-HALF_L, HALF_L, y - 0.15, y + 0.15, "curb")
@@ -393,8 +409,8 @@ def build_crosswalk(d: float, rng: np.random.Generator) -> TileLayout:
             for to_x in (-OFF, OFF):
                 lay.path([(from_x, y), (cx, y), (cx, -y), (to_x, -y)], half * 0.8, 0.5)
     lay.routes += [
-        (cx + rng.uniform(-1, 1), -HALF_W + 1.0, cx + rng.uniform(-1, 1), HALF_W - 1.0),
-        (cx + rng.uniform(-1, 1), HALF_W - 1.0, cx + rng.uniform(-1, 1), -HALF_W + 1.0),
+        (cx + rng.uniform(-1, 1), -ROUTE_Y, cx + rng.uniform(-1, 1), ROUTE_Y),
+        (cx + rng.uniform(-1, 1), ROUTE_Y, cx + rng.uniform(-1, 1), -ROUTE_Y),
     ]
     lay.crowd = (4, 16)
     return lay
@@ -486,10 +502,11 @@ def build_bottleneck(d: float, rng: np.random.Generator) -> TileLayout:
 def build_plaza(d: float, rng: np.random.Generator) -> TileLayout:
     """A pedestrian plaza (Times Square): dense criss-crossing crowds, tourists standing around, planters and kiosks."""
     lay = _new_layout("plaza", d)
+    _edge_facades(lay)
     lay.noise(-HALF_L, HALF_L, -HALF_W, HALF_W, _lerp(0.0, 0.02, d), rng)
     lay.paint_rect(-HALF_L, HALF_L, -HALF_W, HALF_W, "plaza")
     edge = [(x, y) for x in (-7.5, 7.5) for y in np.linspace(-4, 4, 3)] + [
-        (x, y) for y in (-4.6, 4.6) for x in np.linspace(-6, 6, 4)
+        (x, y) for y in (-4.0, 4.0) for x in np.linspace(-6, 6, 4)
     ]
     for _ in range(2):
         a, b = rng.choice(len(edge), size=2, replace=False)

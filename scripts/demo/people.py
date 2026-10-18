@@ -47,6 +47,9 @@ WALK_SPEED = 1.08
 FPS = 30.0
 YAW_OFFSET = math.pi / 2
 """The characters face -y in their own frame."""
+MIRROR_YAW = math.pi
+"""The ``_mirror`` walk and idle clips are mirrored front to back: posed like the others, a character faces the opposite
+way (measured with ``check_character_facing.py``), so it is turned by this angle to face its direction of motion."""
 
 
 def _load_clip(path: str) -> dict:
@@ -116,8 +119,9 @@ class AnimatedCrowd:
                 xf.ClearXformOpOrder()
                 translate, rotate = xf.AddTranslateOp(), xf.AddRotateZOp()
                 anim = UsdSkel.Animation.Define(stage, f"{root}/env_{e}/anim_{k}")
-                walk = self.clips[name]["walk_loop_in_place"][int(rng.integers(2))]
-                idle = self.clips[name]["idle_loop"][int(rng.integers(2))]
+                mirror = int(rng.integers(2))  # the same version of both clips, so that walk and idle poses blend
+                walk = self.clips[name]["walk_loop_in_place"][mirror]
+                idle = self.clips[name]["idle_loop"][mirror]
                 anim.CreateJointsAttr().Set(walk["joints"])
                 anim.CreateScalesAttr().Set(walk["scales"])
                 rot_attr, trans_attr = anim.CreateRotationsAttr(), anim.CreateTranslationsAttr()
@@ -129,7 +133,7 @@ class AnimatedCrowd:
                     "rot": rot_attr, "trans": trans_attr, "walk": walk, "idle": idle,
                     "walk_phase": float(rng.uniform()), "idle_phase": float(rng.uniform()),
                     "stride": float(rng.uniform(0.92, 1.08)),  # people's step length varies a little
-                    "yaw": None, "blend": 0.0, "visible": None,
+                    "yaw": None, "blend": 0.0, "visible": None, "facing": MIRROR_YAW if mirror else 0.0,
                 })  # fmt: skip
         # hide the capsules these characters replace
         for e in env_ids:
@@ -221,4 +225,4 @@ class AnimatedCrowd:
             person["rot"].Set(Vt.QuatfArray.FromNumpy(rot.astype(np.float32)))
             person["trans"].Set(Vt.Vec3fArray.FromNumpy(trans.astype(np.float32)))
             person["translate"].Set(Gf.Vec3d(float(pos[e, k, 0]), float(pos[e, k, 1]), float(ground[e, k])))
-            person["rotate"].Set(math.degrees(person["yaw"] + YAW_OFFSET))
+            person["rotate"].Set(math.degrees(person["yaw"] + YAW_OFFSET + person["facing"]))

@@ -145,15 +145,18 @@ def nyc_goal_reached_termination(env: ManagerBasedRLEnv, command_name: str) -> t
 
 
 def nyc_pedestrian_collision(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """The robot's footprint or one of its arm and hand links touches a pedestrian."""
     s = _scenario(env, command_name)
-    hit = s.pedestrian_clearance() < 0.0
+    hit = (s.pedestrian_clearance() < 0.0) | (s.limb_pedestrian_clearance() < 0.0)
     if hit.any():
         s.record_contacts()
     return hit
 
 
 def nyc_obstacle_collision(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
-    return _scenario(env, command_name).obstacle_clearance() < 0.0
+    """The robot's footprint, or one of its arm and hand links at a structure's height, touches a structure."""
+    s = _scenario(env, command_name)
+    return (s.obstacle_clearance() < 0.0) | (s.limb_obstacle_clearance() < 0.0)
 
 
 def nyc_roadway(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:

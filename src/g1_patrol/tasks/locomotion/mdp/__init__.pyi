@@ -13,6 +13,7 @@ __all__ = [
     "gait_contact",
     "gait_phase",
     "joint_power",
+    "non_finite_state",
     "ramp_push_velocity",
     "randomize_motor_strength",
     "velocity_drift",
@@ -36,3 +37,4 @@ from .gait import (
     randomize_motor_strength,
     velocity_drift,
 )
+from .terminations import non_finite_state

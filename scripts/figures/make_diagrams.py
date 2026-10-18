@@ -211,7 +211,7 @@ def workflow(icons: str, out: str):
 
     # locomotion
     x = xs[1]
-    s.image(media("stills/sidewalk_side.jpg"), x + 16, Y + 46, 248, 140, crop=(100, 250, 1000, 758))
+    s.image(media("stills/scaffold_side.jpg"), x + 16, Y + 46, 248, 140, crop=(550, 200, 1450, 708))
     s.item(x + 16, Y + 206, 248, 44, "PPO, Newton (MuJoCo-Warp)", "lavender", "cpu", size=14)
     s.item(x + 16, Y + 262, 248, 60, "21,000 iterations\n16,384 robots, 4 GPUs", "yellow", "layers", size=14)
     s.item(x + 16, Y + 334, 248, 60, "Robot PD gains, latency,\nfriction, payload, bias", "orange", "gauge", size=14)
@@ -222,7 +222,7 @@ def workflow(icons: str, out: str):
     x = xs[2]
     s.image(media("stills/plaza.jpg"), x + 16, Y + 46, 248, 140)
     s.item(x + 16, Y + 206, 248, 44, "PPO, PhysX", "lavender", "cpu", size=14)
-    s.item(x + 16, Y + 262, 248, 60, "12,650 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
+    s.item(x + 16, Y + 262, 248, 60, "10,000 iterations\n8,192 robots, 4 GPUs", "yellow", "layers", size=14)
     s.item(x + 16, Y + 334, 248, 60, "Privileged state:\npedestrians, obstacles", "cyan", "users", size=14)
     s.item(x + 16, Y + 406, 248, 44, "Adaptive curriculum", "orange", "target", size=14)
     s.item(x + 16, Y + 470, 248, 46, "Teacher  π_{T}", "green", "brain-circuit")

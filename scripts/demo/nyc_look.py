@@ -16,7 +16,7 @@ import trimesh
 import isaaclab.sim as sim_utils
 from pxr import Gf, Sdf, UsdGeom, UsdLux, Vt
 
-from g1_patrol.tasks.navigation.nyc.tiles import BUILDING_Y, HALF_L, HALF_W, HF_RESOLUTION, TILE_SIZE, TileLayout
+from g1_patrol.tasks.navigation.nyc.tiles import HALF_L, HALF_W, HF_RESOLUTION, TILE_SIZE, TileLayout
 
 NVIDIA = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.1/NVIDIA"
 ROOT = "/World/Demo"
@@ -76,7 +76,10 @@ COLORS = {  # material -> (diffuse rgb, roughness, metallic)
     "cornice": ((0.72, 0.7, 0.64), 0.7, 0.0),
     "bark": ((0.22, 0.16, 0.11), 0.9, 0.0),
     "awning": ((0.45, 0.06, 0.06), 0.8, 0.0),
+    "sidewalk_joint": ((0.2, 0.2, 0.19), 0.9, 0.0),
 }
+FLAG = 1.5
+"""Size (m) of the concrete flags of New York sidewalks (5 ft); their joints are drawn on the sidewalk."""
 BUILDING_MATERIALS = ["brick_red", "brick_brown", "limestone", "brick_red", "concrete_wall"]
 
 
@@ -137,6 +140,43 @@ def _smooth_ground_mesh(lay: TileLayout) -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def _sidewalk_joints(lay: TileLayout, cells: np.ndarray, width: float = 0.025) -> trimesh.Trimesh | None:
+    """Joints between the concrete flags of the sidewalk: thin strips every ``FLAG`` m across and along the street,
+    on the sidewalk cells only, slightly above the ground."""
+    quads = []
+    nx, ny = cells.shape
+    for i in range(nx):
+        x0 = -TILE_SIZE[0] / 2 + i * HF_RESOLUTION
+        for j in range(ny):
+            if cells[i, j] != "sidewalk":
+                continue
+            y0 = -TILE_SIZE[1] / 2 + j * HF_RESOLUTION
+            lines_x = [k * FLAG for k in range(int(np.ceil(x0 / FLAG)), int(np.floor((x0 + HF_RESOLUTION) / FLAG)) + 1)]
+            lines_y = [HALF_W - k * FLAG for k in range(int(np.ceil((HALF_W - y0 - HF_RESOLUTION) / FLAG)),
+                                                        int(np.floor((HALF_W - y0) / FLAG)) + 1)]
+            for lx in lines_x:  # across the street
+                quads.append(((lx - width / 2, y0), (lx + width / 2, y0 + HF_RESOLUTION)))
+            for ly in lines_y:  # along the street
+                quads.append(((x0, ly - width / 2), (x0 + HF_RESOLUTION, ly + width / 2)))
+    if not quads:
+        return None
+
+    def ground(x: float, y: float) -> float:  # bilinear in the height field, so that the strips follow the ground
+        u = np.clip((x + TILE_SIZE[0] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[0] - 1.001)
+        v = np.clip((y + TILE_SIZE[1] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[1] - 1.001)
+        i, j = int(u), int(v)
+        a, b = u - i, v - j
+        h = lay.heights
+        return float((1 - a) * (1 - b) * h[i, j] + a * (1 - b) * h[i + 1, j] + (1 - a) * b * h[i, j + 1] + a * b * h[i + 1, j + 1])
+
+    vertices, faces = [], []
+    for (ax, ay), (bx, by) in quads:
+        k = len(vertices)
+        vertices += [(x, y, ground(x, y) + 0.004) for x, y in ((ax, ay), (bx, ay), (bx, by), (ax, by))]
+        faces += [(k, k + 1, k + 2), (k, k + 2, k + 3)]
+    return trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=False)
+
+
 def _submesh(vertices: np.ndarray, faces: np.ndarray) -> trimesh.Trimesh:
     used, inverse = np.unique(faces.reshape(-1), return_inverse=True)
     return trimesh.Trimesh(vertices=vertices[used], faces=inverse.reshape(-1, 3), process=False)
@@ -160,17 +200,19 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
     face_mat = np.where(steep & np.isin(face_mat, ["sidewalk", "curb"]), "curb", face_mat)
     for mat in np.unique(face_mat):
         add_mesh(stage, f"{root}/ground_{mat}", _submesh(vertices, faces[face_mat == mat]), mat)
+    joints = _sidewalk_joints(lay, cells.astype(str))
+    if joints is not None:
+        joints.apply_translation(offset)
+        add_mesh(stage, f"{root}/sidewalk_joints", joints, "sidewalk_joint")
     # structures, per material
     for mat, mesh in lay.structure_meshes_by_material().items():
         mesh.apply_translation(offset)
         add_mesh(stage, f"{root}/structure_{mat}", mesh, mat if mat in TEXTURED or mat in COLORS else "concrete")
-    # city block above the facade (tiles with a facade) or on both sides (open tiles)
-    has_facade = any(m == "facade" for m in lay.box_mats)
-    edges = [BUILDING_Y] if has_facade else [HALF_W + 0.3, -HALF_W - 0.3]
-    for k, y in enumerate(edges):
-        _city_block(stage, f"{root}/block_{k}", lay, center, y, facing=-1.0 if y > 0 else 1.0,
-                    base=4.0 if y == BUILDING_Y else 0.0, rng=rng)
-    if has_facade and far_side:
+    # city blocks on top of the tile's 4 m building fronts (one along a street, two around open tiles); the street
+    # tiles also get the far side of the street
+    for k, (y, facing) in enumerate(lay.facades):
+        _city_block(stage, f"{root}/block_{k}", lay, center, y, facing=facing, base=4.0, rng=rng)
+    if len(lay.facades) == 1 and far_side:
         _far_side(stage, f"{root}/far_side", lay, center, rng)
     _storefronts(stage, f"{root}/storefronts", lay, center, rng)
     if lay.kind == "plaza":
@@ -250,15 +292,21 @@ def _storefronts(stage, root: str, lay: TileLayout, center, rng):
     """Shop windows on the tile's ground-floor facade, some with an awning (above head height, visual only)."""
     cx, cy = center
     glass, awnings, frames = [], [], []
-    for (bx, by, _, hx, _, _, _), mat in zip(lay.boxes, lay.box_mats):
+    for (bx, by, _, hx, hy, _, _), mat in zip(lay.boxes, lay.box_mats):
         if mat != "facade" or 2 * hx < 1.6:
             continue
-        z = lay.ground(bx, BUILDING_Y - 0.3)
-        width = 2 * hx - 0.8
-        glass.append(_box((cx + bx, cy + BUILDING_Y - 0.02, z + 1.65), (width, 0.04, 2.3)))
-        frames += _window_frames(cx + bx, cy + BUILDING_Y - 0.05, z + 1.65, width, 2.3)
-        if rng.uniform() < 0.5:
-            awnings.append(_box((cx + bx, cy + BUILDING_Y - 0.45, z + 3.1), (2 * hx - 0.6, 0.9, 0.08)))
+        facing = -1.0 if by > 0 else 1.0
+        front = by + facing * hy  # tile-local y of the face towards the walkway
+        # long fronts (around open tiles) are divided into shops of about 4 m with piers between them
+        shops = max(1, int(round(2 * hx / 5.0)))
+        for i in range(shops):
+            sx = bx - hx + (i + 0.5) * 2 * hx / shops
+            width = 2 * hx / shops - 0.8
+            z = lay.ground(sx, front + facing * 0.3)
+            glass.append(_box((cx + sx, cy + front + facing * 0.02, z + 1.65), (width, 0.04, 2.3)))
+            frames += _window_frames(cx + sx, cy + front + facing * 0.05, z + 1.65, width, 2.3)
+            if rng.uniform() < 0.5:
+                awnings.append(_box((cx + sx, cy + front + facing * 0.45, z + 3.1), (width + 0.2, 0.9, 0.08)))
     if glass:
         add_mesh(stage, f"{root}/glass", trimesh.util.concatenate(glass), "shop_window")
         add_mesh(stage, f"{root}/frames", trimesh.util.concatenate(frames), "window_frame")
@@ -270,7 +318,7 @@ def _times_square(stage, root: str, lay: TileLayout, center, rng):
     """Lit billboards on the buildings around the plaza and shrubs in its planters."""
     cx, cy = center
     boards: dict[str, list] = {}
-    for facing, y in ((-1.0, HALF_W + 0.3), (1.0, -HALF_W - 0.3)):
+    for y, facing in lay.facades:
         x = -HALF_L + rng.uniform(0.0, 2.0)
         while x < HALF_L - 2.0:
             w, h = rng.uniform(3.0, 7.0), rng.uniform(2.5, 6.0)

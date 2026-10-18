@@ -38,10 +38,12 @@ tracked by PD controllers. The simulator runs at 200 Hz.
 1. *Locomotion policy* (`G1Patrol-Walk-City`). A blind walker. The policy observes only what the robot measures
    (IMU angular velocity and gravity direction, joint positions and velocities), its previous action, the velocity
    command and a gait clock, with sensor noise, sensor biases drawn per episode (IMU mounting ±1.7°, gyroscope
-   ±0.02 rad/s, encoder offsets ±0.02 rad), 0–20 ms of observation latency and a history of 5 control steps; the
-   critic additionally observes the base velocity and the terrain height (asymmetric actor-critic). Leg and ankle
-   joints are explicit PD controllers at the gains used on the robot (hip 100, knee 150, ankle 40 Nm/rad) with the
-   motors' torque and speed limits and 0–20 ms of actuation latency. Randomized per robot: ground friction (0.3–1.2),
+   ±0.02 rad/s, encoder offsets ±0.02 rad; Isaac Lab 3.0's additive-bias noise model adds a new draw to the bias at
+   every reset, so that the bias random-walks over episodes, and `g1_patrol.noise` draws it anew), 0–20 ms of
+   observation latency and a history of 5 control steps; the critic additionally observes the base velocity and the
+   terrain height (asymmetric actor-critic). Leg and ankle joints are explicit PD controllers at the gains used on the
+   robot (hip 100, knee 150, ankle 40 Nm/rad) with the motors' torque and speed limits and 0–20 ms of actuation
+   latency. Randomized per robot: ground friction (0.3–1.2),
    a torso payload (−1 to +5 kg) and center of mass (±3 cm), leg link masses (±10%), PD gains (±15%), torque limits
    (80–100% of rated, per joint), joint friction and armature; the robot is pushed every 4–8 s. Terrain: curbs and
    steps up to 20 cm, sills, potholes, broken pavement, cobblestones and ramps. Rewards: velocity tracking, a gait
@@ -49,27 +51,22 @@ tracked by PD controllers. The simulator runs at 200 Hz.
    changes of the joint targets and drift (the lateral-velocity and yaw-rate tracking errors, low-pass filtered over
    1 s and squared; the exponential tracking rewards hardly distinguish a sustained sideways drift of 0.1 m/s from the
    sway of the gait). Commands are resampled every 10 s: forward velocity −0.5 to 1.1 m/s, lateral ±0.3 m/s, yaw rate
-   ±1.2 rad/s; 15% of the robots are commanded to stand. The policy is trained for 10,000 iterations with narrower
-   randomization (friction from 0.4, torso mass ±25%, actuation latency up to 10 ms, no torque or sensor-bias
-   randomization, no drift penalty), then for 8,000 iterations with the settings above, and for 3,000 more with the
-   ground friction set to 0.1 and combined by maximum. MuJoCo-Warp uses the larger friction coefficient of the two
-   bodies in contact, so with the default ground friction of 1.0 the robot's friction randomization had no effect and
-   the earlier stages trained on friction of at least 1.0 (PhysX multiplies the coefficients). With the low ground
-   coefficient the contact friction is the robot's randomized value in both simulators.
+   ±1.2 rad/s; 15% of the robots are commanded to stand. Pushes change the base velocity by up to 1.2 m/s. The ground
+   has friction 0.1, combined by maximum: MuJoCo-Warp uses the larger friction coefficient of the two bodies in
+   contact (PhysX multiplies them), so the contact friction is the robot's randomized value in both simulators. The
+   policy is trained from scratch in three phases: 10,000 iterations with narrower randomization (friction 0.6–1.2, no
+   payload, rated torque limits, actuation latency up to 10 ms, no sensor biases; push strength ramped from 0.5 to
+   1.2 m/s); 8,000 iterations with the settings above on ground of friction 1.0, so that the contact friction is at
+   least 1.0 (push strength ramped again); and 3,000 iterations on the low-friction ground.
 2. *Teacher* (`G1Patrol-Navigate-NYC`). Navigation with privileged observations: goal position, base velocities,
    gravity vector, positions and velocities of the 10 nearest pedestrians, obstacle distances in 72 sectors (separately
-   for tall and low obstacles), a terrain height scan and the current command (332 dimensions). Training is
-   initialized from an earlier teacher whose output layer is scaled by 0.3 and proceeds in stages, each warm-started
-   from the previous one: the collision-risk reward (Table 2) is added at iteration 2,050 and the path-based
-   pedestrian model (below) at 3,250; at 4,250 the roadway termination, the curb and personal-space margins and the
-   lateral command range of ±0.15 m/s; at 6,250 the social-speed reward; at 8,750 the structure margin and speed
-   terms, a discount factor of 0.995 (a 20 s horizon at 10 Hz, previously 0.99) and the final locomotion policy; at
-   9,300 the present roadway and curb weights; at 10,600 the present curriculum thresholds; and at 11,850 the
-   locomotion policy trained with the corrected friction. The teacher is trained for 12,650 iterations.
+   for tall and low obstacles), a terrain height scan and the current command (332 dimensions). The teacher is
+   trained from scratch with PPO for 10,000 iterations with the rewards of Table 2, the curriculum below and a discount
+   factor of 0.995 (a 20 s horizon at 10 Hz), executing the frozen locomotion policy of stage 1.
 3. *Students* (`G1Patrol-Navigate-NYC-Lidar`, `G1Patrol-Navigate-NYC-Camera`). Distilled from the teacher with
-   DAgger-style rollouts of the student; the loss is the mean squared error between the tanh-mapped actions of student
-   and teacher. Each student observes proprioception, the goal position and one sensor at its mounting pose in the G1
-   URDF. The sensor's returns are accumulated into a height map (8 m × 8 m, 0.2 m cells, robot-centred and
+   DAgger-style rollouts of the student for 1,500 iterations each; the loss is the mean squared error between the
+   tanh-mapped actions of student and teacher. Each student observes proprioception, the goal position and one sensor
+   at its mounting pose in the G1 URDF. The sensor's returns are accumulated into a height map (8 m × 8 m, 0.2 m cells, robot-centred and
    heading-aligned): returns are binned into a world-aligned grid that moves with the robot, using the simulated robot
    motion with a random-walk error (5 mm and 0.002 rad per control step) as odometry, and a cell is cleared 3 s after it
    was last observed. The policy receives the accumulated map,
@@ -87,26 +84,25 @@ tracked by PD controllers. The simulator runs at 200 Hz.
 | Policy rate | 50 Hz | 10 Hz | 10 Hz |
 | Parallel robots | 16,384 | 8,192 | 8,192 |
 | Rollout length (steps per robot and iteration) | 24 | 32 | 32 |
-| Iterations | 10,000 + 8,000 + 3,000 | 12,650 (9 stages) | 1,500 + 600 + 1,000 |
+| Iterations | 10,000 + 8,000 + 3,000 | 10,000 | 1,500 per student |
 | Entropy coefficient | 0.008 | 0.001 | – |
 | Network | MLP 512-256-128 (actor and critic) | MLP 512-256-128 | CNN 16-32-32 per image input, MLP 512-256-128 |
-| Hardware, time | 4 GPUs, 1.9 h + 2.2 h | 4 GPUs, 21.6 h | 4 GPUs shared by both students, 12.5 h |
+| Hardware, time | 4 GPUs, 1.9 h + 1.5 h + 0.7 h | 4 GPUs, 15.5 h | 4 GPUs, 2.8 h (lidar) + 2.5 h (camera) |
 
 *Table 1. Training setup (NVIDIA RTX PRO 6000 GPUs).*
 
 **Environment.** The terrain is a grid of 16 m × 10 m tiles; columns are the six scenario types and rows are ten
-difficulty levels. In each episode the robot must traverse a route on its tile within 40 s. Pedestrians are
+difficulty levels. Building fronts, solid in the simulation, bound every tile along its long edges. In each episode
+the robot must traverse a route on its tile within 40 s. Pedestrians are
 kinematic bodies that follow walking paths under a social-force model. A path leads from where people enter the
 scene (45 m beyond the tile's ends, out of a shop door, up a subway stairwell) to 45 m beyond the tile's ends, so
 pedestrians do not appear or disappear in view. Most are timed to reach the robot's route when the robot does; none
-starts within 1.5 m of the robot, or within 5 m while walking towards it. A fraction of them (90% at level 1, 60% at level 10) perceive the robot, keep a clearance of at
-least 0.1 m, slow down and step around it; the loss of pedestrian speed is penalized, which rewards yielding. The
+starts within 1.5 m of the robot, or within 5 m while walking towards it. A fraction of them (90% at level 1, 60% at
+level 10) perceive the robot, keep a clearance of at least 0.1 m, slow down and step around it; the loss of pedestrian speed is penalized, which rewards yielding. The
 others react only within 1 m. A unit test verifies that every route admits a 0.6 m wide path at every difficulty.
 
 **Curriculum.** The curriculum keeps an exponential moving average of the success rate on each tile. A level is
-unlocked once the next-easier level of the same tile column reaches 35% success (50% before teacher iteration
-10,600: under the rules of Table 2 several mid-level tiles stayed below 50%, which locked all harder levels of their
-column). When an episode ends, the robot's
+unlocked once the next-easier level of the same tile column reaches 35% success. When an episode ends, the robot's
 next tile is drawn with a uniformly random scenario type and a level drawn from the unlocked levels with probability
 proportional to s(1 − s) + 0.02, where s is the tile's success rate; this concentrates training on levels the policy
 solves about half of the time. A fifth of the draws are uniform over the unlocked levels and 15% uniform over all
@@ -116,8 +112,8 @@ levels. The same curriculum is used for distillation, where it follows the stude
 |---|---|---|
 | Progress | Reduction of distance to the goal per second, clipped to ±1.0 m/s | 2.0 |
 | Goal reached | Within 0.5 m of the goal (terminates) | 100 |
-| Pedestrian contact | Robot footprint (radius 0.25 m) intersects a pedestrian (radius 0.25 m) (terminates) | −200 |
-| Obstacle contact | Robot footprint intersects a structure (terminates) | −150 |
+| Pedestrian contact | Robot footprint (radius 0.25 m) or an arm or hand link (radius 0.04 m) intersects a pedestrian (radius 0.25 m) (terminates) | −200 |
+| Obstacle contact | Robot footprint, or an arm or hand link within the structure's height range, intersects a structure (terminates) | −150 |
 | Fall | Torso contact with the ground (terminates) | −200 |
 | Roadway | Robot enters the roadway outside a crosswalk (terminates) | −150 |
 | Social speed | Planar speed above 0.3 m/s within 0.3 m of a pedestrian, rising linearly to 1.0 m/s at 1.5 m (m/s) | −6 |
@@ -133,7 +129,9 @@ levels. The same curriculum is used for distillation, where it follows the stude
 | Yaw-rate command | Squared yaw-rate command | −0.15 |
 | Policy output | Squared norm of the policy output before the tanh | −0.01 |
 
-*Table 2. Reward terms of the navigation policy, multiplied by the control period (0.1 s).*
+*Table 2. Reward terms of the navigation policy, multiplied by the control period (0.1 s). The robot model has no
+collision geometry on its arms, and its hands swing beyond the 0.25 m footprint; contacts of the arm and hand links
+are therefore checked separately.*
 
 ## Results
 
@@ -142,131 +140,151 @@ tiles (2,400 robots, 60 s of simulated time, PhysX, sensor noise on); random pus
 the goal, at the first contact with a pedestrian or a structure, when the robot enters the roadway outside a
 crosswalk, on a fall, or after 40 s.
 
+<!-- table:outcomes -->
 | Outcome | Teacher | Lidar student | Camera student |
 |---|---:|---:|---:|
-| Goal reached | 64.6% | 65.9% | 64.8% |
-| Pedestrian contact | 11.2% | 11.1% | 11.2% |
-| Obstacle contact | 18.1% | 18.4% | 19.4% |
-| Roadway (left the sidewalk or crosswalk) | 3.4% | 1.3% | 1.9% |
-| Fall | 0.31% | 0.10% | 0.14% |
-| Time-out (40 s) | 2.3% | 3.2% | 2.6% |
-| Mean time to goal (successful episodes) | 16.7 s | 16.7 s | 16.7 s |
-| Time within 0.5 m of a pedestrian | 6.6% | 7.9% | 8.6% |
-| Completed episodes | 8,375 | 8,165 | 8,376 |
+| Goal reached | 63.8% | 64.2% | 59.2% |
+| Pedestrian contact | 8.1% | 13.1% | 16.2% |
+| Obstacle contact | 18.7% | 15.3% | 17.3% |
+| Roadway (left the sidewalk or crosswalk) | 3.1% | 1.1% | 0.4% |
+| Fall | 0.22% | 0.10% | 0.04% |
+| Time-out (40 s) | 6.0% | 6.1% | 6.8% |
+| Mean time to goal (successful episodes) | 18.6 s | 18.4 s | 18.5 s |
+| Time within 0.5 m of a pedestrian | 3.9% | 6.6% | 8.4% |
+| Completed episodes | 6,768 | 6,760 | 6,903 |
+<!-- /table:outcomes -->
 
 *Table 3. Episode outcomes over all tiles.*
 
+<!-- table:scenarios -->
 | Scenario | Easy (levels 1–4) | Medium (5–7) | Hard (8–10) |
 |---|---:|---:|---:|
-| Sidewalk | 94 / 96 / 95% | 63 / 74 / 67% | 16 / 19 / 14% |
-| Sidewalk shed | 99 / 99 / 96% | 71 / 74 / 76% | 20 / 22 / 26% |
-| Crosswalk | 91 / 93 / 93% | 55 / 55 / 60% | 49 / 57 / 53% |
-| Construction zone | 80 / 74 / 75% | 27 / 20 / 33% | 1 / 0 / 2% |
-| Doorway | 88 / 91 / 88% | 72 / 74 / 76% | 47 / 49 / 46% |
-| Plaza | 92 / 92 / 88% | 88 / 79 / 77% | 72 / 72 / 74% |
+| Sidewalk | 89 / 91 / 95% | 68 / 71 / 68% | 17 / 16 / 20% |
+| Sidewalk shed | 97 / 90 / 93% | 43 / 40 / 45% | 12 / 14 / 10% |
+| Crosswalk | 89 / 91 / 92% | 43 / 38 / 36% | 37 / 49 / 52% |
+| Construction zone | 86 / 79 / 79% | 56 / 45 / 26% | 8 / 12 / 4% |
+| Doorway | 87 / 89 / 77% | 70 / 73 / 50% | 54 / 57 / 46% |
+| Plaza | 87 / 88 / 85% | 79 / 76 / 67% | 66 / 76 / 72% |
+<!-- /table:scenarios -->
 
 *Table 4. Success rate by scenario type and difficulty (teacher / lidar student / camera student).*
 
-The students reach the teacher's success rate (65.9% and 64.8% against 64.6%) and leave the roadway less often (1.3%
-and 1.9% against 3.4%), at the cost of more time-outs. Success is 88–99% on easy tiles of every type except
-construction zones (74–80%) and falls to 0–26% on the hard sidewalk, sidewalk-shed and construction tiles, where
-walkways of about 1.0–1.8 m carry two-way foot traffic: the robot either waits for a gap that does not come within
-40 s (up to 42% time-outs on hard construction tiles) or touches the structures while giving way. The previous
-release reached 74.9% (teacher) and 69% (students) with lateral commands up to ±0.4 m/s, a per-step roadway penalty
-in place of the roadway termination, a locomotion policy trained in effect on friction of at least 1.0, and without
-the margins and speed limits of Table 2; its pedestrian contact rates were 16–20%, against 11% here, and the robots
-spent 13–16% of the time within 0.5 m of a pedestrian, against 7–9%.
+The lidar student matches the teacher's success rate (64.2% against 63.8%); the camera student reaches 59.2%. Both
+students leave the roadway less often than the teacher (1.1% and 0.4% against 3.1%) but touch pedestrians more often
+(13.1% and 16.2% against 8.1%). Success is 77–97% on easy tiles of every type and 4–20% on hard sidewalk,
+sidewalk-shed and construction tiles, where walkways of about 1.0–1.8 m carry two-way foot traffic: on hard
+sidewalk-shed tiles 46–64% of the episodes end at a structure, and on hard construction tiles 55–75% time out while
+the robot waits for a gap.
 
-**Failure analysis.** For a teacher trained under most of the rules of Table 2 (iteration 8,750, 59.7% success), the
-robot's state was recorded at every episode end. Contacts with structures were mostly with a structure beside the
-robot (56–99% of them, depending on the tile type), at 0.7–1.0 m/s and without a pedestrian within 0.3 m in 87–100%
-of the cases, and the robot's velocity typically pointed 10–20° further towards the structure than its heading. Under a
-constant straight command, the locomotion policy of that time drifted sideways by 0.08–0.10 m/s, about 0.4 m within
-3 s at 0.9 m/s (Table 7), a large part of the 1.0–1.5 m walkways of hard tiles. Pedestrian contacts also happened at
-walking speed (median 0.87 m/s), and 21% of them within 2 s of the episode start, from pedestrians that started 1–2 m
-from the robot walking towards it. The changes that followed are the drift penalty and the friction correction of
-the locomotion policy; the structure margin and speed terms, the stronger social-speed term, the 20 s discount
-horizon and roadway penalties no smaller than the structure penalties for the teacher (Table 2); and the spawn rule
-for pedestrians. With them, success increased from 59.7% to 64.6%, pedestrian contacts decreased from 15.3% to
-11.2% and structure contacts from 20.1% to 18.1%, and the mean planar speed decreased from 0.77 to 0.66 m/s.
+**Failure analysis.** The robot's state was recorded at every episode end of the teacher (`analyze_terminations.py`,
+2,410 episodes). Of the 1,173 structure contacts, 44% are on sidewalk-shed tiles, against the scaffold posts, the
+facade or stacked lumber; structure contacts happen at a median speed of 0.69 m/s and with a pedestrian within 0.3 m
+in 5% of them. Pedestrian contacts happen at lower speed (median 0.42 m/s), 41% of them on crosswalks. On crosswalk
+tiles of level 7, 101 of the 126 structure contacts happen within 2 s of the episode start, against a bollard between
+the start of the route and the curb.
 
-| Quantity | Teacher, clamped commands | Teacher | Lidar student | Camera student |
-|---|---:|---:|---:|---:|
-| Forward command (m/s) | 1.15 | 0.68 | 0.66 | 0.67 |
-| \|Lateral command\| (m/s) | 0.57 | 0.08 | 0.06 | 0.05 |
-| Time with \|lateral command\| > 0.25 m/s | 96.3% | 0.0% | 0.0% | 0.0% |
-| \|Yaw-rate command\| (rad/s) | 0.51 | 0.24 | 0.18 | 0.17 |
-| Time with \|yaw-rate command\| > 0.8 rad/s | 25.1% | 3.7% | 0.4% | 0.2% |
-| Requested command at a range limit | 68.5% | 12.0% | 1.2% | 1.0% |
-| Yaw-rate command change (rad/s²) | 3.11 | 1.01 | 0.52 | 0.49 |
-| Planar speed (m/s) | 1.10 | 0.66 | 0.63 | 0.64 |
-| Torso tilt | 3.7° | 3.3° | 3.1° | 3.1° |
-| Knee flexion | 41.3° | 36.1° | 35.5° | 35.7° |
+<!-- table:motion -->
+| Quantity | Teacher | Lidar student | Camera student |
+|---|---:|---:|---:|
+| Forward command (m/s) | 0.54 | 0.55 | 0.52 |
+| \|Lateral command\| (m/s) | 0.08 | 0.05 | 0.04 |
+| \|Yaw-rate command\| (rad/s) | 0.26 | 0.19 | 0.17 |
+| Time with \|yaw-rate command\| > 0.8 rad/s | 5.1% | 0.8% | 0.2% |
+| Requested command at a range limit | 23.0% | 3.5% | 1.2% |
+| Backward command | 14.2% | 7.3% | 6.0% |
+| Yaw-rate command change (rad/s²) | 1.01 | 0.42 | 0.38 |
+| Planar speed (m/s) | 0.58 | 0.55 | 0.52 |
+| Torso tilt | 2.6° | 2.5° | 2.5° |
+| Knee flexion | 35.4° | 35.0° | 34.8° |
+<!-- /table:motion -->
 
 *Table 5. Velocity commands and posture during the evaluation (time averages). A requested command is at a range
-limit when it lies within 5% of the range of a command component (average over the three components). The first
-column is an earlier teacher that outputs clamped commands (forward −0.6 to 1.2 m/s, lateral ±0.6 m/s, yaw rate
-±1.2 rad/s) without filtering, evaluated with the same locomotion policy.*
+limit when it lies within 5% of the range of a command component (average over the three components); a backward
+command is a forward command below −0.05 m/s.*
 
-The earlier teacher commands lateral velocities above 0.25 m/s 96% of the time and requests a range limit 69% of the
-time, so the robot moves diagonally at high speed; it also leaves the roadway in 37% of its episodes, as it was
-trained before the roadway termination. With the tanh mapping, the low-pass filter and the command penalties of
-Table 2 the final teacher requests a range limit 12% of the time and changes the yaw-rate command three times more
-slowly; the students' commands change about half as fast again.
+The lateral command stays small (0.04–0.08 m/s on average). The teacher requests a range limit 23% of the time and
+changes its yaw-rate command more than twice as fast as the students (1.01 against 0.38–0.42 rad/s²); all policies
+command backward motion part of the time (6–14%).
 
-| Metric | Walker, Newton | Walker, navigation commands | Walker, PhysX | First stage, Newton | First stage, PhysX |
-|---|---:|---:|---:|---:|---:|
-| Forward velocity error (m/s) | 0.094 | 0.091 | 0.100 | 0.115 | 0.118 |
-| Lateral velocity error (m/s) | 0.075 | 0.066 | 0.081 | 0.093 | 0.109 |
-| Yaw-rate error (rad/s) | 0.145 | 0.140 | 0.167 | 0.185 | 0.206 |
-| Torso tilt | 2.8° | 2.7° | 2.8° | 4.1° | 4.1° |
-| Knee flexion | 33.1° | 32.2° | 33.5° | 39.2° | 40.3° |
-| Pelvis height (m) | 0.716 | 0.717 | 0.716 | 0.705 | 0.703 |
-| Leg mechanical power (W) | 93 | 83 | 101 | 95 | 111 |
-| Change of joint targets per step (rad) | 0.055 | 0.053 | 0.056 | 0.046 | 0.048 |
-| Torso roll and pitch rate (rad/s) | 0.34 | 0.32 | 0.35 | 0.34 | 0.35 |
-| Falls in 341 robot-minutes | 10 | 18 | 10 | 43 | 44 |
+<!-- table:walker -->
+| Metric | Walker, Newton | Walker, navigation commands | Walker, PhysX |
+|---|---:|---:|---:|
+| Forward velocity error (m/s) | 0.076 | 0.074 | 0.080 |
+| Lateral velocity error (m/s) | 0.075 | 0.069 | 0.081 |
+| Yaw-rate error (rad/s) | 0.118 | 0.117 | 0.138 |
+| Torso tilt | 2.6° | 2.4° | 2.6° |
+| Knee flexion | 34.4° | 33.2° | 34.8° |
+| Pelvis height (m) | 0.719 | 0.719 | 0.719 |
+| Leg mechanical power (W) | 77 | 65 | 88 |
+| Change of joint targets per step (rad) | 0.044 | 0.041 | 0.045 |
+| Torso roll and pitch rate (rad/s) | 0.27 | 0.24 | 0.28 |
+| Falls in 341 robot-minutes | 10 | 3 | 15 |
+<!-- /table:walker -->
 
 *Table 6. Locomotion policy on city terrain with the training randomization (payload, torque limits, latencies,
 friction, sensor noise and biases): 1,024 robots for 20 s each on 200 random terrain tiles, random velocity commands
-from the training ranges or, in the second column, from the navigation policy's ranges. "First stage" is the policy
-after the first 10,000 iterations. Tracking errors are mean absolute errors; the other quantities are time averages.
-The walker is trained on Newton; PhysX is a second simulator it was not trained on.*
+from the training ranges or, in the second column, from the navigation policy's ranges. Tracking errors are mean
+absolute errors; the other quantities are time averages. The walker is trained on Newton; PhysX is a second simulator
+it was not trained on.*
 
-| Straight command | Lateral drift (m/s) | Lateral offset after 3 s (m) | Heading change after 3 s (rad) |
-|---|---:|---:|---:|
-| 0.3 m/s | 0.028 (0.083) | 0.06 (0.27) | 0.08 (0.15) |
-| 0.6 m/s | 0.042 (0.089) | 0.12 (0.32) | 0.11 (0.17) |
-| 0.9 m/s | 0.043 (0.099) | 0.17 (0.40) | 0.15 (0.17) |
+On PhysX the tracking errors are 5–17% larger than on Newton and the walker falls 15 times against 10. Under a
+constant straight command it drifts sideways by 0.03–0.05 m/s (1 s averages), 0.10–0.20 m within 3 s, and its heading
+changes by 0.10 rad (Table 7).
 
-*Table 7. Drift under a constant straight command (PhysX, 256 robots per speed, after 1 s of settling); first stage in
-parentheses. Lateral drift is the mean absolute 1 s average of the heading-frame lateral velocity; the offset is
-measured from the line the robot started on.*
+<!-- table:drift -->
+| Straight command | Walker |
+|---|---:|
+| 0.3 m/s, lateral drift (m/s) | 0.034 |
+| 0.3 m/s, lateral offset after 3 s (m) | 0.10 |
+| 0.3 m/s, heading change after 3 s (rad) | 0.10 |
+| 0.6 m/s, lateral drift (m/s) | 0.043 |
+| 0.6 m/s, lateral offset after 3 s (m) | 0.16 |
+| 0.6 m/s, heading change after 3 s (rad) | 0.10 |
+| 0.9 m/s, lateral drift (m/s) | 0.048 |
+| 0.9 m/s, lateral offset after 3 s (m) | 0.20 |
+| 0.9 m/s, heading change after 3 s (rad) | 0.10 |
+<!-- /table:drift -->
 
-| Condition (every robot) | Walker, Newton | Walker, PhysX | First stage, Newton | First stage, PhysX |
-|---|---:|---:|---:|---:|
-| Training randomization | 13 | 10 | 38 | 44 |
-| Torso payload +5 kg | 20 | 17 | 52 | 58 |
-| Torque limits 80% of rated | 23 | 18 | 45 | 51 |
-| Actuation latency 15–25 ms | 15 | 19 | 48 | 34 |
-| Friction 0.3 (static) / 0.25 (dynamic) | 110 | 85 | 332 | 367 |
-| Twice the sensor noise and biases | 27 | 19 | 242 | 238 |
-| All of the above | 210 | 213 | 2,090 | 2,146 |
+*Table 7. Drift under a constant straight command (PhysX, 256 robots per speed, after 1 s of settling). Lateral drift
+is the mean absolute 1 s average of the heading-frame lateral velocity; the offset is measured from the line the robot
+started on.*
+
+<!-- table:walker_stress -->
+| Condition (every robot) | Walker, Newton | Walker, PhysX |
+|---|---:|---:|
+| Training randomization | 8 | 15 |
+| Torso payload +5 kg | 15 | 17 |
+| Torque limits 80% of rated | 9 | 16 |
+| Actuation latency 15–25 ms | 8 | 19 |
+| Friction 0.3 (static) / 0.25 (dynamic) | 53 | 52 |
+| Twice the sensor noise and biases | 16 | 18 |
+| All of the above | 199 | 184 |
+<!-- /table:walker_stress -->
 
 *Table 8. Falls in 341 robot-minutes (setup of Table 6) with every robot at, or beyond, the edge of the training
 randomization. Counts from separate runs of the same condition differ by about their square root (Table 6 and the
-first row of Table 8 are separate runs). On friction 0.3 the walker still falls about once every 3–4 robot-minutes
-under these random commands.*
+first row of Table 8 are separate runs).*
 
+At the edges of the training randomization the walker falls at most twice as often as under the training
+randomization, except on friction 0.3 (52–53 falls, about one every 6.5 robot-minutes) and with all conditions
+combined (184–199 falls, about one every 2 robot-minutes).
+
+<!-- table:nav_stress -->
 | Condition | Teacher | Lidar student | Camera student |
 |---|---:|---:|---:|
-| Nominal (Table 3) | 64.6 / 11.2 / 18.1 / 0.3 | 65.9 / 11.1 / 18.4 / 0.1 | 64.8 / 11.2 / 19.4 / 0.1 |
-| Sensors: twice the noise and odometry drift, 0–200 ms height-map latency | – | 65.0 / 11.4 / 19.0 / 0.1 | 63.1 / 13.1 / 17.4 / 0.1 |
-| Pedestrians: 20% faster, 30% fewer notice the robot | 56.5 / 21.0 / 17.2 / 0.3 | 56.6 / 23.3 / 16.3 / 0.1 | 54.7 / 24.4 / 17.6 / 0.1 |
-| Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3 | 55.9 / 11.2 / 20.7 / 4.8 | 57.8 / 12.4 / 21.1 / 3.8 | 57.6 / 12.2 / 21.2 / 3.7 |
+| Nominal (Table 3) | 63.8 / 8.1 / 18.7 / 0.2 | 64.2 / 13.1 / 15.3 / 0.1 | 59.2 / 16.2 / 17.3 / 0.0 |
+| Sensors: twice the noise and odometry drift, 0–200 ms height-map latency | – | 62.7 / 13.5 / 16.4 / 0.1 | 56.0 / 17.0 / 17.0 / 0.0 |
+| Pedestrians: 20% faster, 30% fewer notice the robot | 56.2 / 18.9 / 17.8 / 0.1 | 54.0 / 27.1 / 13.4 / 0.0 | 47.2 / 33.0 / 13.8 / 0.0 |
+| Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3 | 58.7 / 8.3 / 21.3 / 1.7 | 60.8 / 13.8 / 16.8 / 1.3 | 56.5 / 17.2 / 17.9 / 0.9 |
+<!-- /table:nav_stress -->
 
 *Table 9. Navigation under degraded conditions applied to every robot: goal reached / pedestrian contact / obstacle
 contact / fall (%). The teacher observes privileged state, so the sensor condition does not apply to it.*
+
+Doubling the sensor noise and odometry drift and delaying the height map by up to 200 ms costs the lidar student 1.5
+and the camera student 3.2 points of success. Faster pedestrians, fewer of whom notice the robot, raise pedestrian
+contacts from 8–16% to 19–33%. The degraded robot (payload, weak motors, latency, friction 0.3) costs 3–5 points of
+success, and falls rise to 1–2%.
 
 ## Installation
 
@@ -286,31 +304,44 @@ Set `OMNI_KIT_ACCEPT_EULA=YES` to accept the
 [NVIDIA Omniverse EULA](https://docs.omniverse.nvidia.com/platform/latest/common/NVIDIA_Omniverse_License_Agreement.html)
 non-interactively.
 
+## Reproducing the released policies
+
+The released policies and every number in this README are produced by the scripts in `scripts/reproduce/`, run from
+the repository root with the Isaac Lab environment active:
+
+```bash
+bash scripts/reproduce/all.sh                  # stages 1-4 below, about 25 h on four RTX PRO 6000 GPUs
+bash scripts/reproduce/1_walker.sh             # locomotion policy, three phases (Newton); exports g1_walk_city.pt
+bash scripts/reproduce/2_teacher.sh            # teacher, from scratch (PhysX)
+bash scripts/reproduce/3_students.sh           # lidar and camera students, distilled from the teacher
+bash scripts/reproduce/4_evaluate.sh           # evaluations, logs/reproduce/eval/*.json
+bash scripts/reproduce/5_ablations.sh          # optional: locomotion ablations (Tables 7 and 8)
+python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
+```
+
+Every stage starts from scratch (the students from the stage-2 teacher), with all settings in the task
+configurations and the Hydra overrides in the scripts. Runs use seed 42 (`SEED`; each GPU of a run adds its rank) and
+write to `logs/rsl_rl/<experiment>/release` (`TAG`); `NUM_GPUS` sets the number of GPUs. GPU simulation and
+multi-GPU reductions are not bitwise deterministic, so a rerun reproduces the training curves and evaluation results
+up to run-to-run variation, not exactly.
+
 ## Usage
 
 ```bash
-# Stage 1: locomotion policy (Newton). The trained policy used by the navigation tasks is
-# src/g1_patrol/assets/data/policies/g1_walk_city.pt.
-isaaclab train --task G1Patrol-Walk-City --device cuda:0
-python scripts/evaluate.py --task G1Patrol-Walk-City --checkpoint latest --full_terrain
+# single-GPU training of a stage, e.g. the locomotion policy (the scripts above set the full schedule)
+isaaclab train --rl_library rsl_rl --task G1Patrol-Walk-City --external_callback g1_patrol.register_tasks \
+    --device cuda:0
+# evaluation of a checkpoint
+python scripts/evaluate.py --task G1Patrol-Walk-City --checkpoint <model.pt> --full_terrain
+python scripts/evaluate_drift.py --checkpoint <model.pt> physics=isaacsim_physx
 python scripts/stress_walker.py --condition combined --checkpoint <model.pt> --num_envs 1024 --full_terrain
-
-# Stage 2: teacher (4 GPUs, PhysX). The released teacher is initialized from an earlier teacher
-# (trained with clamped commands) whose output layer is scaled by 0.3.
-python scripts/warm_start.py --checkpoint <earlier teacher model.pt> --out warm.pt --scale 0.3 --std 0.5
-isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC --external_callback g1_patrol.register_tasks \
-    --num_envs 2048 --checkpoint warm.pt physics=isaacsim_physx
-python scripts/evaluate_nav.py --task G1Patrol-Navigate-NYC --checkpoint <model.pt> --num_envs 2400 --num_steps 600
+python scripts/evaluate_nav.py --task G1Patrol-Navigate-NYC --checkpoint <model.pt> --num_envs 2400 --num_steps 600 \
+    physics=isaacsim_physx
 python scripts/stress_nav.py --condition robot --task G1Patrol-Navigate-NYC --checkpoint <model.pt> --num_envs 2400 \
     --num_steps 600 physics=isaacsim_physx
+python scripts/analyze_terminations.py --checkpoint <teacher model.pt> --records ends.npz physics=isaacsim_physx
 
-# Stage 3: students, distilled from a teacher checkpoint
-isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC-Lidar --external_callback g1_patrol.register_tasks \
-    --num_envs 2048 --checkpoint <teacher model.pt> physics=isaacsim_physx
-isaaclab train_multigpu --num_gpus 4 --task G1Patrol-Navigate-NYC-Camera --external_callback g1_patrol.register_tasks \
-    --num_envs 2048 --checkpoint <teacher model.pt> physics=isaacsim_physx
-
-# tests: task registration, tile capacities, route passability
+# tests: task registration, tile capacities, route passability, walkable area
 python -m pytest tests
 ```
 
@@ -358,17 +389,19 @@ src/g1_patrol/
         └── config/g1/           NYC teacher and student configurations, PPO and distillation settings
 scripts/
 ├── evaluate.py                  locomotion evaluation (tracking, posture, falls, pushes)
+├── evaluate_drift.py            drift of the locomotion policy under constant straight commands
 ├── evaluate_nav.py              navigation evaluation per scenario type and difficulty, command statistics
+├── analyze_terminations.py      robot state at every episode end of a navigation policy (failure analysis)
 ├── export_policy.py             TorchScript export of a trained policy (e.g. the frozen walker)
 ├── describe_policy_io.py        observation layout, joint order, gains and actions of a task (for deployment)
 ├── stress_walker.py             locomotion evaluation at or beyond the edges of the training randomization
 ├── stress_nav.py                navigation evaluation with degraded sensors, pedestrians or robot
-├── warm_start.py                checkpoint preparation for warm-started training
+├── reproduce/                   training and evaluation of the released policies (seeds, schedules, overrides)
 ├── demo/                        RTX rendering with animated pedestrians
-└── figures/                     diagrams and overview video
+└── figures/                     result tables (build_results.py), diagrams and overview video
 docs/                            project page (GitHub Pages)
 DEPLOYMENT.md                    policy interfaces, rates, frames and the assumptions of the simulation
-tests/                           registration, tile capacity and passability tests
+tests/                           registration, tile capacity, passability and walkable-area tests
 ```
 
 ## Citation

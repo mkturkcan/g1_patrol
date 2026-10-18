@@ -14,17 +14,17 @@ def test_task_registrations():
     """The project tasks must expose valid environment and agent entry points."""
     expected = {
         "G1Patrol-Walk-Flat": {
-            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "entry_point": "g1_patrol.tasks.locomotion.env:WalkEnv",
             "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkFlatEnvCfg",
             "default_agent": "rsl_rl",
         },
         "G1Patrol-Walk-Street": {
-            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "entry_point": "g1_patrol.tasks.locomotion.env:WalkEnv",
             "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkStreetEnvCfg",
             "default_agent": "rsl_rl",
         },
         "G1Patrol-Walk-City": {
-            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "entry_point": "g1_patrol.tasks.locomotion.env:WalkEnv",
             "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkCityEnvCfg",
             "default_agent": "rsl_rl",
         },

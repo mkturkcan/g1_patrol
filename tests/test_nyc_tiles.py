@@ -115,3 +115,37 @@ def test_pedestrians_enter_and_leave_out_of_view(kind):
                 behind_door = sy > HALF_W
                 in_stairwell = any(x0 <= sx <= x1 and y0 <= sy <= y1 for x0, x1, y0, y1 in stairs)
                 assert off_tile or behind_door or in_stairwell, f"{kind} d={d} seed={seed}: path starts at ({sx:.1f}, {sy:.1f})"
+
+
+def _reachable(free: np.ndarray, start: tuple[int, int]) -> np.ndarray:
+    seen = np.zeros_like(free)
+    queue = deque([start])
+    seen[start] = True
+    while queue:
+        i, j = queue.popleft()
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            a, b = i + di, j + dj
+            if 0 <= a < free.shape[0] and 0 <= b < free.shape[1] and free[a, b] and not seen[a, b]:
+                seen[a, b] = True
+                queue.append((a, b))
+    return seen
+
+
+@pytest.mark.parametrize("kind", list(BUILDERS))
+def test_walkable_area_ends_at_structures(kind):
+    """The robot cannot reach a tile's long edges, where the neighbouring tile (in training) and the rendered city
+    blocks (in the demo) begin: a facade or the roadway, which ends the episode, is always in the way."""
+    for d in (0.0, 0.5, 1.0):
+        for seed in range(4):
+            lay = BUILDERS[kind](d, np.random.default_rng(seed))
+            free = _free_space(lay)
+            xs = np.arange(-TILE_SIZE[0] / 2, TILE_SIZE[0] / 2, RES) + RES / 2
+            ys = np.arange(-TILE_SIZE[1] / 2, TILE_SIZE[1] / 2, RES) + RES / 2
+            px, py = np.meshgrid(xs, ys, indexing="ij")
+            for x0, x1, y0, y1 in lay.forbidden:
+                free &= ~((px > x0) & (px < x1) & (py > y0) & (py < y1))
+            assert lay.facades, f"{kind}: no building fronts recorded"
+            for sx, sy, _, _ in lay.routes:
+                reach = _reachable(free, _cell(free, sx, sy))
+                edge = np.abs(py) > HALF_W - ROBOT_CLEARANCE
+                assert not (reach & edge).any(), f"{kind} d={d} seed={seed}: the robot can walk to the tile's edge"

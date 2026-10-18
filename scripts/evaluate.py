@@ -69,6 +69,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--push_interval", type=float, nargs=2, default=(4.0, 8.0), help="Seconds between shoves (min max)."
     )
+    parser.add_argument("--out", default=None, help="Path of the metrics JSON (default: next to the checkpoint).")
     parser.add_argument(
         "--full_terrain",
         action="store_true",
@@ -292,7 +293,9 @@ def main(argv: list[str]) -> None:
         print(json.dumps(metrics, indent=2))
         suffix = f"_push{args_cli.push_velocity:g}" if args_cli.push_velocity > 0 else ""
         suffix += ("_fullterrain" if args_cli.full_terrain else "") + ("_navcmd" if args_cli.nav_commands else "")
-        with open(os.path.join(out_dir, f"metrics{suffix}.json"), "w") as f:
+        out_path = args_cli.out or os.path.join(out_dir, f"metrics{suffix}.json")
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        with open(out_path, "w") as f:
             json.dump(metrics, f, indent=2)
 
         np.savez_compressed(

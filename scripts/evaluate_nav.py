@@ -8,7 +8,7 @@ For the New York task (``G1Patrol-Navigate-NYC*``) the curriculum is frozen and 
 difficulty levels, so the results break down by scenario type x difficulty (easy: levels 0-3, medium: 4-6,
 hard: 7-9). Pass ``--keep_curriculum`` to evaluate with the training curriculum instead.
 
-Outputs are written next to the checkpoint, in ``<run_dir>/eval/nav_metrics_<physics>.json``.
+Outputs are written next to the checkpoint, in ``<run_dir>/eval/nav_metrics_<physics>.json``, or to ``--out``.
 
 Usage:
     python scripts/evaluate_nav.py --checkpoint latest physics=isaacsim_physx
@@ -228,7 +228,9 @@ def main(argv: list[str]) -> None:
                       f"{m['obstacle_collision_rate']:6.2f} {m.get('roadway_rate', 0.0):6.2f} {m['fall_rate']:6.2f} {m['time_out_rate']:6.2f} "
                       f"{m['mean_time_to_goal_s']:7.1f} {m['mean_pedestrian_delay_mps']:6.3f}")
         tag = metrics["physics"].removesuffix("Cfg").lower() + ("_train_cfg" if args_cli.train_env_cfg else "")
-        with open(os.path.join(out_dir, f"nav_metrics_{tag}.json"), "w") as f:
+        out_path = args_cli.out or os.path.join(out_dir, f"nav_metrics_{tag}.json")
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        with open(out_path, "w") as f:
             json.dump(metrics, f, indent=2)
 
 
