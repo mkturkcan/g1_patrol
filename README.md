@@ -232,33 +232,35 @@ constant straight command it drifts sideways by 0.03–0.05 m/s (1 s averages), 
 changes by 0.10 rad (Table 7).
 
 <!-- table:drift -->
-| Straight command | Walker |
-|---|---:|
-| 0.3 m/s, lateral drift (m/s) | 0.034 |
-| 0.3 m/s, lateral offset after 3 s (m) | 0.10 |
-| 0.3 m/s, heading change after 3 s (rad) | 0.10 |
-| 0.6 m/s, lateral drift (m/s) | 0.043 |
-| 0.6 m/s, lateral offset after 3 s (m) | 0.16 |
-| 0.6 m/s, heading change after 3 s (rad) | 0.10 |
-| 0.9 m/s, lateral drift (m/s) | 0.048 |
-| 0.9 m/s, lateral offset after 3 s (m) | 0.20 |
-| 0.9 m/s, heading change after 3 s (rad) | 0.10 |
+| Straight command | Walker | No drift penalty | Ground friction 1.0 |
+|---|---:|---:|---:|
+| 0.3 m/s, lateral drift (m/s) | 0.034 | 0.042 | 0.043 |
+| 0.3 m/s, lateral offset after 3 s (m) | 0.10 | 0.12 | 0.12 |
+| 0.3 m/s, heading change after 3 s (rad) | 0.10 | 0.10 | 0.10 |
+| 0.6 m/s, lateral drift (m/s) | 0.043 | 0.046 | 0.042 |
+| 0.6 m/s, lateral offset after 3 s (m) | 0.16 | 0.17 | 0.15 |
+| 0.6 m/s, heading change after 3 s (rad) | 0.10 | 0.11 | 0.11 |
+| 0.9 m/s, lateral drift (m/s) | 0.048 | 0.051 | 0.042 |
+| 0.9 m/s, lateral offset after 3 s (m) | 0.20 | 0.23 | 0.17 |
+| 0.9 m/s, heading change after 3 s (rad) | 0.10 | 0.11 | 0.11 |
 <!-- /table:drift -->
 
 *Table 7. Drift under a constant straight command (PhysX, 256 robots per speed, after 1 s of settling). Lateral drift
 is the mean absolute 1 s average of the heading-frame lateral velocity; the offset is measured from the line the robot
-started on.*
+started on. The ablations are trained with the recipe of the walker and one change each (`5_ablations.sh`): without
+the drift penalty, and with Isaac Lab's default ground material (friction 1.0, multiplied) in every phase, so that on
+Newton the contact friction is never below 1.0.*
 
 <!-- table:walker_stress -->
-| Condition (every robot) | Walker, Newton | Walker, PhysX |
-|---|---:|---:|
-| Training randomization | 8 | 15 |
-| Torso payload +5 kg | 15 | 17 |
-| Torque limits 80% of rated | 9 | 16 |
-| Actuation latency 15–25 ms | 8 | 19 |
-| Friction 0.3 (static) / 0.25 (dynamic) | 53 | 52 |
-| Twice the sensor noise and biases | 16 | 18 |
-| All of the above | 199 | 184 |
+| Condition (every robot) | Walker, Newton | Walker, PhysX | No drift penalty, Newton | No drift penalty, PhysX | Ground friction 1.0, Newton | Ground friction 1.0, PhysX |
+|---|---:|---:|---:|---:|---:|---:|
+| Training randomization | 8 | 15 | 4 | 9 | 11 | 6 |
+| Torso payload +5 kg | 15 | 17 | – | – | – | – |
+| Torque limits 80% of rated | 9 | 16 | – | – | – | – |
+| Actuation latency 15–25 ms | 8 | 19 | – | – | – | – |
+| Friction 0.3 (static) / 0.25 (dynamic) | 53 | 52 | 60 | 58 | 281 | 309 |
+| Twice the sensor noise and biases | 16 | 18 | – | – | – | – |
+| All of the above | 199 | 184 | 220 | 215 | 540 | 631 |
 <!-- /table:walker_stress -->
 
 *Table 8. Falls in 341 robot-minutes (setup of Table 6) with every robot at, or beyond, the edge of the training
@@ -267,7 +269,10 @@ first row of Table 8 are separate runs).*
 
 At the edges of the training randomization the walker falls at most twice as often as under the training
 randomization, except on friction 0.3 (52–53 falls, about one every 6.5 robot-minutes) and with all conditions
-combined (184–199 falls, about one every 2 robot-minutes).
+combined (184–199 falls, about one every 2 robot-minutes). Without the drift penalty the walker's lateral offset after
+3 s at 0.9 m/s is 0.23 m instead of 0.20 m and it falls about 10% more often with all conditions combined. With the
+default ground material it never trains on low friction: it falls 5–6 times as often on friction 0.3 (281–309 falls)
+and about three times as often with all conditions combined.
 
 <!-- table:nav_stress -->
 | Condition | Teacher | Lidar student | Camera student |
