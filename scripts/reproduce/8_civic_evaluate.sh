@@ -1,7 +1,7 @@
 #!/bin/bash
 # Civic stage 4: evaluations of the reaching walker (stress conditions, including attacks, deep squats, a braced
-# retreat and hand loads) and of the civic teacher and students, written to $OUT/eval/<name>.json. Each evaluation
-# runs on one GPU; NUM_GPUS evaluations run at a time.
+# retreat and hand loads), of the hands controller (scripted triggers) and of the civic teacher and students, written
+# to $OUT/eval/<name>.json. Each evaluation runs on one GPU; NUM_GPUS evaluations run at a time.
 source scripts/reproduce/env.sh
 EVAL="$OUT/eval"
 mkdir -p "$EVAL"
@@ -25,6 +25,8 @@ for c in nominal attacks brace_retreat deep_squat hand_load combined; do
     job "reach_walker_stress_${c}_physx" python scripts/stress_walker.py --walker reach --condition "$c" \
         --checkpoint "$WALKER" --num_envs 1024 --full_terrain physics=isaacsim_physx
 done
+job hands_litter python scripts/evaluate_hands.py --num_envs 512 physics=isaacsim_physx
+job hands_bags python scripts/evaluate_hands.py --num_envs 512 --bags physics=isaacsim_physx
 job civic_teacher python scripts/evaluate_nav.py --task G1Patrol-Navigate-Civic --checkpoint "$TEACHER" "${NAV[@]}"
 job civic_lidar python scripts/evaluate_nav.py --task G1Patrol-Navigate-Civic-Lidar --checkpoint "$LIDAR" "${NAV[@]}"
 job civic_camera python scripts/evaluate_nav.py --task G1Patrol-Navigate-Civic-Camera --checkpoint "$CAMERA" "${NAV[@]}"

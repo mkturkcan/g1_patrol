@@ -222,6 +222,25 @@ def civic(eval_dir: str) -> Table:
                  "curriculum disabled). Attack rows are over the episodes in which an attack took place.")
 
 
+def hands(eval_dir: str) -> Table:
+    runs = [(label, load(eval_dir, name)) for label, name in (("Litter", "hands_litter"), ("Trash bags", "hands_bags"))]
+    runs = [(label, m) for label, m in runs if m]
+    rows = [
+        ("Picked up (item 0.3–1.0 m ahead, up to 0.45 m to the side)", lambda m: pct(m["picking_up"]["picked"])),
+        ("Reached (walked up to it, squatting)", lambda m: pct(m["picking_up"]["reached_the_item"])),
+        ("Grasped, once reached", lambda m: pct(m["picking_up"]["grasped_when_reached"])),
+        ("Median time to hold it", lambda m: f'{m["picking_up"]["median_time_to_hold_s"]:.1f} s'),
+        ("Put where it belongs (basket; bag pile)", lambda m: pct(m["putting_down"]["put_where_it_belongs"])),
+        ("Let go elsewhere", lambda m: pct(m["putting_down"]["let_go_elsewhere"])),
+        ("Median time to put it down", lambda m: f'{m["putting_down"]["median_time_s"]:.1f} s'),
+        ("Falls", lambda m: f'{m["picking_up"]["falls"] + m["putting_down"]["falls"]}'),
+        ("Items (robots putting down)", lambda m: f'{m["picking_up"]["items"]} ({m["putting_down"]["robots"]})'),
+    ]
+    return Table(["Hands controller"] + [label for label, _ in runs], [[name] + [f(m) for _, m in runs] for name, f in rows],
+                 "<b>Table 12.</b> The hands controller with scripted triggers (<code>scripts/evaluate_hands.py</code>; "
+                 "nobody around, one trigger per item and one per put-down).")
+
+
 REACH_STRESS = [("nominal", "Training randomization"), ("attacks", "Shoves and kicks half of the time"),
                 ("brace_retreat", "Braced, walking at 0.8–1.3 m/s and turning while attacked"),
                 ("deep_squat", "Deep squats only"), ("hand_load", "3 kg in one hand all the time"),
@@ -314,7 +333,7 @@ def main():
     }
     if load(args.eval, "civic_teacher"):
         tables.update({"civic": civic(args.eval), "reach_walker_stress": reach_walker_stress(args.eval),
-                       "civic_stress": civic_stress(args.eval)})
+                       "civic_stress": civic_stress(args.eval), "hands": hands(args.eval)})
     readme = open(args.readme).read()
     for name, table in tables.items():
         readme, n = re.subn(rf"(<!-- table:{name} -->\n).*?(\n<!-- /table:{name} -->)",
