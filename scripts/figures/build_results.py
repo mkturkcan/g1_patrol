@@ -187,6 +187,80 @@ def nav_stress(eval_dir: str, nav: dict) -> Table:
                  "does not apply to it.")
 
 
+CIVIC = {"teacher": "civic_teacher", "lidar": "civic_lidar", "camera": "civic_camera"}
+
+
+def civic(eval_dir: str) -> Table:
+    nav = {k: load(eval_dir, name) for k, name in CIVIC.items()}
+    per100 = lambda v: f"{100 * v:.1f}"  # noqa: E731
+    rows = [
+        ("Goal reached", lambda e, c: pct(e["goal_reached_rate"])),
+        ("Pedestrian contact (including passing between a dog and its owner)", lambda e, c: pct(e["pedestrian_collision_rate"])),
+        ("Obstacle contact", lambda e, c: pct(e["obstacle_collision_rate"])),
+        ("Roadway (left the sidewalk, or crossed against the signal)", lambda e, c: pct(e.get("roadway_rate", 0.0))),
+        ("Fall", lambda e, c: f'{100 * e["fall_rate"]:.2f}%'),
+        ("Time-out (60 s)", lambda e, c: pct(e["time_out_rate"])),
+        ("Litter picked up, per item", lambda e, c: pct(c["litter_picked_per_item"])),
+        ("Litter put in a basket, per item", lambda e, c: pct(c["litter_in_basket_per_item"])),
+        ("Bags set down at a curbside pile, per bag", lambda e, c: pct(c["bags_delivered_per_bag"])),
+        ("Fallen person: help called", lambda e, c: pct(c["fallen_person_helped"])),
+        ("Attack: fall", lambda e, c: pct(c["attack_fall_rate"])),
+        ("Attack: contact with a bystander", lambda e, c: pct(c["attack_pedestrian_collision_rate"])),
+        ("Attack: mean distance to the attacker (m)", lambda e, c: f'{c["attack_mean_gap_m"]:.2f}'),
+        ("Attack: braced while the attacker is within 1 m", lambda e, c: pct(c["attack_braced_when_close"])),
+        ("Shoves and kicks received per episode", lambda e, c: f'{c["shoves_per_episode"]:.2f}'),
+        ("Braced without a threat (time)", lambda e, c: pct(c["braced_without_threat"])),
+        ("Time within 1.2 m of a person who needs room", lambda e, c: pct(c["time_within_1.2m_of_person_needing_room"])),
+        ("Groups or lines split, per 100 episodes", lambda e, c: per100(c["group_or_line_splits_per_episode"])),
+        ("Signal violations, per 100 episodes", lambda e, c: per100(c["signal_violations_per_episode"])),
+        ("Completed episodes", lambda e, c: f'{e["episodes"]:,}'),
+    ]
+    cols = [k for k in POLICIES if nav.get(k)]
+    return Table(["Outcome"] + [POLICIES[k] for k in cols],
+                 [[name] + [f(nav[k], nav[k]["civic"]) for k in cols] for name, f in rows],
+                 "<b>Table 9.</b> Civic task: episode outcomes and civic metrics over all tiles (2,400 robots, 120 s, "
+                 "curriculum disabled). Attack rows are over the episodes in which an attack took place.")
+
+
+REACH_STRESS = [("nominal", "Training randomization"), ("attacks", "Shoves and kicks half of the time"),
+                ("brace_retreat", "Braced, walking at 0.8–1.3 m/s and turning while attacked"),
+                ("deep_squat", "Deep squats only"), ("hand_load", "3 kg in one hand all the time"),
+                ("combined", "Payload, weak motors, latency, friction 0.3 and sensor noise (Table 7)")]  # fmt: skip
+
+
+def reach_walker_stress(eval_dir: str) -> Table:
+    cols = [(f"Reaching walker, {'Newton' if sim == 'newton' else 'PhysX'}", sim) for sim in ("newton", "physx")
+            if load(eval_dir, f"reach_walker_stress_nominal_{sim}")]
+    rows = []
+    for condition, label in REACH_STRESS:
+        cells = []
+        for _, sim in cols:
+            m = load(eval_dir, f"reach_walker_stress_{condition}_{sim}")
+            cells.append(f'{m["falls"]:,}' if m else "–")
+        rows.append([label] + cells)
+    return Table(["Condition (every robot)"] + [c for c, _ in cols], rows,
+                 "<b>Table 10.</b> Falls of the reaching walker in 341 robot-minutes (setup of Table 7) under its "
+                 "training randomization and with every robot at the edge of one of its tasks.")
+
+
+def civic_stress(eval_dir: str) -> Table:
+    cell = lambda e: (f'{100 * e["goal_reached_rate"]:.1f} / {100 * e["pedestrian_collision_rate"]:.1f} / '  # noqa: E731
+                      f'{100 * e["obstacle_collision_rate"]:.1f} / {100 * e["fall_rate"]:.1f}') if e else "–"
+    conditions = [("nominal", "Nominal (Table 9)"), ("attacks", "An attack in every episode, at full strength"),
+                  ("incidents", "Attacks, people blocking the way and fallen people at twice the training rates"),
+                  ("sensors", "Sensors: twice the noise and odometry drift, 0–200 ms latency"),
+                  ("robot", "Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3")]
+    rows = []
+    for condition, label in conditions:
+        row = [label]
+        for k, name in CIVIC.items():
+            row.append(cell(load(eval_dir, name if condition == "nominal" else f"{name}_stress_{condition}")))
+        rows.append(row)
+    return Table(["Condition"] + list(POLICIES.values()), rows,
+                 "<b>Table 11.</b> Civic task under degraded conditions applied to every robot: goal reached / pedestrian "
+                 "contact / obstacle contact / fall (%).")
+
+
 def curves(log: str, block: int = 25) -> dict:
     points, cur = {}, None
     for line in open(log, errors="ignore"):
@@ -238,6 +312,9 @@ def main():
         "walker_stress": walker_stress(args.eval),
         "nav_stress": nav_stress(args.eval, nav),
     }
+    if load(args.eval, "civic_teacher"):
+        tables.update({"civic": civic(args.eval), "reach_walker_stress": reach_walker_stress(args.eval),
+                       "civic_stress": civic_stress(args.eval)})
     readme = open(args.readme).read()
     for name, table in tables.items():
         readme, n = re.subn(rf"(<!-- table:{name} -->\n).*?(\n<!-- /table:{name} -->)",
