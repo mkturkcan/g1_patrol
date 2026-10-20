@@ -87,9 +87,11 @@ to 2.5 rad/s, up to 3 kg in one hand, and shoves and kicks (60–250 N for 0.1�
 (each on when positive), into upper-body joint targets, the walker's posture command and a hold of the velocity
 command (zero while picking up, putting down or calling for help). Triggered with litter up to 1 m ahead (within 0.5 m to
 either side), a basket up to 1 m beyond reach or a bag zone up to 1 m away, it first walks the robot there with its own
-velocity command: arcs at 0.3–0.45 m/s (the walker stands still below about 0.15 m/s and does not turn on the spot),
-stepping back to turn towards a target close by, litter lined up 15 cm to the side of the working arm's foot; it gives
-up after 6 s. Litter is let go only over a basket's opening. Picking up uses damped least-squares inverse kinematics
+velocity command: arcs at 0.3–0.45 m/s (the walker stands still below about 0.15 m/s, hardly steps back below 0.4 m/s
+and turns on the spot only partly), stepping back at 0.4 m/s to turn towards a target close by, litter lined up 15 cm to
+the side of the working arm's foot; it gives up after 6 s. Litter is lifted over a basket's rim while walking up to it
+(stopping 0.63–0.79 m from its center), let go only over the opening, and the robot steps back to 0.95 m before lowering
+the arm. Picking up uses damped least-squares inverse kinematics
 of the waist and the arm towards the hand's grasp center (9 cm from the palm link towards the Dex3 fingertips); on the
 robot this needs the item's position from the litter detector and closing the Dex3 fingers on contact, where the
 simulation attaches the item when the grasp center is within 5 cm of it. Joint targets move at most 2.5 rad/s.
