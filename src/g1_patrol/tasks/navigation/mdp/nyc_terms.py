@@ -239,7 +239,7 @@ class nyc_adaptive_curriculum(ManagerTermBase):
         if played.any():
             ids = env_ids[played]
             r, c = terrain.terrain_levels[ids], terrain.terrain_types[ids]
-            won = env.termination_manager.get_term(success_term)[ids].float()
+            won = self._won(env, ids, success_term).float()
             flat = r * self.cols + c
             n = torch.bincount(flat, minlength=self.rows * self.cols).float().view(self.rows, self.cols)
             wins = torch.bincount(flat, weights=won, minlength=self.rows * self.cols).view(self.rows, self.cols)
@@ -264,6 +264,10 @@ class nyc_adaptive_curriculum(ManagerTermBase):
         terrain.terrain_types[env_ids] = cols
         terrain.env_origins[env_ids] = terrain.terrain_origins[rows, cols]
         return self._stats()
+
+    def _won(self, env: ManagerBasedRLEnv, env_ids: torch.Tensor, success_term: str) -> torch.Tensor:
+        """Which of the ended episodes count as a success."""
+        return env.termination_manager.get_term(success_term)[env_ids]
 
     def _stats(self) -> dict[str, float]:
         unlocked = torch.ones_like(self.success, dtype=torch.bool)

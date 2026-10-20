@@ -32,6 +32,9 @@ from isaaclab.markers.config import SPHERE_MARKER_CFG
 from isaaclab.utils import configclass, replace
 from isaaclab.utils.math import quat_from_euler_xyz, yaw_quat
 
+from .nyc_assist import AssistMixin
+from .nyc_social import CANE, SocialMixin
+from .nyc_trash import TrashMixin
 from ..nyc.tiles import (
     HALF_L,
     HALF_W,
@@ -115,8 +118,11 @@ def ray_box_hits(origin: torch.Tensor, dirs: torch.Tensor, boxes: torch.Tensor, 
     return torch.where(hit, t, torch.full_like(t, max_range)).amin(dim=-1).clamp(max=max_range)
 
 
-class NycScenarioCommand(CommandTerm):
-    """Goal, pedestrian traffic and privileged state. The command is the goal in the robot's heading frame (x, y)."""
+class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
+    """Goal, pedestrian traffic and privileged state. The command is the goal in the robot's heading frame (x, y).
+
+    The civic-task additions (litter and trash bags, special pedestrians and incidents, a fallen person, crosswalk
+    signals; see the mixins) are off unless configured."""
 
     cfg: NycScenarioCommandCfg
 
@@ -174,6 +180,9 @@ class NycScenarioCommand(CommandTerm):
         self.contact_ped_approach_speed = torch.zeros(n, device=dev)
         self.metrics["min_ped_clearance"] = torch.full((n,), 10.0, device=dev)
         self.metrics["level"] = torch.zeros(n, device=dev)
+        self._init_social(cfg)
+        self._init_trash(cfg, env)
+        self._init_assist(cfg, env)
 
     def __str__(self) -> str:
         return f"NycScenarioCommand: {self.num_peds} pedestrians, tiles {self.layout.num_rows}x{self.layout.num_cols}"
@@ -217,10 +226,17 @@ class NycScenarioCommand(CommandTerm):
         pts, cum = self.ped_paths()
         return path_at(pts, cum, self.ped_s)[1]
 
-    def pedestrian_clearance(self) -> torch.Tensor:
+    def pedestrian_clearance(self, exclude_hostile: bool = False, only: torch.Tensor | None = None) -> torch.Tensor:
+        """Gap (m) between the robot's footprint and the nearest visible pedestrian; optionally not counting attackers
+        and blockers, or among the pedestrians in ``only`` (n, p)."""
         d = torch.linalg.norm(self.ped_pos - self.robot_pos().unsqueeze(1), dim=-1)
-        gap = d - self.cfg.pedestrian_radius - self.cfg.robot_radius
-        return torch.where(self.visible_peds(), gap, torch.full_like(gap, 1e3)).amin(dim=1)
+        gap = d - self.ped_radius - self.cfg.robot_radius
+        mask = self.visible_peds()
+        if exclude_hostile:
+            mask = mask & ~self.hostile
+        if only is not None:
+            mask = mask & only
+        return torch.where(mask, gap, torch.full_like(gap, 1e3)).amin(dim=1)
 
     def collision_risk(self, horizon: float = 2.0, margin: float = 0.1) -> torch.Tensor:
         """Predicted robot-pedestrian contacts under constant relative velocity, summed over visible pedestrians.
@@ -234,7 +250,7 @@ class NycScenarioCommand(CommandTerm):
         vel = self.ped_vel - self.robot.data.root_lin_vel_w.torch[:, None, :2]
         t = (-(rel * vel).sum(-1) / (vel * vel).sum(-1).clamp(min=1e-6)).clamp(min=0.0, max=horizon)
         closest = torch.linalg.norm(rel + vel * t.unsqueeze(-1), dim=-1)
-        reach = self.cfg.pedestrian_radius + self.cfg.robot_radius + margin
+        reach = self.ped_radius + self.cfg.robot_radius + margin
         risk = (1.0 - closest / reach).clamp(min=0.0) * (1.0 - t / horizon)
         return (risk * self.visible_peds()).sum(dim=1)
 
@@ -292,11 +308,12 @@ class NycScenarioCommand(CommandTerm):
         gap = torch.minimum(torch.where(span_c, d_c, far).amin(dim=-1), torch.where(span_b, d_b, far).amin(dim=-1))
         return gap.amin(dim=1) - r
 
-    def limb_pedestrian_clearance(self) -> torch.Tensor:
+    def limb_pedestrian_clearance(self, exclude_hostile: bool = False) -> torch.Tensor:
         """Gap between the arm and hand links and the nearest pedestrian (n,)."""
         xy = self.limb_points()[..., :2]
-        d = torch.linalg.norm(self.ped_pos[:, None] - xy[:, :, None], dim=-1) - self.cfg.pedestrian_radius - self.cfg.limb_radius
-        return torch.where(self.visible_peds()[:, None], d, torch.full_like(d, 1e3)).amin(dim=(1, 2))
+        d = torch.linalg.norm(self.ped_pos[:, None] - xy[:, :, None], dim=-1) - self.ped_radius[:, None] - self.cfg.limb_radius
+        mask = self.visible_peds() & ~self.hostile if exclude_hostile else self.visible_peds()
+        return torch.where(mask[:, None], d, torch.full_like(d, 1e3)).amin(dim=(1, 2))
 
     def in_street(self) -> torch.Tensor:
         p = self.robot_pos()
@@ -387,8 +404,12 @@ class NycScenarioCommand(CommandTerm):
         self.metrics["level"] = self.terrain.terrain_levels.float()
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
-        extras = super().reset(env_ids)
         ids = slice(None) if env_ids is None else env_ids
+        self._trash_metrics(ids)  # finalize the ended episode's litter counts before they are logged
+        self._assist_metrics(ids)
+        self.metrics["shoves"][ids] = self.episode_shoves[ids]
+        self.metrics["attacked"][ids] = self.attacked_episode[ids].float()
+        extras = super().reset(env_ids)
         self.metrics["min_ped_clearance"][ids] = 10.0
         return extras
 
@@ -437,7 +458,10 @@ class NycScenarioCommand(CommandTerm):
         self.prev_goal_dist[env_ids] = torch.linalg.norm(self.goal[env_ids] - start, dim=1)
 
         self._spawn_pedestrians(env_ids, route)
+        self._spawn_social(env_ids, route)
         self.write_pedestrians(env_ids)
+        self._spawn_trash(env_ids, route)
+        self._spawn_assist(env_ids, route)
 
     def _sample_paths(self, env_ids: torch.Tensor, count: int, route: torch.Tensor | None = None) -> torch.Tensor:
         """Path index per pedestrian, by path weight, favouring paths that oppose or cross the robot's route (judged
@@ -470,8 +494,7 @@ class NycScenarioCommand(CommandTerm):
         d = self.difficulty[env_ids]
         crowd = self.layout.crowd[self.tile_row[env_ids], self.tile_col[env_ids]]
         budget = (crowd[:, 0] + (crowd[:, 1] - crowd[:, 0]) * d + torch.rand(n, device=dev) * 2 - 1).round().clamp(1, p)
-        idx = torch.arange(p, device=dev)[None].expand(n, p)
-        active = idx < budget[:, None]
+        active = self.active_pedestrians(env_ids, budget)
         has_spot = (self.num_standing[env_ids] > 0)[:, None]
         standing = active & has_spot & (torch.rand(n, p, device=dev) < cfg.standing_ratio)
         walking = active & ~standing
@@ -542,10 +565,14 @@ class NycScenarioCommand(CommandTerm):
         self.goal_b[:] = _rotate(rel, yaw)
         self.prev_goal_dist[:] = self.goal_distance()
         self._plan_pedestrians(dt)
+        self.update_trash(dt)
+        self.update_signals(dt)
 
     def _plan_pedestrians(self, dt: float):
         cfg = self.cfg
         n, p, dev = self.num_envs, self.num_peds, self.device
+        social = self.social
+        masks = self.social_masks() if social else None
         self.ped_timer -= dt
         pts, cum = self.ped_paths()
 
@@ -555,6 +582,8 @@ class NycScenarioCommand(CommandTerm):
         entry = start + self.ped_offset[..., None] * _left(u0)
         entry_clear = torch.linalg.norm(entry - self.robot_pos()[:, None], dim=-1) > cfg.spawn_clearance
         appear = (self.ped_mode == PARKED) & (self.ped_timer <= 0) & entry_clear
+        if social:
+            appear &= ~masks["dog"]  # dogs come and go with their owners
         self.ped_pos = torch.where(appear[..., None], entry, self.ped_pos)
         self.ped_s = torch.where(appear, torch.zeros_like(self.ped_s), self.ped_s)
         set_off = (self.ped_mode == STANDING) & (self.ped_timer <= 0)
@@ -563,8 +592,9 @@ class NycScenarioCommand(CommandTerm):
 
         # progress along the path; walkers at its end have left the scene and re-enter on a new path after a pause
         walking = self.ped_mode == WALKING
-        self.ped_s = torch.where(walking, path_project(pts, cum, self.ped_pos, self.ped_s), self.ped_s)
-        done = walking & (self.ped_s > cum[..., -1] - 0.3)
+        on_path = walking & ~masks["dog"] & ~masks["incident"] if social else walking
+        self.ped_s = torch.where(on_path, path_project(pts, cum, self.ped_pos, self.ped_s), self.ped_s)
+        done = on_path & (self.ped_s > cum[..., -1] - 0.3)
         if done.any():
             self.ped_path = torch.where(done, self._sample_paths(torch.arange(n, device=dev), p), self.ped_path)
             half_width = torch.gather(self.path_half_width, 1, self.ped_path)
@@ -572,6 +602,8 @@ class NycScenarioCommand(CommandTerm):
             self.ped_timer = torch.where(done, 3.0 * torch.rand(n, p, device=dev), self.ped_timer)
             self.ped_mode = torch.where(done, torch.full_like(self.ped_mode, PARKED), self.ped_mode)
             self.ped_s = torch.where(done, torch.zeros_like(self.ped_s), self.ped_s)
+            if social:
+                self.keep_wide_offsets()
             pts, cum = self.ped_paths()
         walking = self.ped_mode == WALKING
         _, path_dir = path_at(pts, cum, self.ped_s)
@@ -590,17 +622,28 @@ class NycScenarioCommand(CommandTerm):
         side_signed = (to_robot * left).sum(-1)  # > 0: the robot is to the pedestrian's left
         side = side_signed.abs()
         blocking = self.ped_aware & (self.ped_mode == WALKING) & (ahead > 0) & (ahead < 1.6) & (side < 0.7)
+        if social:
+            blocking &= ~masks["cyclist"]  # cyclists swerve but do not slow down
         factor = torch.where(blocking, ((ahead - 0.6) / 1.0).clamp(0.0, 1.0), torch.ones_like(ahead))
         self.ped_delay = self.ped_speed * (1.0 - factor) * blocking
+        if social:
+            self.ped_delay = self.ped_delay * ~masks["incident"]  # someone blocking the robot is not held up by it
         v_des = v_des * factor[..., None]
         # step around the robot: aware pedestrians early and gently, distracted ones late and abruptly
         reach = torch.where(self.ped_aware, cfg.aware_reaction_distance, cfg.distracted_reaction_distance)
         swerve = torch.where(self.ped_aware, cfg.aware_swerve_speed, cfg.distracted_swerve_speed)
+        if social:  # cyclists see the robot early; blind people notice it only at the last moment (cane)
+            reach = torch.where(masks["cyclist"], cfg.cyclist_reaction_distance, torch.where(self.ped_role == CANE, 0.6, reach))
+            swerve = torch.where(masks["cyclist"], cfg.cyclist_swerve_speed, torch.where(self.ped_role == CANE, 0.3, swerve))
         in_path = (self.ped_mode == WALKING) & (ahead > 0) & (ahead < reach) & (side < 0.7)
         closeness = (1.0 - ahead / reach).clamp(0.0, 1.0)
         away = -torch.where(side_signed >= 0, 1.0, -1.0)
         v_des = v_des + (in_path * swerve * closeness * away)[..., None] * left
         v_des = torch.where((self.ped_mode == WALKING)[..., None], v_des, torch.zeros_like(v_des))
+        if social:
+            v_des = self.signal_hold(v_des, path_dir)
+            v_des = self.social_desired_velocity(v_des, masks, dt)
+            v_des = torch.where((self.ped_mode == WALKING)[..., None], v_des, torch.zeros_like(v_des))
 
         # social forces
         visible = self.visible_peds()
@@ -608,47 +651,62 @@ class NycScenarioCommand(CommandTerm):
         def push(gap, away):
             return (cfg.repulsion_strength * torch.exp(-gap / cfg.repulsion_range)).unsqueeze(-1) * away
 
-        r = cfg.pedestrian_radius
+        r = self.ped_radius
         diff = self.ped_pos[:, :, None] - self.ped_pos[:, None]
         dist = torch.linalg.norm(diff, dim=-1).clamp(min=1e-3)
         others = visible[:, None, :] & ~torch.eye(p, dtype=torch.bool, device=dev)[None]
-        gap = torch.where(others, dist - 2 * r, torch.full_like(dist, 1e3))
+        if social:
+            others &= self.pair_force_mask()
+        gap = torch.where(others, dist - (r[:, :, None] + r[:, None, :]), torch.full_like(dist, 1e3))
         force = push(gap, diff / dist[..., None]).sum(dim=2)
         # structures (circles and boxes, closest surface point); not while coming out of a doorway or up a stairwell.
         # Beyond the tile's ends the street continues like the tile itself (the demo renders copies of it there)
         free = (self.ped_s < torch.gather(self.path_free, 1, self.ped_path)) & walking
+        if social:  # dogs come out of doors with their owners
+            owner = self.ped_link.clamp(min=0)
+            free |= masks["dog"] & torch.gather(free, 1, owner)
         local = self.tile_local(self.ped_pos)
         circ = self.circles
         diff = local[:, :, None] - circ[:, None, :, :2]
         dist = torch.linalg.norm(diff, dim=-1).clamp(min=1e-3)
         cmask = (self.circle_valid & (circ[..., 3] < OVERHEAD_Z))[:, None]
-        gap = torch.where(cmask, dist - circ[:, None, :, 2] - r, torch.full_like(dist, 1e3))
+        gap = torch.where(cmask, dist - circ[:, None, :, 2] - r[..., None], torch.full_like(dist, 1e3))
         structures = push(gap, diff / dist[..., None]).sum(dim=2)
         d_box, closest = box_distance(local, self.boxes)
         diff = local[:, :, None] - closest
         bmask = (self.box_valid & (self.boxes[..., 5] < OVERHEAD_Z))[:, None]
-        gap = torch.where(bmask, d_box - r, torch.full_like(d_box, 1e3))
+        gap = torch.where(bmask, d_box - r[..., None], torch.full_like(d_box, 1e3))
         structures += push(gap, diff / torch.linalg.norm(diff, dim=-1, keepdim=True).clamp(min=1e-3)).sum(dim=2)
         force += structures * ~free[..., None]
         # the robot, for pedestrians who notice it
         d_r = torch.linalg.norm(to_robot, dim=-1).clamp(min=1e-3)
-        force += self.ped_aware[..., None] * push(d_r - r - cfg.robot_radius, -to_robot / d_r[..., None])
+        repel = self.ped_aware & ~masks["incident"] if social else self.ped_aware  # attackers and blockers close in
+        force += repel[..., None] * push(d_r - r - cfg.robot_radius, -to_robot / d_r[..., None])
         force = force * (self.ped_mode == WALKING)[..., None] + 0.3 * force * (self.ped_mode == STANDING)[..., None]
+        if social:
+            force = force * ~masks["queue"][..., None]  # people in line stand still
 
         vel = self.ped_vel + (v_des + force - self.ped_vel) * min(dt / cfg.relaxation_time, 1.0)
         speed = torch.linalg.norm(vel, dim=-1, keepdim=True)
-        vel = vel * (cfg.max_pedestrian_speed / speed.clamp(min=cfg.max_pedestrian_speed))
+        max_speed = self.ped_max_speed[..., None] if social else cfg.max_pedestrian_speed
+        vel = vel * (max_speed / speed.clamp(min=max_speed))
         # people do not walk backwards: forces may slow a walker down or move it sideways, but not push it back along
         # its path (also when it has stopped to give way); standing pedestrians are only nudged
         along = (vel * path_dir).sum(-1)
-        vel = vel - ((along + cfg.max_backward_speed).clamp(max=0.0) * walking)[..., None] * path_dir
+        on_path = walking & ~masks["dog"] & ~masks["incident"] if social else walking
+        vel = vel - ((along + cfg.max_backward_speed).clamp(max=0.0) * on_path)[..., None] * path_dir
         # aware pedestrians never walk into the robot (crowd pressure included): cap their closing speed so they keep
         # at least ``aware_min_gap`` over the next step; contact then only happens if the robot closes in itself
         u_r = to_robot / d_r[..., None]
-        max_closing = ((d_r - r - cfg.robot_radius - cfg.aware_min_gap) / dt).clamp(min=0.0)
+        min_gap = cfg.aware_min_gap
+        if social:  # an attacker comes within arm's reach, a blocker stands just in front of the robot
+            min_gap = torch.where(masks["attacker"], cfg.attack_min_gap, torch.where(masks["incident"], cfg.block_min_gap, cfg.aware_min_gap))
+        max_closing = ((d_r - r - cfg.robot_radius - min_gap) / dt).clamp(min=0.0)
         excess = ((vel * u_r).sum(-1) - max_closing).clamp(min=0.0) * self.ped_aware
         vel = vel - excess[..., None] * u_r
         self.ped_vel = torch.where(visible[..., None], vel, torch.zeros_like(vel))
+        if social:
+            self.social_after_planning(dt)
 
     def integrate_pedestrians(self, dt: float):
         """Advance pedestrians by ``dt`` and write their poses (every physics step)."""
@@ -663,9 +721,14 @@ class NycScenarioCommand(CommandTerm):
         ground = self.layout.ground_height(rows, cols, self.tile_local(pos))
         pose = torch.zeros(n, p, 7, device=self.device)
         pose[..., :2] = pos + self.tile_center[ids][:, None]
-        pose[..., 2] = torch.where(mode != PARKED, ground + self.cfg.pedestrian_center_height, torch.full_like(ground, -10.0))
-        # face the walking direction (capsules are symmetric; this matters for character models)
+        pose[..., 2] = torch.where(mode != PARKED, ground + self.ped_height[ids], torch.full_like(ground, -10.0))
+        # face the walking direction (capsules are symmetric; this matters for character models); attackers and
+        # blockers face the robot
         yaw = torch.atan2(vel[..., 1], vel[..., 0])
+        if self.social:
+            to_robot = self.robot_pos()[ids][:, None] - pos
+            facing = self.hostile[ids] & (self.incident_phase[ids] == 1)[:, None]
+            yaw = torch.where(facing, torch.atan2(to_robot[..., 1], to_robot[..., 0]), yaw)
         pose[..., 5], pose[..., 6] = torch.sin(yaw / 2), torch.cos(yaw / 2)
         twist = torch.zeros(n, p, 6, device=self.device)
         twist[..., :2] = vel * (mode != PARKED)[..., None]
@@ -734,6 +797,78 @@ class NycScenarioCommandCfg(CommandTermCfg):
     approach_spawn_clearance: float = 5.0
     """Pedestrians walking towards the robot's start never start within this distance (m) of it."""
     max_pedestrian_speed: float = 1.8
+    trash_name: str | None = None
+    """Scene entity (rigid object collection) of the litter items; None: no litter."""
+    trash_dir: str = ""
+    """Directory of the litter assets (``manifest.json``)."""
+    trash_items: tuple[str, ...] = ()
+    """Manifest name of each item of the collection, in order."""
+    trash_count: tuple[int, int] = (0, 4)
+    """Number of items lying along the route per episode (tiles with a litter basket only)."""
+    trash_lateral: float = 2.0
+    """Items lie within this distance (m) of the route line."""
+    trash_clearance: float = 0.35
+    """Items keep this distance (m) from structures, so that the robot can reach them."""
+    trash_candidates: int = 24
+    bag_count: tuple[int, int] = (0, 1)
+    """Number of trash bags lying along the route per episode (tiles with a curbside bag pile only)."""
+    bag_clearance: float = 0.45
+    repark_interval: float = 2.0
+    """Seconds between putting the unused (freely falling) litter back below the street."""
+
+    # civic tasks: special pedestrians and incidents (see SocialMixin), a fallen person and signals (AssistMixin);
+    # ranges are (easiest, hardest) tile difficulty
+    social: bool = False
+    num_regular: int | None = None
+    """Regular pedestrian slots (the first ones); the rest are ``num_wide`` wide bodies and ``num_dogs`` dogs."""
+    num_wide: int = 0
+    num_dogs: int = 0
+    wide_radius: float = 0.4
+    wide_center_height: float = 0.65
+    dog_radius: float = 0.18
+    dog_center_height: float = 0.3
+    dog_max_speed: float = 2.5
+    leash_length: tuple[float, float] = (0.8, 2.0)
+    cyclist_radius: float = 0.35
+    cyclist_reaction_distance: float = 4.0
+    cyclist_swerve_speed: float = 1.0
+    group_spacing: float = 0.6
+    queue_spacing: float = 0.75
+    wheelchair_ratio: tuple[float, float] = (0.2, 0.5)
+    cane_ratio: tuple[float, float] = (0.02, 0.06)
+    cyclist_ratio: tuple[float, float] = (0.05, 0.35)
+    dog_ratio: tuple[float, float] = (0.2, 0.5)
+    groups: tuple[float, float] = (1.0, 3.0)
+    queue_ratio: tuple[float, float] = (0.4, 0.8)
+    attack_ratio: tuple[float, float] = (0.08, 0.25)
+    block_ratio: tuple[float, float] = (0.05, 0.12)
+    fallen_ratio: tuple[float, float] = (0.08, 0.12)
+    incident_time: tuple[float, float] = (3.0, 25.0)
+    """When (s after the episode start) an incident begins."""
+    incident_distance: tuple[float, float] = (2.5, 10.0)
+    attack_speed: tuple[float, float] = (1.0, 2.6)
+    """Speed (m/s) at which the attacker goes after the robot (the robot retreats at up to 1.3 m/s)."""
+    chase_time: tuple[float, float] = (4.0, 15.0)
+    block_time: tuple[float, float] = (4.0, 12.0)
+    block_distance: float = 1.0
+    attack_min_gap: float = 0.05
+    block_min_gap: float = 0.35
+    reach: float = 0.3
+    """Gap (m) between bodies within which the attacker can hit the robot."""
+    shove_force_min: float = 60.0
+    shove_force_max: tuple[float, float] = (120.0, 250.0)
+    kick_force: tuple[float, float] = (80.0, 200.0)
+    kick_probability: float = 0.25
+    shove_interval: tuple[float, float] = (0.8, 2.5)
+    fallen_name: str | None = None
+    """Scene entity (rigid object) of the person lying on the ground; None: no fallen-person episodes."""
+    alert_distance: tuple[float, float] = (0.5, 1.8)
+    alert_angle: float = 0.8
+    signals: bool = False
+    walk_time: tuple[float, float] = (12.0, 25.0)
+    flash_time: tuple[float, float] = (6.0, 10.0)
+    dont_walk_time: tuple[float, float] = (15.0, 35.0)
+    jaywalk_ratio: tuple[float, float] = (0.05, 0.15)
     repulsion_strength: float = 1.5
     repulsion_range: float = 0.3
     relaxation_time: float = 0.5
@@ -754,6 +889,7 @@ class PedestrianMotionAction(ActionTerm):
         super().__init__(cfg, env)
         self._scenario = None
         self._empty = torch.zeros(self.num_envs, 0, device=self.device)
+        self._count = 0
 
     @property
     def action_dim(self) -> int:
@@ -773,10 +909,15 @@ class PedestrianMotionAction(ActionTerm):
     def apply_actions(self):
         if self._scenario is None:
             self._scenario = self._env.command_manager.get_term(self.cfg.scenario_name)
-        self._scenario.integrate_pedestrians(self._env.physics_dt)
+        self._count += 1
+        if self._count >= self.cfg.update_every:
+            self._scenario.integrate_pedestrians(self._env.physics_dt * self._count)
+            self._count = 0
 
 
 @configclass
 class PedestrianMotionActionCfg(ActionTermCfg):
     class_type: type = PedestrianMotionAction
     scenario_name: str = MISSING
+    update_every: int = 1
+    """Physics steps between pose updates of the pedestrians (kinematic bodies)."""

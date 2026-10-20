@@ -20,6 +20,8 @@ class NycTileCfg(SubTerrainBaseCfg):
 
     function: object = None
     kind: str = MISSING
+    civic: bool = False
+    """Add the civic-task features (litter baskets, trash-bag piles, queues, signalized crossings)."""
 
 
 @configclass
@@ -31,9 +33,9 @@ class NycTerrainImporterCfg(TerrainImporterCfg):
     """Look of the static structures (walls, poles, fences, ...)."""
 
 
-def nyc_terrain_generator_cfg(num_rows: int = 10, variants_per_kind: int = 2) -> TerrainGeneratorCfg:
+def nyc_terrain_generator_cfg(num_rows: int = 10, variants_per_kind: int = 2, civic: bool = False) -> TerrainGeneratorCfg:
     """Terrain with ``variants_per_kind`` columns per scenario type and ``num_rows`` difficulty levels."""
-    sub_terrains = {kind: NycTileCfg(kind=kind, proportion=1.0) for kind in KINDS}
+    sub_terrains = {kind: NycTileCfg(kind=kind, proportion=1.0, civic=civic) for kind in KINDS}
     return TerrainGeneratorCfg(
         class_type=f"{_IMPL}:NycTerrainGenerator",
         size=TILE_SIZE,

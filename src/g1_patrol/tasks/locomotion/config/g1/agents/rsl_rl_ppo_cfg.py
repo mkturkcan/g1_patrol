@@ -65,3 +65,12 @@ class G1WalkCityPPORunnerCfg(G1WalkRoughPPORunnerCfg):
         self.obs_groups = {"actor": ["policy"], "critic": ["critic"]}
         self.actor.obs_normalization = True
         self.critic.obs_normalization = True
+
+
+@configclass
+class G1WalkReachPPORunnerCfg(G1WalkCityPPORunnerCfg):
+    """Walker that also squats and leans forward to pick things up, with the arms driven by another controller."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "g1_walk_reach"

@@ -4,7 +4,9 @@
 #   no_drift     without the drift penalty
 #   ground_1.0   with Isaac Lab's default ground material (friction 1.0, multiplied) in every phase. MuJoCo-Warp uses
 #                the larger of the two coefficients of a contact, so on Newton the contact friction is never below 1.0.
+# Both are ablations of the walking-only walker of the first release (G1Patrol-Walk-City).
 source scripts/reproduce/env.sh
+export WALKER_TASK=G1Patrol-Walk-City
 EVAL="$OUT/eval"
 mkdir -p "$EVAL"
 bash scripts/reproduce/walker.sh "${TAG}_no_drift" env.rewards.velocity_drift=null

@@ -51,3 +51,36 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1NycCameraDistillationRunnerCfg",
     },
 )
+
+gym.register(
+    id="G1Patrol-Navigate-Civic",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.civic_env_cfg:G1CivicNavEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1CivicTeacherPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="G1Patrol-Navigate-Civic-Lidar",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.civic_env_cfg:G1CivicNavLidarStudentEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1CivicLidarDistillationRunnerCfg",
+    },
+)
+
+gym.register(
+    id="G1Patrol-Navigate-Civic-Camera",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.civic_env_cfg:G1CivicNavCameraStudentEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1CivicCameraDistillationRunnerCfg",
+    },
+)

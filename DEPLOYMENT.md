@@ -71,6 +71,37 @@ Input groups (see `describe_policy_io.py` for exact shapes):
 
 Output: 3 raw actions, shaped as above.
 
+## Civic tasks
+
+The civic release (`G1Patrol-Walk-Reach`, `G1Patrol-Navigate-Civic*`) changes the interface as follows.
+
+**Walker** (`policies/g1_walk_reach.pt`). The command has five values: `(vx, vy, wz)` as above and a posture,
+`(pelvis height above the ground, forward lean)` in m and rad (walking posture `(0.72, 0)`). The walker drives the
+12 leg joints only (output: 12 actions; target = default + 0.25 · action); the torso, arms and hands follow the hands
+controller below. In training, the posture command moved towards its target at most 0.4 m/s and 1.2 rad/s; postures
+other than the walking posture were held while standing (pelvis 0.40–0.72 m, lean up to 1.2 rad) or, for the braced
+stance, also while walking (pelvis ≥ 0.64 m, lean ≤ 0.18 rad). The walker was trained with the upper body moving at up
+to 2.5 rad/s, up to 3 kg in one hand, and shoves and kicks (60–250 N for 0.1–0.2 s on the torso, 80–250 N on a knee).
+
+**Hands controller** (runs at 50 Hz on the robot, not learned). It turns two navigator outputs, trigger and brace
+(each on when positive), into upper-body joint targets, the walker's posture command and a hold of the velocity
+command (zero while picking up, putting down or calling for help). Picking up uses damped least-squares inverse kinematics
+of the waist and the arm towards the hand's grasp center (9 cm from the palm link towards the Dex3 fingertips); on the
+robot this needs the item's position from the litter detector and closing the Dex3 fingers on contact, where the
+simulation attaches the item when the grasp center is within 5 cm of it. Joint targets move at most 2.5 rad/s.
+
+**Navigator** (civic students). Output: 5 raw actions: the three velocity actions (forward range −0.4 to 1.3 m/s,
+yaw rate ±1.5 rad/s), trigger, brace. Input group `student` (148): goal, base linear and angular velocity, projected
+gravity (as above); hands state (4: holding litter, holding a bag, busy, braced); map and signal data (17: nearest two
+litter baskets and the nearest bag pile from a city map with 0.1 m error, a fallen person's position from the task, the
+crosswalk signal phase and time left from signal broadcasts); tracked people (96: eight tracks of relative position and
+velocity, presence, size, wheelchair/stroller, dog, white cane, the vector to an associated person or dog, and time
+since last detection; lidar student: MID-360 tracker, 360°, 10 m; camera student: D435i depth, its field of view,
+6 m); remembered litter (15: three items, position from the drifting odometry frame, grasp height, bag, age; detected in
+the D435i color image, 69° × 42°); previous actions (5). Plus the height maps as above. These inputs assume a
+perception stack the simulation stands in for: a person tracker with size classes, a litter and bag detector on the
+color image, a white-cane classifier, and the city's litter-basket map and signal broadcasts.
+
 ## What the simulation assumed
 
 Ranges sampled per robot in training (walker and navigator); the stress tests (`scripts/stress_walker.py`,
@@ -91,4 +122,7 @@ Ranges sampled per robot in training (walker and navigator); the stress tests (`
 
 Not modelled: motor heating and the torque-speed curve beyond the velocity limits, foot and joint compliance, cable
 and battery dynamics, the MID-360's non-repetitive scan pattern (approximated by 32 channels × 360 directions),
-depth-camera artefacts beyond dropout and range noise, glass and other non-returning surfaces, traffic signals.
+depth-camera artefacts beyond dropout and range noise, glass and other non-returning surfaces, vehicles, traffic
+signals (the civic tasks model pedestrian signals). In the civic tasks also: deformable bags, soft contact between the
+fingers and the item (an item is attached to the hand), and real detector errors (the simulated detectors miss items
+with a distance-dependent probability and add position noise).

@@ -7,6 +7,8 @@ The MDP (scene, observations, actions, events, terminations, physics backend pre
 generic locomotion velocity environment; this module only specialises it for the G1.
 """
 
+import dataclasses
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets import ArticulationCfg
@@ -538,3 +540,79 @@ class G1WalkCityEnvCfg(G1WalkRoughEnvCfg):
     def play_mode(self):
         super().play_mode()
         self.curriculum.push_strength = None
+
+
+##
+# Reaching walker -- the city walker's legs, also squatting and leaning forward (to pick things up from the ground)
+# while the waist, arms and hands follow another controller.
+##
+
+LEG_JOINTS = [
+    ".*_hip_yaw_joint",
+    ".*_hip_roll_joint",
+    ".*_hip_pitch_joint",
+    ".*_knee_joint",
+    ".*_ankle_pitch_joint",
+    ".*_ankle_roll_joint",
+]
+
+
+@configclass
+class G1ReachRewards(G1BlindCityRewards):
+    """Blind city walker rewards with the posture commanded instead of fixed."""
+
+    posture = RewTerm(func=mdp.track_posture_exp, weight=1.5, params={"command_name": "base_velocity"})
+    height_error = RewTerm(func=mdp.posture_error_l2, weight=-20.0, params={"command_name": "base_velocity", "component": 0})
+    lean_error = RewTerm(func=mdp.posture_error_l2, weight=-2.0, params={"command_name": "base_velocity", "component": 1})
+    sideways_tilt = RewTerm(func=mdp.sideways_tilt_l2, weight=-5.0)
+    planted_feet = RewTerm(
+        func=mdp.planted_feet,
+        weight=-0.5,
+        params={
+            "command_name": "base_velocity",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET),
+            "asset_cfg": SceneEntityCfg("robot", body_names=FEET),
+        },
+    )
+
+
+@configclass
+class G1WalkReachEnvCfg(G1WalkCityEnvCfg):
+    """Blind walker whose policy drives the legs: it tracks a base velocity (up to a brisk 1.3 m/s retreat) and a
+    posture (pelvis height and forward lean: squatting to pick things up, a braced stance against an attacker) while
+    the waist, arms and fingers move independently (random smooth targets in training, including raised forearms as a
+    guard and up to 3 kg in one hand; an arm controller in the navigation tasks), and while it is shoved and kicked."""
+
+    rewards: G1ReachRewards = G1ReachRewards()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # commands: velocity plus posture
+        velocity = self.commands.base_velocity
+        self.commands.base_velocity = mdp.VelocityPostureCommandCfg(
+            **{f.name: getattr(velocity, f.name) for f in dataclasses.fields(velocity) if f.name != "class_type"}
+        )
+        # actions: the policy drives the legs; the upper body follows random targets
+        self.actions.joint_pos.joint_names = LEG_JOINTS
+        self.actions.upper_body = mdp.UpperBodyMotionActionCfg(asset_name="robot", joint_names=mdp.UPPER_BODY_JOINTS)
+        # someone attacking the robot (repeated shoves and kicks during random attack windows), and something of up to
+        # 3 kg in one hand (litter, a trash bag), picked up and put down every few seconds
+        self.actions.disturbance = mdp.DisturbanceActionCfg(asset_name="robot")
+        # commands: also a brisk retreat (1.3 m/s) and quick turns away
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.5, 1.3)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.5, 1.5)
+        # rewards: posture is commanded (replaces the fixed height, upright torso and level pelvis terms); the upper
+        # body is not the policy's to keep still
+        self.rewards.base_height = None
+        self.rewards.torso_upright = None
+        self.rewards.flat_orientation_l2 = None
+        self.rewards.stand_still = None
+        self.rewards.joint_deviation_arms = None
+        self.rewards.joint_deviation_fingers = None
+        self.rewards.joint_deviation_torso = None
+        self.rewards.joint_vel.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+
+    def play_mode(self):
+        super().play_mode()
+        # as the push events, no attacks (the stress evaluation turns them on)
+        self.actions.disturbance.attack_ratio = 0.0

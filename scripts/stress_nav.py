@@ -4,7 +4,8 @@ Usage:
     python scripts/stress_nav.py --condition sensors --task G1Patrol-Navigate-NYC-Lidar --checkpoint <model.pt>
     conditions: nominal, sensors (2x sensor noise and odometry drift, 0-200 ms latency), pedestrians (20% faster,
     30% fewer pedestrians notice the robot), robot (5 kg payload, 20% weaker motors, 15-25 ms actuation latency,
-    slippery ground 0.3), combined
+    slippery ground 0.3), combined; civic tasks only: attacks (every episode has an attack, at the hardest level's speed,
+    strength and duration), incidents (attacks, people blocking the way and fallen people, at twice the training rates)
 """
 
 import sys
@@ -13,13 +14,13 @@ import gymnasium as gym
 
 import evaluate_nav
 
-CONDITIONS = ("nominal", "sensors", "pedestrians", "robot", "combined")
+CONDITIONS = ("nominal", "sensors", "pedestrians", "robot", "combined", "attacks", "incidents")
 
 
 def stressed_cfg(base_cls, condition: str):
     from isaaclab.utils import configclass
 
-    apply = CONDITIONS[1:-1] if condition == "combined" else (condition,)
+    apply = ("sensors", "pedestrians", "robot") if condition == "combined" else (condition,)
 
     @configclass
     class Stressed(base_cls):
@@ -55,6 +56,16 @@ def stressed_cfg(base_cls, condition: str):
                     self.scene.robot.actuators[name].max_delay = 5
                 self.events.physics_material.params["static_friction_range"] = (0.3, 0.3)
                 self.events.physics_material.params["dynamic_friction_range"] = (0.25, 0.25)
+            nyc = self.commands.nyc
+            if "attacks" in apply:  # the hardest attacks, in every episode
+                nyc.attack_ratio, nyc.block_ratio, nyc.fallen_ratio = (1.0, 1.0), (0.0, 0.0), (0.0, 0.0)
+                nyc.attack_speed = (nyc.attack_speed[1], nyc.attack_speed[1])
+                nyc.shove_force_max = (nyc.shove_force_max[1], nyc.shove_force_max[1])
+                nyc.chase_time = (nyc.chase_time[1], nyc.chase_time[1])
+            if "incidents" in apply:
+                nyc.attack_ratio = tuple(min(0.4, 2 * v) for v in nyc.attack_ratio)
+                nyc.block_ratio = tuple(min(0.3, 2 * v) for v in nyc.block_ratio)
+                nyc.fallen_ratio = tuple(min(0.3, 2 * v) for v in nyc.fallen_ratio)
 
     return Stressed
 

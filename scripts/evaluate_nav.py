@@ -4,9 +4,11 @@ Runs the policy in many parallel environments (play-mode config: no random shove
 steps (10 per second) and counts how every episode ended (one outcome per episode, in the order of ``OUTCOMES``).
 Pass ``--video`` to also record an RTX clip of robot 0.
 
-For the New York task (``G1Patrol-Navigate-NYC*``) the curriculum is frozen and robots are spread uniformly over all
-difficulty levels, so the results break down by scenario type x difficulty (easy: levels 0-3, medium: 4-6,
-hard: 7-9). Pass ``--keep_curriculum`` to evaluate with the training curriculum instead.
+For the New York tasks (``G1Patrol-Navigate-NYC*``, ``G1Patrol-Navigate-Civic*``) the curriculum is frozen and robots
+are spread uniformly over all difficulty levels, so the results break down by scenario type x difficulty (easy: levels
+0-3, medium: 4-6, hard: 7-9). Pass ``--keep_curriculum`` to evaluate with the training curriculum instead. For the civic
+tasks, the results also cover litter and bags, helping someone who has fallen, attacks and people blocking the way,
+people who need more room, groups, lines and dogs.
 
 Outputs are written next to the checkpoint, in ``<run_dir>/eval/nav_metrics_<physics>.json``, or to ``--out``.
 
@@ -120,6 +122,13 @@ def main(argv: list[str]) -> None:
         cell_close = torch.zeros(num_cells, device=dev)
         cell_goal_time = torch.zeros(num_cells, device=dev)
 
+        civic = nyc and getattr(scenario, "social", False)
+        civic_sum = {}  # sums over ended episodes (or steps), see below
+        hands = base_env.action_manager.get_term("hands") if civic else None
+
+        def add(name, value):
+            civic_sum[name] = civic_sum.get(name, 0.0) + float(value)
+
         # motion quality: the velocity commands sent to the walker and the walker's posture
         walker = base_env.action_manager.get_term("walker") if nyc else None
         robot = base_env.scene["robot"]
@@ -136,9 +145,40 @@ def main(argv: list[str]) -> None:
                     cell = cell + bucket_of_level[scenario.tile_row]
                 else:
                     cell = torch.zeros(base_env.num_envs, dtype=torch.long, device=dev)
+                if civic:  # the ended episode's incident, read before the reset
+                    incident_before = scenario.incident.clone()
+                    attacked_before = scenario.attacked_episode.clone()
                 obs, _, dones, _ = env.step(policy(obs))
                 policy.reset(dones)
                 steps_in_episode += 1
+                if civic:
+                    done = dones.bool()
+                    m = scenario.metrics  # finalized for the episodes that just ended
+                    for key in ("trash_items", "trash_picked", "trash_deposited", "bags", "bags_delivered", "fallen", "assisted", "shoves"):
+                        add(key, m[key][done].sum())
+                    add("episodes", done.sum())
+                    for kind, code in (("attack", 1), ("block", 2), ("fallen", 3)):
+                        ended = done & (incident_before == code)
+                        if kind == "attack":
+                            ended &= attacked_before  # the attack actually happened
+                        add(f"{kind}_episodes", ended.sum())
+                        for name in outcomes:
+                            add(f"{kind}_{name}", (term_manager.get_term(name) & ended).sum())
+                    # per step: attacker distance and bracing, people who need room, groups, lines, leashes
+                    threat = scenario.threat()
+                    under = scenario.under_attack
+                    add("attack_steps", under.sum())
+                    add("attack_gap_sum", threat[under].clamp(max=10.0).sum())
+                    add("attack_close_steps", (under & (threat < 1.0)).sum())
+                    add("attack_close_braced_steps", (under & (threat < 1.0) & hands.bracing).sum())
+                    add("braced_without_threat_steps", (hands.bracing & (threat > 3.0)).sum())
+                    add("steps", base_env.num_envs)
+                    vulnerable = scenario.pedestrian_clearance(only=scenario.ped_vulnerable)
+                    add("vulnerable_near_steps", (vulnerable < 10).sum())
+                    add("vulnerable_within_1.2m_steps", (vulnerable < 1.2).sum())
+                    add("splits", scenario.split_event.sum())
+                    add("leash_crossings", scenario.leash_crossed.sum())
+                    add("signal_violations", scenario.signal_violation.sum())
                 if walker is not None:
                     live = base_env.episode_length_buf > 1  # skip the first step after a reset
                     cmd, step = walker.command, (walker.command - walker.prev_command).abs() / base_env.step_dt
@@ -217,6 +257,29 @@ def main(argv: list[str]) -> None:
                 }
             metrics["per_scenario"] = per_cell
             metrics["motion"] = {k: float(v) for k, v in zip(MOTION_TERMS, motion / motion_steps.clamp(min=1))}
+
+        if civic:
+            c = civic_sum
+            eps = max(c.get("episodes", 0.0), 1.0)
+            metrics["civic"] = {
+                "litter_picked_per_item": c.get("trash_picked", 0.0) / max(c.get("trash_items", 0.0) + c.get("bags", 0.0), 1.0),
+                "litter_in_basket_per_item": c.get("trash_deposited", 0.0) / max(c.get("trash_items", 0.0), 1.0),
+                "bags_delivered_per_bag": c.get("bags_delivered", 0.0) / max(c.get("bags", 0.0), 1.0),
+                "fallen_person_helped": c.get("assisted", 0.0) / max(c.get("fallen", 0.0), 1.0),
+                "shoves_per_episode": c.get("shoves", 0.0) / eps,
+                "attack_mean_gap_m": c.get("attack_gap_sum", 0.0) / max(c.get("attack_steps", 0.0), 1.0),
+                "attack_braced_when_close": c.get("attack_close_braced_steps", 0.0) / max(c.get("attack_close_steps", 0.0), 1.0),
+                "braced_without_threat": c.get("braced_without_threat_steps", 0.0) / max(c.get("steps", 0.0), 1.0),
+                "time_within_1.2m_of_person_needing_room": c.get("vulnerable_within_1.2m_steps", 0.0) / max(c.get("vulnerable_near_steps", 0.0), 1.0),
+                "group_or_line_splits_per_episode": c.get("splits", 0.0) / eps,
+                "leash_crossings_per_episode": c.get("leash_crossings", 0.0) / eps,
+                "signal_violations_per_episode": c.get("signal_violations", 0.0) / eps,
+            }
+            for kind in ("attack", "block", "fallen"):
+                k_eps = c.get(f"{kind}_episodes", 0.0)
+                metrics["civic"][f"{kind}_episodes"] = int(k_eps)
+                for name in outcomes:
+                    metrics["civic"][f"{kind}_{name}_rate"] = c.get(f"{kind}_{name}", 0.0) / max(k_eps, 1.0)
 
         print("\n[RESULT] Navigation metrics:")
         print(json.dumps({k: v for k, v in metrics.items() if k != "per_scenario"}, indent=2))

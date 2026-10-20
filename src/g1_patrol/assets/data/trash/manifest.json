@@ -1,0 +1,389 @@
+{
+ "coffee_cup": {
+  "file": "coffee_cup.usda",
+  "size": [
+   0.096,
+   0.096,
+   0.129
+  ],
+  "mass": 0.015,
+  "rest_height": 0.048
+ },
+ "soda_can_red": {
+  "file": "soda_can_red.usda",
+  "size": [
+   0.066,
+   0.066,
+   0.122
+  ],
+  "mass": 0.015,
+  "rest_height": 0.033
+ },
+ "soda_can_crushed": {
+  "file": "soda_can_crushed.usda",
+  "size": [
+   0.0699,
+   0.0681,
+   0.0671
+  ],
+  "mass": 0.015,
+  "rest_height": 0.0336
+ },
+ "water_bottle": {
+  "file": "water_bottle.usda",
+  "size": [
+   0.065,
+   0.065,
+   0.212
+  ],
+  "mass": 0.02,
+  "rest_height": 0.0325
+ },
+ "bottle_in_bag": {
+  "file": "bottle_in_bag.usda",
+  "size": [
+   0.0958,
+   0.0948,
+   0.258
+  ],
+  "mass": 0.25,
+  "rest_height": 0.0474
+ },
+ "takeout_pail": {
+  "file": "takeout_pail.usda",
+  "size": [
+   0.104,
+   0.09,
+   0.1415
+  ],
+  "mass": 0.012,
+  "rest_height": 0.045
+ },
+ "deli_bag": {
+  "file": "deli_bag.usda",
+  "size": [
+   0.182,
+   0.1433,
+   0.1582
+  ],
+  "mass": 0.03,
+  "rest_height": 0.0717
+ },
+ "crumpled_napkin": {
+  "file": "crumpled_napkin.usda",
+  "size": [
+   0.0667,
+   0.0716,
+   0.0642
+  ],
+  "mass": 0.008,
+  "rest_height": 0.0321
+ },
+ "chip_bag": {
+  "file": "chip_bag.usda",
+  "size": [
+   0.16,
+   0.11,
+   0.0374
+  ],
+  "mass": 0.012,
+  "rest_height": 0.0187
+ },
+ "foam_clamshell": {
+  "file": "foam_clamshell.usda",
+  "size": [
+   0.23,
+   0.15,
+   0.065
+  ],
+  "mass": 0.01,
+  "rest_height": 0.0325
+ },
+ "trash_bag_small": {
+  "file": "trash_bag_small.usda",
+  "size": [
+   0.3023,
+   0.2841,
+   0.4413
+  ],
+  "mass": 1.4,
+  "rest_height": 0.1421,
+  "kind": "bag"
+ },
+ "trash_bag_medium": {
+  "file": "trash_bag_medium.usda",
+  "size": [
+   0.3785,
+   0.338,
+   0.4955
+  ],
+  "mass": 2.2,
+  "rest_height": 0.169,
+  "kind": "bag"
+ },
+ "recycling_bag": {
+  "file": "recycling_bag.usda",
+  "size": [
+   0.3626,
+   0.3359,
+   0.4774
+  ],
+  "mass": 1.0,
+  "rest_height": 0.168,
+  "kind": "bag"
+ },
+ "bag_crumpled_black": {
+  "file": "bag_crumpled_black.usdc",
+  "size": [
+   0.4776,
+   0.4186,
+   0.52
+  ],
+  "mass": 2.4,
+  "rest_height": 0.2093,
+  "source": "https://polyhaven.com/a/trashbag",
+  "author": "Benny Weimer",
+  "license": "CC0-1.0",
+  "kind": "bag"
+ },
+ "bag_kitchen_black": {
+  "file": "bag_kitchen_black.usdc",
+  "size": [
+   0.5,
+   0.3306,
+   0.3252
+  ],
+  "mass": 1.8,
+  "rest_height": 0.1626,
+  "source": "https://sketchfab.com/3d-models/06b6e2b916584faab430bd03c0c19499",
+  "author": "SanForge Studio (@SanForge)",
+  "license": "CC-BY-4.0",
+  "kind": "bag"
+ },
+ "bag_scanned_black": {
+  "file": "bag_scanned_black.usdc",
+  "size": [
+   0.3253,
+   0.4188,
+   0.52
+  ],
+  "mass": 2.4,
+  "rest_height": 0.1627,
+  "source": "https://sketchfab.com/3d-models/46e7a742c00f4b6285abc347bc3ba217",
+  "author": "alexdelker",
+  "license": "CC-BY-4.0",
+  "kind": "bag"
+ },
+ "bag_tied_black": {
+  "file": "bag_tied_black.usdc",
+  "size": [
+   0.42,
+   0.4026,
+   0.3277
+  ],
+  "mass": 1.5,
+  "rest_height": 0.1639,
+  "source": "https://sketchfab.com/3d-models/bf200222d79d4411aade19ddf312f122",
+  "author": "Bailief",
+  "license": "CC-BY-4.0",
+  "kind": "bag"
+ },
+ "bag_squat_black": {
+  "file": "bag_squat_black.usdc",
+  "size": [
+   0.4351,
+   0.44,
+   0.3074
+  ],
+  "mass": 1.4,
+  "rest_height": 0.1537,
+  "source": "https://sketchfab.com/3d-models/e0e9fb929170400c87c03c49a50ce315",
+  "author": "IMNT",
+  "license": "CC-BY-4.0",
+  "kind": "bag"
+ },
+ "bag_recycling_clear": {
+  "file": "bag_recycling_clear.usdc",
+  "size": [
+   0.404,
+   0.5,
+   0.4299
+  ],
+  "mass": 1.0,
+  "rest_height": 0.202,
+  "source": "https://sketchfab.com/3d-models/181b8f802fbb430e8e66e10eef3aa6d7",
+  "author": "Erythro",
+  "license": "CC-BY-4.0",
+  "kind": "bag"
+ },
+ "cup_to_go": {
+  "file": "cup_to_go.usdc",
+  "size": [
+   0.1065,
+   0.1065,
+   0.136
+  ],
+  "mass": 0.015,
+  "rest_height": 0.0532,
+  "source": "https://sketchfab.com/3d-models/cdb8ee2283664400939454f36b68fb53",
+  "author": "markdragan",
+  "license": "CC-BY-4.0"
+ },
+ "cup_paper_dented": {
+  "file": "cup_paper_dented.usdc",
+  "size": [
+   0.0934,
+   0.0936,
+   0.13
+  ],
+  "mass": 0.012,
+  "rest_height": 0.0467,
+  "source": "https://sketchfab.com/3d-models/1903f3873e2b44d2b71d37c2fa19f43a",
+  "author": "RoboHoloclone12",
+  "license": "CC-BY-4.0"
+ },
+ "can_tallboy": {
+  "file": "can_tallboy.usdc",
+  "size": [
+   0.0688,
+   0.0689,
+   0.17
+  ],
+  "mass": 0.02,
+  "rest_height": 0.0344,
+  "source": "https://sketchfab.com/3d-models/3d0c9c38f10b4e739db811893dbac786",
+  "author": "CGoutset (@cgoutset)",
+  "license": "CC-BY-4.0"
+ },
+ "can_dented": {
+  "file": "can_dented.usdc",
+  "size": [
+   0.122,
+   0.0691,
+   0.0691
+  ],
+  "mass": 0.015,
+  "rest_height": 0.0346,
+  "source": "https://sketchfab.com/3d-models/e1dc6cd9e7dd475ab1eae45819d38755",
+  "author": "modelsharkstudio",
+  "license": "CC-BY-4.0"
+ },
+ "bottle_crushed": {
+  "file": "bottle_crushed.usdc",
+  "size": [
+   0.0679,
+   0.21,
+   0.0678
+  ],
+  "mass": 0.02,
+  "rest_height": 0.0339,
+  "source": "https://sketchfab.com/3d-models/731efe2635c9472c9c1e4fdb1f8fbd13",
+  "author": "RoutineStudio (@TheRoutine)",
+  "license": "CC-BY-4.0"
+ },
+ "chip_bag_fresh": {
+  "file": "chip_bag_fresh.usdc",
+  "size": [
+   0.1778,
+   0.1338,
+   0.24
+  ],
+  "mass": 0.02,
+  "rest_height": 0.0669,
+  "source": "https://sketchfab.com/3d-models/7116fcdfbc3b4ad0bd578d6728915f84",
+  "author": "M. Visual (@baoquy37)",
+  "license": "CC-BY-4.0"
+ },
+ "takeout_box_crumpled": {
+  "file": "takeout_box_crumpled.usdc",
+  "size": [
+   0.1223,
+   0.2,
+   0.0708
+  ],
+  "mass": 0.03,
+  "rest_height": 0.0354,
+  "source": "https://sketchfab.com/3d-models/a6796493d3ec4dee822e3f5036e3bdaa",
+  "author": "MotherLyra",
+  "license": "CC-BY-4.0"
+ },
+ "pizza_box_open": {
+  "file": "pizza_box_open.usdc",
+  "size": [
+   0.38,
+   0.3306,
+   0.3539
+  ],
+  "mass": 0.15,
+  "rest_height": 0.1769,
+  "source": "https://sketchfab.com/3d-models/054be7a9dac340189ee29f3f15b4943e",
+  "author": "maypassamon",
+  "license": "CC-BY-4.0",
+  "rest": "upright"
+ },
+ "paper_wad": {
+  "file": "paper_wad.usdc",
+  "size": [
+   0.07,
+   0.0684,
+   0.0629
+  ],
+  "mass": 0.005,
+  "rest_height": 0.0315,
+  "source": "https://sketchfab.com/3d-models/466d8e12f0a14983a8d044f20c14848a",
+  "author": "Frid.blend (@Fridqeir)",
+  "license": "CC-BY-4.0"
+ },
+ "cigarette_pack": {
+  "file": "cigarette_pack.usdc",
+  "size": [
+   0.0558,
+   0.0296,
+   0.103
+  ],
+  "mass": 0.02,
+  "rest_height": 0.0148,
+  "source": "https://polyhaven.com/a/cigarette_pack",
+  "author": "Ulrich B\u00fcch",
+  "license": "CC0-1.0"
+ },
+ "beer_bottle": {
+  "file": "beer_bottle.usdc",
+  "size": [
+   0.0563,
+   0.0592,
+   0.23
+  ],
+  "mass": 0.2,
+  "rest_height": 0.0281,
+  "source": "https://sketchfab.com/3d-models/c5c009d8f7e6473c8eea32cbf5bab14e",
+  "author": "Ricardo Sanchez (@380660711785)",
+  "license": "CC-BY-4.0"
+ },
+ "plastic_bag_tied": {
+  "file": "plastic_bag_tied.usdc",
+  "size": [
+   0.1961,
+   0.3,
+   0.1033
+  ],
+  "mass": 0.03,
+  "rest_height": 0.0517,
+  "source": "https://sketchfab.com/3d-models/1a4bbf8e4ee4421e9a029d399e5c9746",
+  "author": "Animandyation",
+  "license": "CC-BY-4.0"
+ },
+ "newspaper_folded": {
+  "file": "newspaper_folded.usdc",
+  "size": [
+   0.1124,
+   0.054,
+   0.3
+  ],
+  "mass": 0.15,
+  "rest_height": 0.027,
+  "source": "https://sketchfab.com/3d-models/84683791c7e74992b8f2baeb52595de6",
+  "author": "Jeremy E. Grayson (@JeremyGrayson)",
+  "license": "CC-BY-4.0"
+ }
+}

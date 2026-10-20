@@ -22,10 +22,14 @@ from .tiles import (
     BUILDERS,
     HF_RESOLUTION,
     KINDS,
+    MAX_BASKETS,
     MAX_BOXES,
     MAX_CIRCLES,
+    MAX_CROSSINGS,
     MAX_FORBIDDEN,
     MAX_PATHS,
+    MAX_PILES,
+    MAX_QUEUES,
     MAX_ROUTES,
     MAX_STANDING,
     PATH_ROW,
@@ -55,8 +59,11 @@ class NycTerrainGenerator(TerrainGenerator):
     def _get_terrain_mesh(self, difficulty: float, cfg: SubTerrainBaseCfg):
         if not isinstance(cfg, NycTileCfg):
             return super()._get_terrain_mesh(difficulty, cfg)
-        rng = np.random.default_rng(int(self.np_rng.integers(1 << 31)))
-        self._pending = BUILDERS[cfg.kind](float(difficulty), rng)
+        seed = int(self.np_rng.integers(1 << 31))
+        rng = np.random.default_rng(seed)
+        # civic additions draw from their own stream, so that the rest of the tile is the same with or without them
+        civic_rng = np.random.default_rng([seed, 1]) if cfg.civic else None
+        self._pending = BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
         return self._pending.ground_mesh(), np.zeros(3)
 
     def _add_sub_terrain(self, mesh, origin, row, col, sub_terrain_cfg):
@@ -94,6 +101,10 @@ class NycLayout:
             "paths": (PATH_ROW, MAX_PATHS),
             "standing": (2, MAX_STANDING),
             "forbidden": (4, MAX_FORBIDDEN),
+            "baskets": (4, MAX_BASKETS),
+            "piles": (4, MAX_PILES),
+            "queues": (5, MAX_QUEUES),
+            "crossings": (4, MAX_CROSSINGS),
         }
         data = {name: np.zeros((rows, cols, cap, width), dtype=np.float32) for name, (width, cap) in fields.items()}
         counts = {name: np.zeros((rows, cols), dtype=np.int64) for name in fields}
@@ -104,7 +115,7 @@ class NycLayout:
         difficulty = np.zeros((rows, cols), dtype=np.float32)
         for (r, c), lay in generator.layouts.items():
             for name, (width, cap) in fields.items():
-                items = lay.path_rows() if name == "paths" else getattr(lay, name)
+                items = lay.path_rows() if name == "paths" else lay.baskets() if name == "baskets" else getattr(lay, name)
                 data[name][r, c], counts[name][r, c] = pad(items, width, cap)
             heights[r, c] = lay.heights
             crowd[r, c] = lay.crowd

@@ -217,7 +217,7 @@ class Overlay:
         self.label = label
         self.width, self.height = width, height
 
-    def draw(self, frame: np.ndarray, title: str, subtitle: str, t: float) -> np.ndarray:
+    def draw(self, frame: np.ndarray, title: str, subtitle: str, t: float, caption: str | None = None) -> np.ndarray:
         from PIL import Image, ImageDraw
 
         img = Image.fromarray(frame)
@@ -231,6 +231,13 @@ class Overlay:
                       stroke_width=1, stroke_fill=(0, 0, 0, alpha // 2))
         draw.text((m, self.height - m - int(self.height * 0.03)), self.label, font=self.sub_font,
                   fill=(255, 255, 255, 200), stroke_width=1, stroke_fill=(0, 0, 0, 120))
+        if caption:  # what the robot is doing, bottom center
+            w = draw.textlength(caption, font=self.title_font)
+            x, y = (self.width - w) / 2, self.height - m - int(self.height * 0.11)
+            pad = int(self.height * 0.012)
+            draw.rounded_rectangle((x - 2 * pad, y - pad, x + w + 2 * pad, y + int(self.height * 0.05) + pad), radius=pad,
+                                   fill=(0, 0, 0, 140))
+            draw.text((x, y), caption, font=self.title_font, fill=(255, 255, 255, 235))
         return np.asarray(img)
 
 
@@ -280,6 +287,8 @@ def main(argv):
     env_cfg.curriculum.levels = None
     env_cfg.sim.render_interval = args.render_interval
     env_cfg.commands.nyc.debug_vis = False
+    if getattr(env_cfg.commands.nyc, "social", False):
+        env_cfg.commands.nyc.cyclist_ratio = (0.0, 0.0)  # no rider model: no cyclists in the films
     env_cfg.actions.walker.debug_vis = False  # velocity-command arrows
     pre_launch_video_config(env_cfg, args)
     with launch_simulation(env_cfg, args), contextlib.ExitStack() as cleanup:
@@ -332,8 +341,25 @@ def main(argv):
         placements.update({t: t for t in tiles})  # filmed tiles always show their own layout
         nyc_look.dress(stage, generator, placements)
         stairs = [[item[1:] for item in generator.layouts[t].decor if item[0] == "stairs"] for t in tiles]
-        crowd = AnimatedCrowd(scenario, list(range(len(args.scenarios))), os.path.join(PROJECT, "src/g1_patrol/assets/data/people"),
-                              stairs=stairs)
+        civic = getattr(scenario, "social", False)
+        clips_dir = os.path.join(PROJECT, "src/g1_patrol/assets/data/people")
+        filmed = list(range(len(args.scenarios)))
+        if civic:  # people (and the parents pushing strollers); wheelchair users, strollers and dogs by civic_look
+            import civic_look
+
+            _, stroller_slots = civic_look.wide_slots(scenario)
+            people_slots = [k for k in range(scenario.num_peds) if int(scenario.slot_kind[k]) == 0] + stroller_slots
+            pushers = {k: civic_look.PUSHER_BEHIND for k in stroller_slots}
+            crowd = AnimatedCrowd(scenario, filmed, clips_dir, stairs=stairs, slots=people_slots, offsets=pushers)
+            centers = [nyc_look.tile_center(generator, *t) for t in tiles]
+            signals = civic_look.SignalHeads(stage, scenario, tiles, generator, centers)
+            fallen = civic_look.FallenPerson(stage, scenario, filmed, clips_dir)
+            dogs = civic_look.Dogs(stage, scenario, filmed)
+            wheelchairs = civic_look.Wheelchairs(stage, scenario, filmed, clips_dir)
+            strollers = civic_look.Strollers(stage, scenario, filmed)
+            hands = base.action_manager.get_term("hands")
+        else:
+            crowd = AnimatedCrowd(scenario, filmed, clips_dir, stairs=stairs)
         cameras = [FollowCamera(stage, f"/World/Demo/Cameras/cam_{e}", name, args.width, args.height, args.camera)
                    for e, name in enumerate(args.scenarios)]  # fmt: skip
         camera_bounds = [
@@ -388,6 +414,12 @@ def main(argv):
         def on_render(_):
             # pose people and cameras for this frame, render it (headless Kit only renders on request), read it
             crowd.update(frame_dt)
+            if civic:
+                signals.update(clip_t[0])
+                fallen.update()
+                dogs.update(frame_dt)
+                wheelchairs.update(frame_dt)
+                strollers.update(crowd)
             pos = base.scene["robot"].data.root_pos_w.torch.cpu().numpy()
             yaw = scenario.robot_yaw().cpu().numpy()
             centers = scenario.tile_center.cpu().numpy()
@@ -406,6 +438,8 @@ def main(argv):
                     people_events[e][3] += 1
                     touches[e][(body_names[inside[0]], inside[1])] += 1
                 visible, points, backward = crowd.visible[e], crowd.points[e], crowd.backward[e]
+                if civic:
+                    visible = visible | wheelchairs.visible[e]
                 view = cam.in_view(points)
                 if clip_t[e] > 2 * frame_dt and prev_people[e] is not None:
                     was_visible, was_in_view = prev_people[e]
@@ -416,7 +450,8 @@ def main(argv):
                 frame = cam.frame()
                 if frame is not None and clip_t[e] > 2 * frame_dt:  # skip the first frames after a teleport
                     title = TITLES[args.scenarios[e]]
-                    shown = frame if args.no_overlay else overlay.draw(frame, title, f"New York · difficulty {levels[e] + 1}/10", clip_t[e])
+                    caption = civic_look.caption(scenario, hands, e) if civic else None
+                    shown = frame if args.no_overlay else overlay.draw(frame, title, f"New York · difficulty {levels[e] + 1}/10", clip_t[e], caption)
                     clips[e][0].append_data(shown)
                     clip_frames[e] += 1
                     if args.snapshot_every and clip_frames[e] % max(1, int(args.snapshot_every * fps)) == 1:

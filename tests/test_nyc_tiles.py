@@ -149,3 +149,43 @@ def test_walkable_area_ends_at_structures(kind):
                 reach = _reachable(free, _cell(free, sx, sy))
                 edge = np.abs(py) > HALF_W - ROBOT_CLEARANCE
                 assert not (reach & edge).any(), f"{kind} d={d} seed={seed}: the robot can walk to the tile's edge"
+
+
+@pytest.mark.parametrize("kind", list(BUILDERS))
+def test_civic_additions_leave_the_tile_unchanged(kind):
+    """The civic features come from their own random stream and are only added: routes, paths, ground and the other
+    structures are the same as without them, and routes stay passable."""
+    for d in np.linspace(0.0, 1.0, 4):
+        for seed in range(6):
+            plain = BUILDERS[kind](float(d), np.random.default_rng(seed))
+            civic = BUILDERS[kind](float(d), np.random.default_rng(seed), np.random.default_rng([seed, 1]))
+            assert civic.civic and not plain.civic
+            assert civic.routes == plain.routes and civic.paths == plain.paths and civic.standing == plain.standing
+            assert np.array_equal(civic.heights, plain.heights)
+            assert civic.circles[: len(plain.circles)] == plain.circles
+            assert civic.boxes[: len(plain.boxes)] == plain.boxes
+            assert not plain.piles and not plain.queues and not plain.crossings
+            free = _free_space(civic)
+            for sx, sy, gx, gy in civic.routes:
+                assert _connected(free, _cell(free, sx, sy), _cell(free, gx, gy)), (kind, d, seed)
+
+
+@pytest.mark.parametrize("kind", list(BUILDERS))
+def test_civic_features(kind):
+    """Litter baskets, bag zones beside the curbside bag piles, lines of people and signalized crossings where they
+    belong, within the tensor caps, and the bag zones clear of other structures."""
+    from g1_patrol.tasks.navigation.nyc.tiles import MAX_BASKETS, MAX_CROSSINGS, MAX_PILES, MAX_QUEUES
+
+    for d in np.linspace(0.0, 1.0, 4):
+        for seed in range(6):
+            lay = BUILDERS[kind](float(d), np.random.default_rng(seed), np.random.default_rng([seed, 1]))
+            assert len(lay.baskets()) <= MAX_BASKETS and len(lay.piles) <= MAX_PILES
+            assert len(lay.queues) <= MAX_QUEUES and len(lay.crossings) <= MAX_CROSSINGS
+            assert len(lay.boxes) < MAX_BOXES  # the last box slot holds a person who has fallen
+            assert len(lay.forbidden) < MAX_FORBIDDEN  # the last street-area slot holds a closed crosswalk
+            if kind == "crosswalk":
+                assert len(lay.crossings) == 1 and len(lay.baskets()) >= 1
+            if kind == "scaffold":
+                assert not lay.piles and not lay.baskets()
+            for x0, x1, y0, y1 in lay.crossings:  # the crosswalk is the gap between the two street areas
+                assert any(abs(f[1] - x0) < 1e-6 for f in lay.forbidden) and any(abs(f[0] - x1) < 1e-6 for f in lay.forbidden)

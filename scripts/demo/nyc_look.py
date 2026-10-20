@@ -9,6 +9,7 @@ tiles' 4 m facades (brick, windows, cornices), street trees, a sky and a sun. Th
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 import trimesh
@@ -45,6 +46,10 @@ EMISSIVE = {  # material -> (diffuse rgb, emissive rgb)
     "billboard_2": ((0.05, 0.05, 0.05), (0.9, 0.65, 0.1)),
     "billboard_3": ((0.05, 0.05, 0.05), (0.12, 0.8, 0.3)),
     "billboard_4": ((0.05, 0.05, 0.05), (0.8, 0.8, 0.85)),
+    # pedestrian signal heads (civic tiles): walking person, hand, dark half
+    "signal_walk": ((0.05, 0.05, 0.05), (0.85, 0.9, 0.95)),
+    "signal_dont": ((0.05, 0.05, 0.05), (1.0, 0.35, 0.05)),
+    "signal_off": ((0.03, 0.03, 0.03), (0.0, 0.0, 0.0)),
 }
 COLORS = {  # material -> (diffuse rgb, roughness, metallic)
     "pothole": ((0.07, 0.07, 0.075), 0.35, 0.0),
@@ -204,8 +209,10 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
     if joints is not None:
         joints.apply_translation(offset)
         add_mesh(stage, f"{root}/sidewalk_joints", joints, "sidewalk_joint")
-    # structures, per material
+    # structures, per material (the boxes standing in for curbside bag piles are drawn as bags below)
     for mat, mesh in lay.structure_meshes_by_material().items():
+        if mat == "trash_bags":
+            continue
         mesh.apply_translation(offset)
         add_mesh(stage, f"{root}/structure_{mat}", mesh, mat if mat in TEXTURED or mat in COLORS else "concrete")
     # city blocks on top of the tile's 4 m building fronts (one along a street, two around open tiles); the street
@@ -223,6 +230,40 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
             _tree(stage, f"{root}/tree_{k}", center[0] + x, center[1] + y, lay.ground(x, y), rng)
         elif kind == "stairs":
             _stairs(stage, f"{root}/stairs_{k}", lay, center, *args)
+        elif kind == "bag_pile":
+            _bag_pile(stage, f"{root}/bag_pile_{k}", lay, center, *args, rng=rng)
+
+
+TRASH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src", "g1_patrol",
+                     "assets", "data", "trash")
+
+
+def _bag_pile(stage, root: str, lay: TileLayout, center, x: float, y: float, length: float, depth: float, height: float,
+              rng: np.random.Generator):
+    """Trash bags set out at the curb: the tile's bag-pile box filled with the bag models, two layers."""
+    import json
+
+    manifest = json.load(open(os.path.join(TRASH, "manifest.json")))
+    bags = [name for name, item in manifest.items() if item.get("kind") == "bag" and item["file"].endswith(".usdc")]
+    ground = lay.ground(x, y)
+    count = max(2, int(round(length / 0.38)))
+    k = 0
+    for layer in range(2 if height > 0.42 else 1):
+        for i in range(count - layer):
+            name = bags[int(rng.integers(len(bags)))]
+            item = manifest[name]
+            scale = float(min(1.0, (height + 0.1) / item["size"][2], (depth + 0.1) / max(item["size"][:2])))
+            bx = x - length / 2 + (i + 0.5 + 0.5 * layer) * length / count + rng.uniform(-0.05, 0.05)
+            by = y + rng.uniform(-0.06, 0.06)
+            bz = ground + layer * 0.22 + scale * item["size"][2] / 2
+            prim = stage.DefinePrim(f"{root}/bag_{k}", "Xform")
+            prim.GetReferences().AddReference(os.path.join(TRASH, item["file"]))
+            xf = UsdGeom.Xformable(prim)
+            xf.ClearXformOpOrder()
+            xf.AddTranslateOp().Set(Gf.Vec3d(center[0] + bx, center[1] + by, bz))
+            xf.AddRotateXYZOp().Set(Gf.Vec3f(float(rng.uniform(-6, 6)), float(rng.uniform(-6, 6)), float(rng.uniform(0, 360))))
+            xf.AddScaleOp().Set(Gf.Vec3f(scale, scale, scale))
+            k += 1
 
 
 def _stairs(stage, root: str, lay: TileLayout, center, x0: float, x1: float, y0: float, y1: float, steps: int = 7):

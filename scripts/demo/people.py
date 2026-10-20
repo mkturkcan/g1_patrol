@@ -85,7 +85,7 @@ class AnimatedCrowd:
     """Characters standing in for the pedestrians of ``env_ids`` in the scenario command ``scenario``."""
 
     def __init__(self, scenario, env_ids: list[int], clips_dir: str, root: str = "/World/Demo/People", seed: int = 0,
-                 stairs: list | None = None):
+                 stairs: list | None = None, slots: list[int] | None = None, offsets: dict | None = None):
         import omni.usd
 
         self.stage = stage = omni.usd.get_context().get_stage()
@@ -104,13 +104,15 @@ class AnimatedCrowd:
             for name in names
         }
         p = scenario.num_peds
+        self.slots = list(range(p)) if slots is None else list(slots)  # pedestrian slots shown as people
+        self.offsets = offsets or {}  # slot -> distance (m) of the character ahead of the slot's position (negative: behind)
         # per filmed environment and person, after each update: shown, chest position (world), moving backwards
         self.visible = np.zeros((len(env_ids), p), dtype=bool)
         self.points = np.zeros((len(env_ids), p, 3))
         self.backward = np.zeros((len(env_ids), p), dtype=bool)
         self.people = []
-        for e in env_ids:
-            for k in range(p):
+        for i, e in enumerate(env_ids):
+            for k in self.slots:
                 name = names[rng.choice(len(names), p=weights / weights.sum())]
                 path = f"{root}/env_{e}/person_{k}"
                 prim = stage.DefinePrim(path, "Xform")
@@ -129,6 +131,7 @@ class AnimatedCrowd:
                 UsdSkel.BindingAPI.Apply(skel).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
                 self._dress_up(prim, rng)
                 self.people.append({
+                    "env": i, "slot": k,
                     "prim": UsdGeom.Imageable(prim), "translate": translate, "rotate": rotate,
                     "rot": rot_attr, "trans": trans_attr, "walk": walk, "idle": idle,
                     "walk_phase": float(rng.uniform()), "idle_phase": float(rng.uniform()),
@@ -137,7 +140,7 @@ class AnimatedCrowd:
                 })  # fmt: skip
         # hide the capsules these characters replace
         for e in env_ids:
-            for k in range(p):
+            for k in self.slots:
                 capsule = stage.GetPrimAtPath(f"/World/envs/env_{e}/Ped_{k}")
                 if capsule:
                     UsdGeom.Imageable(capsule).MakeInvisible()
@@ -178,6 +181,13 @@ class AnimatedCrowd:
                 ground[e] = np.where(inside, ramp, ground[e])
         return ground
 
+    def yaw(self, env_index: int, slot: int) -> float | None:
+        """Facing (rad) of the character of ``slot`` in the ``env_index``-th filmed environment (None: not shown)."""
+        for person in self.people:
+            if person["env"] == env_index and person["slot"] == slot:
+                return person["yaw"]
+        return None
+
     def update(self, dt: float):
         """Move and pose the characters to the pedestrians' current state (call before each rendered frame)."""
         s, ids = self.scenario, self.env_ids
@@ -186,12 +196,14 @@ class AnimatedCrowd:
         vel = s.ped_vel[ids].cpu().numpy()
         path_dir = s.walking_direction()[ids].cpu().numpy()
         visible = (s.ped_mode[ids] != 0).cpu().numpy()  # PARKED = 0
-        p = pos.shape[1]
+        shown = np.zeros_like(visible)
+        shown[:, self.slots] = True
+        visible &= shown  # the other slots (wheelchairs, dogs) are drawn elsewhere
         self.visible[:] = visible
         self.points[..., :2], self.points[..., 2] = pos[..., :2], ground + 1.2
         self.backward[:] = False
-        for n, person in enumerate(self.people):
-            e, k = divmod(n, p)
+        for person in self.people:
+            e, k = person["env"], person["slot"]
             if person["visible"] != bool(visible[e, k]):
                 person["visible"] = bool(visible[e, k])
                 person["prim"].MakeVisible() if visible[e, k] else person["prim"].MakeInvisible()
@@ -224,5 +236,8 @@ class AnimatedCrowd:
             trans = (1 - w) * trans_i + w * trans_w
             person["rot"].Set(Vt.QuatfArray.FromNumpy(rot.astype(np.float32)))
             person["trans"].Set(Vt.Vec3fArray.FromNumpy(trans.astype(np.float32)))
-            person["translate"].Set(Gf.Vec3d(float(pos[e, k, 0]), float(pos[e, k, 1]), float(ground[e, k])))
+            shift = self.offsets.get(k, 0.0)
+            x = float(pos[e, k, 0]) + shift * math.cos(person["yaw"])
+            y = float(pos[e, k, 1]) + shift * math.sin(person["yaw"])
+            person["translate"].Set(Gf.Vec3d(x, y, float(ground[e, k])))
             person["rotate"].Set(math.degrees(person["yaw"] + YAW_OFFSET + person["facing"]))

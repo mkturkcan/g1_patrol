@@ -4,6 +4,36 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
+    "detected_litter",
+    "known_places",
+    "tracked_people",
+    "HandsActionCfg",
+    "approach_threat",
+    "attack_state",
+    "basket_state",
+    "brace_under_threat",
+    "brace_without_threat",
+    "civic_curriculum",
+    "civic_goal_progress",
+    "civic_pedestrian_collision",
+    "civic_pedestrians",
+    "civic_success",
+    "civic_success_termination",
+    "fallen_state",
+    "flee",
+    "hands_event",
+    "hands_state",
+    "pile_state",
+    "shoved",
+    "signal_state",
+    "split_group",
+    "threat_proximity",
+    "trash_event",
+    "trash_progress",
+    "trash_state",
+    "vulnerable_delay",
+    "vulnerable_space",
+    "walking_speed",
     "NycScenarioCommandCfg",
     "PedestrianMotionActionCfg",
     "accumulated_height_map",
@@ -49,6 +79,36 @@ __all__ = [
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .actions import WalkerPolicyActionCfg
+from .civic_perception import detected_litter, known_places, tracked_people
+from .civic_terms import (
+    approach_threat,
+    attack_state,
+    basket_state,
+    brace_under_threat,
+    brace_without_threat,
+    civic_curriculum,
+    civic_goal_progress,
+    civic_pedestrian_collision,
+    civic_pedestrians,
+    civic_success,
+    civic_success_termination,
+    fallen_state,
+    flee,
+    hands_event,
+    hands_state,
+    pile_state,
+    shoved,
+    signal_state,
+    split_group,
+    threat_proximity,
+    trash_event,
+    trash_progress,
+    trash_state,
+    vulnerable_delay,
+    vulnerable_space,
+    walking_speed,
+)
+from .nyc_manipulation import HandsActionCfg
 from .crowd import CrowdMotionActionCfg, CrowdScenarioCommandCfg
 from .nyc_scenario import NycScenarioCommandCfg, PedestrianMotionActionCfg
 from .perception import accumulated_height_map, depth_frames, lidar_elevation_map

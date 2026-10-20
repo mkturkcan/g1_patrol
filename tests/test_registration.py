@@ -43,6 +43,26 @@ def test_task_registrations():
             "env_cfg_entry_point": "g1_patrol.tasks.navigation.config.g1.nyc_env_cfg:G1NycNavCameraStudentEnvCfg",
             "default_agent": "rsl_rl",
         },
+        "G1Patrol-Walk-Reach": {
+            "entry_point": "g1_patrol.tasks.locomotion.env:WalkEnv",
+            "env_cfg_entry_point": "g1_patrol.tasks.locomotion.config.g1.walk_env_cfg:G1WalkReachEnvCfg",
+            "default_agent": "rsl_rl",
+        },
+        "G1Patrol-Navigate-Civic": {
+            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "env_cfg_entry_point": "g1_patrol.tasks.navigation.config.g1.civic_env_cfg:G1CivicNavEnvCfg",
+            "default_agent": "rsl_rl",
+        },
+        "G1Patrol-Navigate-Civic-Lidar": {
+            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "env_cfg_entry_point": "g1_patrol.tasks.navigation.config.g1.civic_env_cfg:G1CivicNavLidarStudentEnvCfg",
+            "default_agent": "rsl_rl",
+        },
+        "G1Patrol-Navigate-Civic-Camera": {
+            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "env_cfg_entry_point": "g1_patrol.tasks.navigation.config.g1.civic_env_cfg:G1CivicNavCameraStudentEnvCfg",
+            "default_agent": "rsl_rl",
+        },
         "G1Patrol-Navigate-Crowd": {
             "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
             "env_cfg_entry_point": "g1_patrol.tasks.navigation.config.g1.crowd_env_cfg:G1CrowdNavEnvCfg",

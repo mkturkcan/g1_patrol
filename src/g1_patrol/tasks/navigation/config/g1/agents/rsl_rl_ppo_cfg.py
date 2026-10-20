@@ -58,6 +58,16 @@ class G1NycTeacherPPORunnerCfg(G1CrowdNavPPORunnerCfg):
 
 
 @configclass
+class G1CivicTeacherPPORunnerCfg(G1NycTeacherPPORunnerCfg):
+    """The street teacher's recipe for the civic task (60 s episodes; a 20 s horizon at gamma 0.995)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "g1_civic_teacher"
+        self.max_iterations = 20000
+
+
+@configclass
 class G1NycLidarDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     """Distil the privileged teacher into a student that sees only the MID-360 height map (DAgger-style). The loss
     compares the tanh-squashed actions (:class:`CommandSpaceDistillation`).
@@ -99,4 +109,20 @@ class G1NycCameraDistillationRunnerCfg(G1NycLidarDistillationRunnerCfg):
     """Distil the teacher into a camera-only student (stacked D435i depth frames)."""
 
     experiment_name = "g1_nyc_camera_student"
+    obs_groups = {"student": ["student", "depth", "depth_map"], "teacher": ["policy"]}
+
+
+@configclass
+class G1CivicLidarDistillationRunnerCfg(G1NycLidarDistillationRunnerCfg):
+    """Distil the civic teacher into the lidar student (tracked people, remembered litter, MID-360 height map)."""
+
+    experiment_name = "g1_civic_lidar_student"
+    obs_groups = {"student": ["student", "lidar_map"], "teacher": ["policy"]}
+
+
+@configclass
+class G1CivicCameraDistillationRunnerCfg(G1NycLidarDistillationRunnerCfg):
+    """Distil the civic teacher into the camera-only student."""
+
+    experiment_name = "g1_civic_camera_student"
     obs_groups = {"student": ["student", "depth", "depth_map"], "teacher": ["policy"]}
