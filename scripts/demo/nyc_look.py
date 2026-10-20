@@ -224,6 +224,7 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
     _storefronts(stage, f"{root}/storefronts", lay, center, rng)
     if lay.kind == "plaza":
         _times_square(stage, f"{root}/times_square", lay, center, rng)
+    _newsstands(stage, f"{root}/newsstands", lay, center, rng)
     for k, (kind, *args) in enumerate(lay.decor):
         if kind == "tree":
             x, y = args
@@ -380,6 +381,34 @@ def _times_square(stage, root: str, lay: TileLayout, center, rng):
             shrubs.append(blob)
     if shrubs:
         add_mesh(stage, f"{root}/shrubs", trimesh.util.concatenate(shrubs), "leaves")
+
+
+def _newsstands(stage, root: str, lay: TileLayout, center, rng):
+    """Newsstand details on the kiosk boxes: a roof, a lit sign band on the long sides, a service window with a
+    counter at each end, and racks of magazines on the long sides."""
+    parts: dict[str, list] = {}
+    colors = ["awning", "newsbox", "stripe_yellow", "cornice", "hydrant", "cone"]
+    for (bx, by, yaw, hx, hy, z0, z1), mat in zip(lay.boxes, lay.box_mats):
+        if mat != "kiosk":
+            continue
+        x, y, base = center[0] + bx, center[1] + by, lay.ground(bx, by) + z0
+        c, s_ = math.cos(yaw), math.sin(yaw)
+
+        def at(u, v, z, extents, part):  # a box at kiosk-local (u along its length, v across) and height z
+            parts.setdefault(part, []).append(_box((x + c * u - s_ * v, y + s_ * u + c * v, base + z), extents, yaw))
+
+        height = z1 - z0
+        at(0.0, 0.0, height + 0.06, (2 * hx + 0.3, 2 * hy + 0.3, 0.12), "kiosk")  # roof
+        for side in (-1.0, 1.0):
+            at(0.0, side * (hy + 0.01), height - 0.28, (2 * hx - 0.1, 0.02, 0.3), "billboard_4")  # sign band
+            at(side * (hx + 0.01), 0.0, 1.45, (0.02, 2 * hy - 0.4, 0.9), "shop_window")  # service window
+            at(side * (hx + 0.12), 0.0, 0.98, (0.25, 2 * hy - 0.3, 0.05), "cafe_table")  # counter
+            for row in range(3):  # magazine racks
+                for k in range(int((2 * hx - 0.3) / 0.25)):
+                    u = -hx + 0.27 + k * 0.25 + rng.uniform(-0.02, 0.02)
+                    at(u, side * (hy + 0.015), 0.95 + row * 0.33, (0.21, 0.02, 0.28), colors[int(rng.integers(len(colors)))])
+    for part, boxes in parts.items():
+        add_mesh(stage, f"{root}/{part}", trimesh.util.concatenate(boxes), part)
 
 
 def _window_frames(x: float, y: float, z: float, width: float, height: float, pane: float = 1.4) -> list:
