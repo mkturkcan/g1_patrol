@@ -117,7 +117,9 @@ class FallenPerson:
 
 def caption(scenario, hands, e: int) -> str | None:
     """What the robot ``e`` is doing, for the overlay (None: nothing particular)."""
-    from g1_patrol.tasks.navigation.mdp.nyc_manipulation import ALERT, CROUCH, GRASP, LIFT, LOWER, RAISE, REACH, RELEASE, STAND
+    from g1_patrol.tasks.navigation.mdp.nyc_manipulation import (
+        ALERT, APPROACH, CROUCH, GRASP, LIFT, LOWER, RAISE, REACH, RELEASE, STAND,
+    )  # fmt: skip
 
     s = scenario
     phase = int(hands.phase[e])
@@ -129,8 +131,12 @@ def caption(scenario, hands, e: int) -> str | None:
         return "Calling for help"
     if bool(s.under_attack[e]):
         return "Attacked: braced, getting away" if bool(hands.bracing[e]) else "Attacked: getting away"
-    if phase in (CROUCH, REACH, GRASP, LIFT, STAND) and (item >= 0 or holding >= 0):
-        return "Picking up a trash bag" if (bag or held_bag) else "Picking up litter"
+    if phase in (APPROACH, CROUCH, REACH, GRASP, LIFT, STAND) and holding < 0 and item >= 0:
+        return "Picking up a trash bag" if bag else "Picking up litter"
+    if phase in (LIFT, STAND) and holding >= 0:
+        return "Picking up a trash bag" if held_bag else "Picking up litter"
+    if phase == APPROACH and holding >= 0:
+        return "Setting the bag down at the pile" if held_bag else "Litter into the basket"
     if phase in (RAISE, RELEASE, LOWER):
         return "Setting the bag down at the pile" if bool(hands.drop_bag[e]) else "Litter into the basket"
     if holding >= 0:

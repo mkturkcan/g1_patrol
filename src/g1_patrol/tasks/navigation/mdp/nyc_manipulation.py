@@ -6,16 +6,19 @@ The navigation policy has two extra action inputs: a trigger and a brace (each p
 * Trigger, empty-handed, with litter or a bag in the reach zone in front of the robot: the robot picks it up. It stops,
   squats and leans forward (posture command to the walker), reaches for the item with the arm on its side (damped
   least-squares inverse kinematics on the five arm joints), closes the hand, lifts the item and stands up. Litter is
-  carried in front of the hip, a bag by its knot with the arm down at the side.
+  carried in front of the hip, a bag by its knot with the arm down at the side. With the item farther away (up to
+  ``approach_distance`` in front), the robot first walks up to it: the controller drives the walker, slowly, until
+  the item lies in the reach zone (then picks it up) or gives up after ``approach_time``.
 * Trigger, holding litter, with a litter basket within reach in front: the robot raises the hand over the basket's
   opening and lets go. Holding a bag that hangs over the zone beside a curbside bag pile: it bends its knees to lower
-  the bag and lets go.
+  the bag and lets go. With the basket or the zone a little farther away, the robot first walks there.
 * Trigger next to a person who has fallen (facing them, at 0.5-1.8 m): the robot raises an arm and calls for help.
 * Brace: the robot lowers its pelvis a little and raises its forearms in front of its head (a guard), and can walk in
   that stance, e.g. away from an attacker. Bracing interrupts a pick that has not grasped yet.
 
-The walker keeps the robot balanced throughout; the navigation policy's velocity command is held at zero while picking,
-putting down or calling. Grasping is simplified: when the hand closes with its grasp center (``grasp_offset`` from the palm
+The walker keeps the robot balanced throughout; the navigation policy's velocity command is replaced by the
+controller's while it walks up to an item, a basket or a bag zone, and held at zero while picking, putting down or
+calling. Grasping is simplified: when the hand closes with its grasp center (``grasp_offset`` from the palm
 towards the fingertips, where the Dex3's fingers close around an object) within ``grasp_tolerance`` of the item's grasp
 point (the middle of a piece of litter, a bag's knot), the item is held rigidly (it follows the palm); the fingers
 close for the look of it. Reaching is not simplified: the walker has to bring the hand there, with the waist and the
@@ -46,7 +49,7 @@ from .nyc_trash import FALLING, HELD, ON_GROUND
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-IDLE, CROUCH, REACH, GRASP, LIFT, STAND, RAISE, RELEASE, LOWER, ALERT = range(10)
+IDLE, CROUCH, REACH, GRASP, LIFT, STAND, RAISE, RELEASE, LOWER, ALERT, APPROACH = range(11)
 PICKING = (CROUCH, REACH, GRASP, LIFT, STAND)
 DROPPING = (RAISE, RELEASE, LOWER)
 ARM = ("shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow_pitch", "elbow_roll")
@@ -122,6 +125,7 @@ class HandsAction(ActionTerm):
         self.side = torch.zeros(n, dtype=torch.long, device=dev)  # working / holding arm: 0 left, 1 right
         self.item = torch.full((n,), -1, dtype=torch.long, device=dev)
         self.target = torch.full((n,), -1, dtype=torch.long, device=dev)  # basket being used
+        self.pile = torch.full((n,), -1, dtype=torch.long, device=dev)  # bag zone being walked to
         self.drop_bag = torch.zeros(n, dtype=torch.bool, device=dev)  # putting down a bag (else litter)
         self.bracing = torch.zeros(n, dtype=torch.bool, device=dev)
         self._closest = torch.full((n,), 1e3, device=dev)  # closest approach of the grasp center while the hand closes
@@ -179,6 +183,7 @@ class HandsAction(ActionTerm):
         self.timer[ids] = 0.0
         self.item[ids] = -1
         self.target[ids] = -1
+        self.pile[ids] = -1
         self.bracing[ids] = False
         self.targets[ids] = self._default[ids]
 
@@ -191,7 +196,10 @@ class HandsAction(ActionTerm):
         for event in (self.picked, self.failed, self.invalid, self.dropped, self.alerted):
             event.zero_()
         self.bracing[:] = actions[:, 1] > 0.0
-        # bracing interrupts a pick that has not grasped anything yet
+        # bracing interrupts walking up to something, and a pick that has not grasped anything yet
+        stop = self.bracing & (self.phase == APPROACH)
+        self.phase[stop] = IDLE
+        self.item[stop & (s.held_item < 0)] = -1
         abort = self.bracing & ((self.phase == CROUCH) | (self.phase == REACH) | (self.phase == GRASP))
         self.phase[abort] = STAND
         self.timer[abort] = 0.0
@@ -201,26 +209,50 @@ class HandsAction(ActionTerm):
         holding = s.held_item >= 0
         bag = self.holding_bag()
         alert = trigger & s.can_alert() if s.social else torch.zeros_like(trigger)
-        basket = s.reachable_basket(cfg.basket_distance, cfg.basket_angle)
-        item = s.reachable_item(cfg.reach_ahead, cfg.reach_side)
-        drop_litter = trigger & ~alert & holding & ~bag & (basket >= 0)
-        drop_bag = trigger & ~alert & holding & bag & s.held_in_zone()
-        pick = trigger & ~alert & ~holding & (item >= 0) & ~self.bracing
-        self.invalid += (trigger & ~alert & ~drop_litter & ~drop_bag & ~pick).float()
+        free = trigger & ~alert
+        litter_here = s.reachable_item(cfg.reach_ahead, cfg.reach_side, bags=False)
+        item_here = torch.where(litter_here >= 0, litter_here, s.reachable_item(cfg.bag_reach_ahead, cfg.reach_side, bags=True))
+        item_near = s.reachable_item((cfg.reach_ahead[0], cfg.approach_distance), cfg.approach_side)
+        basket_here = s.reachable_basket(cfg.basket_distance, cfg.basket_angle)
+        basket_near = s.reachable_basket((0.3, cfg.basket_distance[1] + cfg.approach_distance), cfg.approach_angle)
+        pile_near = s.reachable_pile(cfg.approach_distance, cfg.approach_angle)
+        empty = free & ~holding & ~self.bracing
+        pick = empty & (item_here >= 0)
+        go_item = empty & ~pick & (item_near >= 0)
+        litter = free & holding & ~bag
+        drop_litter = litter & (basket_here >= 0)
+        go_basket = litter & ~drop_litter & ~self.bracing & (basket_near >= 0)
+        bags = free & holding & bag
+        drop_bag = bags & s.held_in_zone()
+        go_pile = bags & ~drop_bag & ~self.bracing & (pile_near >= 0)
+        approach = go_item | go_basket | go_pile
+        self.invalid += (free & ~pick & ~drop_litter & ~drop_bag & ~approach).float()
         if pick.any():
-            self.item[pick] = item[pick]
-            # the arm on the item's side
-            p = s.trash_positions()[pick, item[pick], :2] - s.robot_pos()[pick]
-            yaw = s.robot_yaw()[pick]
-            lateral = -torch.sin(yaw) * p[:, 0] + torch.cos(yaw) * p[:, 1]
-            self.side[pick] = (lateral < 0.0).long()
-            self.phase[pick] = CROUCH
+            self._start_pick(s, pick, item_here)
+        if go_item.any():  # the item to the side of the arm that will take it (outside the feet's path)
+            self.item[go_item] = item_near[go_item]
+            q = s.trash_positions()[go_item, item_near[go_item], :2] - s.robot_pos()[go_item]
+            yaw = s.robot_yaw()[go_item]
+            self.side[go_item] = ((-torch.sin(yaw) * q[:, 0] + torch.cos(yaw) * q[:, 1]) < 0.0).long()
+        self.target[go_basket] = basket_near[go_basket]
+        self.pile[go_pile] = pile_near[go_pile]
+        self.phase[approach] = APPROACH
         drop = drop_litter | drop_bag
-        self.target[drop_litter] = basket[drop_litter]
+        self.target[drop_litter] = basket_here[drop_litter]
         self.drop_bag[drop] = drop_bag[drop]
         self.phase[drop] = RAISE
         self.phase[alert] = ALERT
-        self.timer[pick | drop | alert] = 0.0
+        self.timer[pick | drop | alert | approach] = 0.0
+
+    def _start_pick(self, s, mask: torch.Tensor, item: torch.Tensor):
+        """Start picking up ``item`` (n,) where ``mask``: with the arm on the item's side."""
+        self.item[mask] = item[mask]
+        p = s.trash_positions()[mask, item[mask], :2] - s.robot_pos()[mask]
+        yaw = s.robot_yaw()[mask]
+        lateral = -torch.sin(yaw) * p[:, 0] + torch.cos(yaw) * p[:, 1]
+        self.side[mask] = (lateral < 0.0).long()
+        self.phase[mask] = CROUCH
+        self.timer[mask] = 0.0
 
     # -- motion (physics rate) -----------------------------------------------------------------------------------------
 
@@ -235,7 +267,9 @@ class HandsAction(ActionTerm):
         self._count = 0
         n, dev = self.num_envs, self.device
         self.timer += dt * self.busy
+        drive = self._approach(s) if (self.phase == APPROACH).any() else torch.zeros(n, 3, device=dev)
         walker.hold[:] = self.busy
+        walker.drive[:] = drive
         holding = s.held_item >= 0
         bag = self.holding_bag()
         working_bag = s.is_bag[self.item.clamp(min=0)] if s.num_trash else torch.zeros(n, dtype=torch.bool, device=dev)
@@ -289,6 +323,100 @@ class HandsAction(ActionTerm):
         self._advance(s, dt)
         self._carry_item(s)
         self._write_forces(s)
+
+    def _approach(self, s) -> torch.Tensor:
+        """Walk up to an item, a basket or a bag zone (environments in APPROACH): the velocity command (n, 3) for the
+        walker; on arrival (slow enough, the item in the reach zone, the basket at hand, the bag over the zone) the
+        pick or the putting down starts; after ``approach_time``, or with the item gone, the robot gives up.
+
+        The walker stands still for small velocity commands (below about 0.15 m/s) and does not turn on the spot, so the
+        robot walks in arcs towards the target at ``approach_speed`` and stops there; a target close by and off to the
+        side is turned towards while stepping back."""
+        cfg = self.cfg
+        n, dev = self.num_envs, self.device
+        envs = torch.arange(n, device=dev)
+        approaching = self.phase == APPROACH
+        holding = s.held_item >= 0
+        bag = self.holding_bag()
+        p, yaw = s.robot_pos(), s.robot_yaw()
+        c, sn = torch.cos(yaw), torch.sin(yaw)
+
+        def heading(v):  # tile-local xy vectors (n, 2) in the robot's heading frame
+            return torch.stack([c * v[:, 0] + sn * v[:, 1], -sn * v[:, 0] + c * v[:, 1]], dim=1)
+
+        v_min, v_max = cfg.approach_speed
+
+        def steer(rel):
+            """Command towards a point (heading frame): forward in an arc, faster while it is farther away straight
+            ahead; stepping back and turning while it is close and off to the side."""
+            x, y = rel[:, 0], rel[:, 1]
+            bearing = torch.atan2(y, x)
+            w = (cfg.approach_turn_gain * bearing).clamp(-cfg.approach_turn, cfg.approach_turn)
+            vx = torch.where((rel.norm(dim=1) > 0.6) & (bearing.abs() < 0.3), torch.full_like(x, v_max), torch.full_like(x, v_min))
+            back = (x < 0.35) & (bearing.abs() > 0.8)
+            vx = torch.where(back, -torch.full_like(x, v_min), vx)
+            w = torch.where(back, torch.sign(y) * cfg.approach_turn, w)
+            return torch.stack([vx, torch.zeros_like(x), w], dim=1)
+
+        slow = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1) < cfg.arrive_speed
+        cmd = torch.zeros(n, 3, device=dev)
+        arrived = torch.zeros(n, dtype=torch.bool, device=dev)
+        gone = torch.zeros(n, dtype=torch.bool, device=dev)
+        back_up = torch.tensor([-v_min, 0.0, 0.0], device=dev)
+        # an item: into the reach zone, straight ahead
+        to_item = approaching & ~holding
+        if to_item.any() and s.num_trash:
+            item = self.item.clamp(min=0)
+            rel = heading(s.trash_positions()[envs, item, :2] - p)
+            x, y = rel[:, 0], rel[:, 1]
+            is_bag = s.is_bag[item]
+            near = torch.where(is_bag, cfg.bag_reach_ahead[0], cfg.reach_ahead[0]) + 0.03
+            far = torch.where(is_bag, cfg.bag_reach_ahead[1], cfg.reach_ahead[1]) - 0.03
+            # litter beside the foot on the working arm's side (a bag, taken by its knot, straight ahead)
+            offset = torch.where(is_bag, 0.0, torch.where(self.side == 1, -cfg.approach_offset, cfg.approach_offset))
+            aim = torch.stack([x, y - offset], dim=1)
+            centered = (y - offset).abs() < 0.07
+            inside = (x > near) & (x < far) & centered & (y.abs() < cfg.reach_side)
+            go = torch.where((centered & (x <= near))[:, None], back_up, steer(aim))
+            cmd = torch.where((to_item & ~inside)[:, None], go, cmd)
+            gone |= to_item & ((s.trash_state[envs, item] != ON_GROUND) | (rel.norm(dim=1) > cfg.approach_distance + 0.5))
+            arrive = to_item & inside & slow & ~gone
+            if arrive.any():
+                self._start_pick(s, arrive, self.item.clone())
+            arrived |= arrive
+        # a basket: facing it, within the distance band
+        to_basket = approaching & holding & ~bag
+        if to_basket.any():
+            b = s.baskets[envs, self.target.clamp(min=0)]
+            rel = heading(b[:, :2] - p)
+            d = rel.norm(dim=1)
+            lo, hi = cfg.basket_distance[0] + 0.03, cfg.basket_distance[1] - 0.03
+            facing = torch.atan2(rel[:, 1], rel[:, 0]).abs() < cfg.basket_angle - 0.15
+            at = (d > lo) & (d < hi) & facing
+            go = torch.where((d <= lo)[:, None], back_up, steer(rel))
+            cmd = torch.where((to_basket & ~at)[:, None], go, cmd)
+            arrive = to_basket & at & slow
+            self.drop_bag[arrive] = False
+            arrived |= arrive
+        # a bag zone: the robot where the hanging bag is over the zone's drop point
+        to_pile = approaching & holding & bag
+        if to_pile.any():
+            bag_xy = s.trash_positions()[envs, s.held_item.clamp(min=0), :2]
+            goal = s.pile_drop_point(self.pile) - (bag_xy - p)  # where the pelvis puts the bag there
+            in_zone = s.held_in_zone()
+            cmd = torch.where((to_pile & ~in_zone)[:, None], steer(heading(goal - p)), cmd)
+            arrive = to_pile & in_zone & slow
+            self.drop_bag[arrive] = True
+            arrived |= arrive
+        putting = arrived & holding
+        self.phase[putting] = RAISE
+        self.timer[putting] = 0.0
+        # giving up: too long, or the item went away (kicked, carried off)
+        quit = approaching & ~arrived & (gone | (self.timer > cfg.approach_time))
+        self.phase[quit] = IDLE
+        self.item[quit & ~holding] = -1
+        self.failed += quit.float()
+        return cmd * (self.phase == APPROACH)[:, None]
 
     def _hand(self, side_index: torch.Tensor):
         """Palm position and orientation, and the grasp center ``grasp_offset`` from the palm towards the fingertips
@@ -390,8 +518,14 @@ class HandsAction(ActionTerm):
             nxt[failed] = STAND
         nxt[(phase == LIFT) & (t >= cfg.lift_time)] = STAND
         nxt[(phase == STAND) & (t >= cfg.stand_time)] = IDLE
-        nxt[(phase == RAISE) & (t >= cfg.raise_time)] = RELEASE
-        release = (phase == RAISE) & (nxt == RELEASE)
+        # litter is let go only over the basket's opening (a bag over its zone): the arm keeps trying for up to
+        # ``raise_extra`` longer, then the robot gives up, still holding it
+        over = self._over_basket(s) | self.drop_bag
+        release = (phase == RAISE) & (t >= cfg.raise_time) & over
+        give_up = (phase == RAISE) & (t >= cfg.raise_time + cfg.raise_extra) & ~over
+        nxt[release] = RELEASE
+        nxt[give_up] = LOWER
+        self.failed += give_up.float()
         if release.any():  # let go of the item at the start of RELEASE
             rows = release.nonzero().flatten()
             held = s.held_item[rows]
@@ -413,6 +547,17 @@ class HandsAction(ActionTerm):
         self._closest[changed & (nxt == GRASP)] = 1e3
         self.phase[:] = nxt
         self.item[(nxt == IDLE) | ((nxt == STAND) & ~(s.held_item >= 0))] = -1
+
+    def _over_basket(self, s) -> torch.Tensor:
+        """The held litter is over the opening of the basket being used, above its rim. (n,)"""
+        if s.num_trash == 0:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        envs = torch.arange(self.num_envs, device=self.device)
+        held = s.held_item.clamp(min=0)
+        p = s.trash_positions()[envs, held]
+        b = s.baskets[envs, self.target.clamp(min=0)]
+        inside = torch.linalg.norm(p[:, :2] - b[:, :2], dim=1) < b[:, 2] - 0.05
+        return (s.held_item >= 0) & (self.target >= 0) & inside & (p[:, 2] > b[:, 3])
 
     def _carry_item(self, s):
         """Held items follow the palm: litter rigidly, a bag hanging upright below the hand (written for each item
@@ -468,6 +613,29 @@ class HandsActionCfg(ActionTermCfg):
     pelvis moves back by about 0.2 m when the robot squats) ..."""
     reach_side: float = 0.22
     """... and within this distance (m) to either side can be picked up."""
+    bag_reach_ahead: tuple[float, float] = (0.2, 0.38)
+    """For a bag (taken by its knot, on top of it), the reach zone in front of the pelvis (m; the robot stops short of
+    the bag)."""
+    approach_distance: float = 1.0
+    """Items up to this far (m) in front of the robot (and within ``approach_side`` to either side), baskets up to this
+    much farther than ``basket_distance`` and bag zones up to this far (within ``approach_angle`` of the heading) are
+    walked up to first."""
+    approach_side: float = 0.5
+    approach_angle: float = 1.0
+    approach_speed: tuple[float, float] = (0.3, 0.45)
+    """Walking speed (m/s) while walking up to something: near the target (and backwards) and while it is farther
+    away straight ahead (the walker stands still below about 0.15 m/s)."""
+    approach_offset: float = 0.15
+    """Litter is walked up to this far (m) to the side of the arm that takes it, beside the foot (feet that walk onto
+    a light item push it away)."""
+    approach_turn: float = 1.0
+    """Largest yaw rate (rad/s) while walking up ..."""
+    approach_turn_gain: float = 1.5
+    """... and the yaw rate per radian of bearing (1/s)."""
+    arrive_speed: float = 0.15
+    """Planar speed (m/s) below which the robot has arrived."""
+    approach_time: float = 6.0
+    """Walking up to something is given up after this long (s; a failed attempt)."""
     basket_distance: tuple[float, float] = (0.55, 0.75)
     """Baskets whose center is this far (m) from the robot (its footprint almost touching the basket) ..."""
     basket_angle: float = 0.6
@@ -495,6 +663,8 @@ class HandsActionCfg(ActionTermCfg):
     lift_time: float = 0.6
     stand_time: float = 1.2
     raise_time: float = 1.2
+    raise_extra: float = 1.5
+    """Longest extra time (s) to bring held litter over a basket's opening before giving up."""
     release_time: float = 0.4
     lower_time: float = 0.6
     alert_time: float = 1.5

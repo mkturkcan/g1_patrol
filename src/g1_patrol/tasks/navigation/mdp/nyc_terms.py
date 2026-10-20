@@ -111,22 +111,26 @@ def _walker(env: ManagerBasedRLEnv, action_name: str) -> WalkerPolicyAction:
 
 def command_lateral(env: ManagerBasedRLEnv, action_name: str = "walker") -> torch.Tensor:
     """Squared lateral velocity command: people walk forward and turn rather than sidestep."""
-    return _walker(env, action_name).command[:, 1] ** 2
+    w = _walker(env, action_name)
+    return w.command[:, 1] ** 2 * ~w.hold
 
 
 def command_backward(env: ManagerBasedRLEnv, action_name: str = "walker") -> torch.Tensor:
     """Squared backward velocity command."""
-    return (-_walker(env, action_name).command[:, 0]).clamp(min=0.0) ** 2
+    w = _walker(env, action_name)
+    return (-w.command[:, 0]).clamp(min=0.0) ** 2 * ~w.hold
 
 
 def command_yaw_rate(env: ManagerBasedRLEnv, action_name: str = "walker") -> torch.Tensor:
-    return _walker(env, action_name).command[:, 2] ** 2
+    w = _walker(env, action_name)
+    return w.command[:, 2] ** 2 * ~w.hold
 
 
 def command_rate(env: ManagerBasedRLEnv, action_name: str = "walker") -> torch.Tensor:
-    """Squared change of the applied velocity command between navigation steps."""
+    """Squared change of the applied velocity command between navigation steps (the policy's; not while a controller
+    drives the walker)."""
     w = _walker(env, action_name)
-    return ((w.command - w.prev_command) ** 2).sum(dim=1)
+    return ((w.command - w.prev_command) ** 2).sum(dim=1) * ~w.hold
 
 
 def policy_output_l2(env: ManagerBasedRLEnv) -> torch.Tensor:

@@ -27,7 +27,8 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
     at zero after a reset.
 
     With ``posture_command``, the walker also receives a posture (pelvis height, forward lean; set with
-    :meth:`set_posture` by a controller that picks things up), and :attr:`hold` keeps its velocity command at zero.
+    :meth:`set_posture` by a controller that picks things up), and :attr:`hold` replaces its velocity command with
+    :attr:`drive` (zero, or the controller's command for a short approach).
     """
 
     cfg: WalkerPolicyActionCfg
@@ -47,7 +48,9 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
         self.posture = torch.tensor([cfg.nominal_height, 0.0], device=self.device).repeat(n, 1)
         """Posture command (pelvis height above the ground, forward lean) of walkers that take one."""
         self.hold = torch.zeros(n, dtype=torch.bool, device=self.device)
-        """Environments whose walker must stand still (velocity command zero), e.g. while picking something up."""
+        """Environments whose walker follows :attr:`drive` instead of the policy, e.g. while picking something up."""
+        self.drive = torch.zeros(n, 3, device=self.device)
+        """Velocity command of held environments (zero: stand still)."""
         if cfg.posture_command:
             # the walker's command input is the velocity command followed by the posture
             cfg.low_level_observations.velocity_commands.func = lambda dummy_env: torch.cat([self._raw_actions, self.posture], 1)
@@ -66,7 +69,7 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
         self.target[:] = target
         self.prev_command[:] = self._raw_actions
         self._raw_actions[:] = self._raw_actions + self.cfg.smoothing * (target - self._raw_actions)
-        self._raw_actions[self.hold] = 0.0
+        self._raw_actions[self.hold] = self.drive[self.hold]
 
     def set_posture(self, height: torch.Tensor, lean: torch.Tensor, dt: float):
         """Move the posture command towards (height, lean) at the rates the walker was trained with; ``dt`` is the
@@ -78,6 +81,8 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
     def apply_actions(self):
         # as PreTrainedPolicyAction, but recording the walker's observation history and latency buffers at its rate
         if self._counter % self.cfg.low_level_decimation == 0:
+            if self.hold.any():  # a controller's command takes effect at the walker's rate
+                self._raw_actions[self.hold] = self.drive[self.hold]
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy", update_history=True)
             self.low_level_actions[:] = self.policy(low_level_obs)
             self._low_level_action_term.process_actions(self.low_level_actions)
@@ -93,6 +98,7 @@ class WalkerPolicyAction(PreTrainedPolicyAction):
         self.posture[ids, 0] = self.cfg.nominal_height
         self.posture[ids, 1] = 0.0
         self.hold[ids] = False
+        self.drive[ids] = 0.0
         self._low_level_obs_manager.reset(env_ids)  # the walker's observation history and latencies
 
 

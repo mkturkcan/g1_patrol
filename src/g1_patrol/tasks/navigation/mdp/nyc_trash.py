@@ -308,14 +308,16 @@ class TrashMixin:
         present = (d < max_range).float()
         return torch.cat([rel_b * present[..., None], present[..., None]], dim=-1).reshape(self.num_envs, -1)
 
-    def reachable_item(self, ahead: tuple[float, float], side: float) -> torch.Tensor:
+    def reachable_item(self, ahead: tuple[float, float], side: float, bags: bool | None = None) -> torch.Tensor:
         """Index of the item on the ground closest to the reach zone center (``ahead`` m in front of the robot, within
-        ``side`` m to either side), or -1. Shape (n,)."""
+        ``side`` m to either side), or -1; ``bags``: only bags (True), only litter (False). Shape (n,)."""
         if self.num_trash == 0:
             return torch.full((self.num_envs,), -1, dtype=torch.long, device=self.device)
         p = self._to_heading(self.trash_positions()[..., :2] - self.robot_pos()[:, None])
         x, y = p[..., 0], p[..., 1]
         ok = (self.trash_state == ON_GROUND) & (x > ahead[0]) & (x < ahead[1]) & (y.abs() < side)
+        if bags is not None:
+            ok &= self.is_bag[None] if bags else ~self.is_bag[None]
         score = torch.where(ok, (x - (ahead[0] + ahead[1]) / 2) ** 2 + y**2, torch.full_like(x, 1e3))
         best = score.argmin(dim=1)
         return torch.where(ok.any(dim=1), best, torch.full_like(best, -1))
