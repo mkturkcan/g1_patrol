@@ -199,15 +199,22 @@ class TrashMixin:
         self.trash.write_body_velocity_to_sim_index(body_velocities=torch.zeros(n, k, 6, device=dev), env_ids=env_ids)
 
     def _repark(self):
-        """Put the unused items, which fall freely below the street, back at ``PARK_Z`` (one write for all)."""
+        """Put the unused items, which fall freely below the street, back at ``PARK_Z``, and items that were pushed
+        through the ground (squeezed under a pedestrian's kinematic body) back on it (one write for all)."""
         n, k, dev = self.num_envs, self.num_trash, self.device
         parked = self.trash_state == PARKED
         pose = torch.cat([self.trash.data.body_link_pos_w.torch, self.trash.data.body_link_quat_w.torch], dim=-1).clone()
         vel = torch.cat([self.trash.data.body_link_lin_vel_w.torch, self.trash.data.body_link_ang_vel_w.torch], dim=-1).clone()
+        ground = self.layout.ground_height(self.tile_row, self.tile_col, pose[..., :2] - self.tile_center[:, None])
+        loose = (self.trash_state == ON_GROUND) | (self.trash_state == FALLING)
+        sunk = loose & (pose[..., 2] < ground - 0.3)
+        pose[..., 2] = torch.where(sunk, ground + self.trash_rest_height[None], pose[..., 2])
+        pose[..., 3:] = torch.where(sunk[..., None], self.trash_rest_quat[None].expand(n, -1, -1), pose[..., 3:])
+        self.trash_state[sunk] = ON_GROUND
         park = torch.stack([torch.arange(k, device=dev) * 0.8 - 8.0, torch.zeros(k, device=dev)], dim=1)
         pose[..., :2] = torch.where(parked[..., None], park[None] + self.tile_center[:, None], pose[..., :2])
         pose[..., 2] = torch.where(parked, PARK_Z, pose[..., 2])
-        vel = torch.where(parked[..., None], torch.zeros_like(vel), vel)
+        vel = torch.where((parked | sunk)[..., None], torch.zeros_like(vel), vel)
         self.trash.write_body_pose_to_sim_index(body_poses=pose)
         self.trash.write_body_velocity_to_sim_index(body_velocities=vel)
 
@@ -280,7 +287,7 @@ class TrashMixin:
         rel_b = self._to_heading(torch.gather(rel, 1, order[..., None].expand(-1, -1, 2)))
         present = (d < max_range).float()
         feet = self.layout.ground_height(self.tile_row, self.tile_col, self.robot_pos()[:, None])
-        h = torch.gather(p[..., 2], 1, order) + self.trash_grasp_height[order] - feet
+        h = (torch.gather(p[..., 2], 1, order) + self.trash_grasp_height[order] - feet).clamp(-0.5, 1.5)
         bag = self.is_bag[order].float()
         feats = torch.cat([rel_b, h[..., None], torch.ones_like(h[..., None]), bag[..., None]], dim=-1) * present[..., None]
         out[:, : order.shape[1]] = feats
