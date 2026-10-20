@@ -36,6 +36,7 @@ from .nyc_assist import AssistMixin
 from .nyc_social import CANE, SocialMixin
 from .nyc_trash import TrashMixin
 from ..nyc.tiles import (
+    BASKET_WALL,
     HALF_L,
     HALF_W,
     MAX_BOXES,
@@ -296,17 +297,41 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         return torch.cat([xy, z[..., None]], dim=-1)
 
     def limb_obstacle_clearance(self) -> torch.Tensor:
-        """Gap between the arm and hand links and the nearest structure that spans their height (n,)."""
+        """Gap between the arm and hand links and the nearest structure that spans their height (n,). Litter baskets
+        are open at the top: a hand over the opening, or reaching a little into it, keeps its gap to the wall."""
         pts = self.limb_points()
         xy, h, r = pts[..., :2], pts[..., 2:3], self.cfg.limb_radius
         circ = self.circles
         d_c = torch.linalg.norm(xy[:, :, None] - circ[:, None, :, :2], dim=-1) - circ[:, None, :, 2]
         span_c = self.circle_valid[:, None] & (h > circ[:, None, :, 3] - r) & (h < circ[:, None, :, 4] + r)
+        basket = self._basket_circles()
+        if basket.any():
+            opening = basket[:, None] & (d_c < 0.0) & (h > circ[:, None, :, 4] - 0.25)
+            d_c = torch.where(opening, -d_c - BASKET_WALL, d_c)
+            # the basket the robot is putting litter into is no obstacle for its arms
+            if (self.basket_in_use >= 0).any():
+                b = self.baskets[torch.arange(self.num_envs, device=self.device), self.basket_in_use.clamp(min=0)]
+                in_use = (torch.linalg.norm(circ[..., :2] - b[:, None, :2], dim=-1) < 0.01) & (self.basket_in_use >= 0)[:, None]
+                span_c &= ~in_use[:, None]
         d_b, _ = box_distance(xy, self.boxes)
         span_b = self.box_valid[:, None] & (h > self.boxes[:, None, :, 5] - r) & (h < self.boxes[:, None, :, 6] + r)
+        span_b &= ~self._pile_boxes()[:, None]  # a pile of trash bags is no obstacle for an arm
         far = torch.full_like(d_c[..., :1], 1e3)
         gap = torch.minimum(torch.where(span_c, d_c, far).amin(dim=-1), torch.where(span_b, d_b, far).amin(dim=-1))
         return gap.amin(dim=1) - r
+
+    def _basket_circles(self) -> torch.Tensor:
+        """The structure circles that are litter baskets (n, MAX_CIRCLES)."""
+        same = torch.linalg.norm(self.circles[:, :, None, :2] - self.baskets[:, None, :, :2], dim=-1) < 0.01
+        return (same & self.basket_valid[:, None]).any(dim=2) & self.circle_valid
+
+    def _pile_boxes(self) -> torch.Tensor:
+        """The structure boxes that are curbside piles of trash bags: low, centered in a bag zone (n, MAX_BOXES)."""
+        c = self.boxes[..., :2]
+        z = self.piles
+        inside = (c[:, :, None, 0] > z[:, None, :, 0]) & (c[:, :, None, 0] < z[:, None, :, 1])
+        inside &= (c[:, :, None, 1] > z[:, None, :, 2]) & (c[:, :, None, 1] < z[:, None, :, 3])
+        return (inside & self.pile_valid[:, None]).any(dim=2) & self.box_valid & (self.boxes[..., 6] < 0.6)
 
     def limb_pedestrian_clearance(self, exclude_hostile: bool = False) -> torch.Tensor:
         """Gap between the arm and hand links and the nearest pedestrian (n,)."""

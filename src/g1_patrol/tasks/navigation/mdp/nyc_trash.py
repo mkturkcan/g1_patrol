@@ -68,6 +68,8 @@ class TrashMixin:
         self.held_item = torch.full((n,), -1, dtype=torch.long, device=dev)
         self.baskets = torch.zeros(n, MAX_BASKETS, 4, device=dev)
         self.basket_valid = torch.zeros(n, MAX_BASKETS, dtype=torch.bool, device=dev)
+        self.basket_in_use = torch.full((n,), -1, dtype=torch.long, device=dev)
+        """Basket the robot is putting litter into (-1: none; set by the hands): not an obstacle for its arms."""
         self.piles = torch.zeros(n, MAX_PILES, 4, device=dev)
         """Zones (x0, x1, y0, y1) beside the curbside bag piles, where bags are set down."""
         self.pile_valid = torch.zeros(n, MAX_PILES, dtype=torch.bool, device=dev)
@@ -135,6 +137,7 @@ class TrashMixin:
         self.crossings[env_ids] = lay.crossings[r, c]
         self.crossing_valid[env_ids] = torch.arange(MAX_CROSSINGS, device=dev) < lay.num_crossings[r, c, None]
         self.held_item[env_ids] = -1
+        self.basket_in_use[env_ids] = -1
         self.trash_release_time[env_ids] = 0.0
         self.episode_picked[env_ids] = 0.0
         self.episode_deposited[env_ids] = 0.0

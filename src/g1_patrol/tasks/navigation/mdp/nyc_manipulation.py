@@ -268,6 +268,8 @@ class HandsAction(ActionTerm):
         n, dev = self.num_envs, self.device
         self.timer += dt * self.busy
         drive = self._approach(s) if (self.phase == APPROACH).any() else torch.zeros(n, 3, device=dev)
+        back = (self.phase == LOWER) & ~self.drop_bag & (self.target >= 0)
+        drive[back, 0] = -cfg.back_speed
         walker.hold[:] = self.busy
         walker.drive[:] = drive
         holding = s.held_item >= 0
@@ -286,10 +288,19 @@ class HandsAction(ActionTerm):
         lowering = putting_down & self.drop_bag
         height = torch.where(lowering, cfg.bag_drop_posture[0], height)
         lean = torch.where(lowering, cfg.bag_drop_posture[1], lean)
+        reaching_over = putting_down & ~self.drop_bag  # leaning a little towards the basket
+        height = torch.where(reaching_over, cfg.litter_drop_posture[0], height)
+        lean = torch.where(reaching_over, cfg.litter_drop_posture[1], lean)
         walker.set_posture(height, lean, dt)
         # arm targets
         targets = self._default.clone()
-        ik_phase = (self.phase == CROUCH) | (self.phase == REACH) | (self.phase == GRASP) | (putting_down & ~self.drop_bag)
+        # litter is lifted over a basket's rim while walking up to it (carried at the hip, it would hit the basket)
+        # after letting litter go, the robot steps back with the hand raised over the rim, then lowers the arm
+        backing_off = (self.phase == LOWER) & ~self.drop_bag & (self.target >= 0)
+        lifting = (putting_down & ~self.drop_bag) | ((self.phase == APPROACH) & holding & ~bag) | backing_off
+        using = lifting
+        s.basket_in_use[:] = torch.where(using, self.target, torch.full_like(self.target, -1))
+        ik_phase = (self.phase == CROUCH) | (self.phase == REACH) | (self.phase == GRASP) | lifting
         goal = self._ik_goal(s) if ik_phase.any() else None
         for k, side in enumerate(("left", "right")):
             mine = self.side == k
@@ -354,7 +365,7 @@ class HandsAction(ActionTerm):
             w = (cfg.approach_turn_gain * bearing).clamp(-cfg.approach_turn, cfg.approach_turn)
             vx = torch.where((rel.norm(dim=1) > 0.6) & (bearing.abs() < 0.3), torch.full_like(x, v_max), torch.full_like(x, v_min))
             back = (x < 0.35) & (bearing.abs() > 0.8)
-            vx = torch.where(back, -torch.full_like(x, v_min), vx)
+            vx = torch.where(back, -torch.full_like(x, cfg.back_speed), vx)
             w = torch.where(back, torch.sign(y) * cfg.approach_turn, w)
             return torch.stack([vx, torch.zeros_like(x), w], dim=1)
 
@@ -362,7 +373,7 @@ class HandsAction(ActionTerm):
         cmd = torch.zeros(n, 3, device=dev)
         arrived = torch.zeros(n, dtype=torch.bool, device=dev)
         gone = torch.zeros(n, dtype=torch.bool, device=dev)
-        back_up = torch.tensor([-v_min, 0.0, 0.0], device=dev)
+        back_up = torch.tensor([-cfg.back_speed, 0.0, 0.0], device=dev)
         # an item: into the reach zone, straight ahead
         to_item = approaching & ~holding
         if to_item.any() and s.num_trash:
@@ -443,7 +454,8 @@ class HandsAction(ActionTerm):
             p = s.trash.data.body_link_pos_w.torch[envs, item]
             above = torch.where(self.phase == CROUCH, cfg.approach_height, 0.0) + s.trash_grasp_height[item]
             target = p + torch.stack([torch.zeros(n, device=dev), torch.zeros(n, device=dev), above], dim=1)
-        dropping = (self.phase == RAISE) | (self.phase == RELEASE)
+        held_litter = (s.held_item >= 0) & ~self.holding_bag()
+        dropping = (self.phase == RAISE) | (self.phase == RELEASE) | ((self.phase == APPROACH) & held_litter)
         if dropping.any() and s.num_trash:
             held = s.held_item.clamp(min=0)
             item_pos = s.trash.data.body_link_pos_w.torch[envs, held]
@@ -451,9 +463,15 @@ class HandsAction(ActionTerm):
             b = s.baskets[envs, self.target.clamp(min=0)]
             to_robot = torch.nn.functional.normalize(s.robot_pos() - b[:, :2] + 1e-4, dim=1)
             over = b[:, :2] + (b[:, 2:3] - cfg.drop_inset) * to_robot
-            item_goal = torch.cat([over + s.tile_center, (b[:, 3] + cfg.drop_height)[:, None]], dim=1)
+            lift = torch.where(self.phase == APPROACH, cfg.approach_lift, cfg.drop_height)  # higher while walking up
+            item_goal = torch.cat([over + s.tile_center, (b[:, 3] + lift)[:, None]], dim=1)
             # the held item moves with the hand: shift the grasp center by the item's offset from its goal
             target = torch.where(dropping[:, None], grasp + (item_goal - item_pos), target)
+        backing_off = (self.phase == LOWER) & ~self.drop_bag & (self.target >= 0)
+        if backing_off.any():  # after letting go, stepping back: the hand up, above the rim, coming back with the robot
+            up = grasp.clone()
+            up[:, 2] = s.baskets[envs, self.target.clamp(min=0), 3] + cfg.approach_lift
+            target = torch.where(backing_off[:, None], up, target)
         return target
 
     def _ik_step(self, side: str, goal: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
@@ -536,7 +554,11 @@ class HandsAction(ActionTerm):
             s.held_item[rows] = -1
             self.dropped[rows] += 1.0
         nxt[(phase == RELEASE) & (t >= cfg.release_time)] = LOWER
-        nxt[(phase == LOWER) & (t >= cfg.lower_time)] = IDLE
+        # after putting litter in a basket the robot steps back (hand raised) until its arm cannot reach the basket
+        litter_done = ~self.drop_bag & (self.target >= 0)
+        b = s.baskets[envs, self.target.clamp(min=0)]
+        clear = (torch.linalg.norm(s.robot_pos() - b[:, :2], dim=1) > cfg.clear_distance) | (t >= cfg.lower_time + cfg.back_off_time)
+        nxt[(phase == LOWER) & (t >= cfg.lower_time) & (~litter_done | clear)] = IDLE
         alert_done = (phase == ALERT) & (t >= cfg.alert_time)
         if alert_done.any():
             s.assisted |= alert_done & s.has_fallen
@@ -625,6 +647,8 @@ class HandsActionCfg(ActionTermCfg):
     approach_speed: tuple[float, float] = (0.3, 0.45)
     """Walking speed (m/s) while walking up to something: near the target (and backwards) and while it is farther
     away straight ahead (the walker stands still below about 0.15 m/s)."""
+    back_speed: float = 0.4
+    """Speed (m/s) of stepping back (the walker hardly moves backwards for slower commands)."""
     approach_offset: float = 0.15
     """Litter is walked up to this far (m) to the side of the arm that takes it, beside the foot (feet that walk onto
     a light item push it away)."""
@@ -636,8 +660,9 @@ class HandsActionCfg(ActionTermCfg):
     """Planar speed (m/s) below which the robot has arrived."""
     approach_time: float = 6.0
     """Walking up to something is given up after this long (s; a failed attempt)."""
-    basket_distance: tuple[float, float] = (0.55, 0.75)
-    """Baskets whose center is this far (m) from the robot (its footprint almost touching the basket) ..."""
+    basket_distance: tuple[float, float] = (0.6, 0.82)
+    """Baskets whose center is this far (m) from the robot (its footprint close to the basket; the walker stops
+    within about 0.1 m) ..."""
     basket_angle: float = 0.6
     """... within this angle (rad) of its heading can be reached."""
     pick_posture: tuple[float, float] = (0.41, 1.18)
@@ -646,7 +671,9 @@ class HandsActionCfg(ActionTermCfg):
     bag_posture: tuple[float, float] = (0.55, 0.7)
     """... and for taking a bag by its knot."""
     bag_drop_posture: tuple[float, float] = (0.6, 0.25)
-    """... and for lowering a bag to set it down."""
+    """... and for lowering a bag to set it down ..."""
+    litter_drop_posture: tuple[float, float] = (0.7, 0.25)
+    """... and for reaching over a basket's rim."""
     brace_posture: tuple[float, float] = (0.64, 0.15)
     """... and for bracing."""
     approach_height: float = 0.12
@@ -655,8 +682,11 @@ class HandsActionCfg(ActionTermCfg):
     """Distance (m) from the palm link towards the fingertips at which the fingers close around an object."""
     grasp_tolerance: float = 0.05
     drop_height: float = 0.10
-    drop_inset: float = 0.08
-    """Litter is let go this high (m) above a basket's rim, this far (m) inside its near edge."""
+    drop_inset: float = 0.12
+    """Litter is let go this high (m) above a basket's rim, this far (m) inside its near edge ..."""
+    approach_lift: float = 0.25
+    """... and held this high (m) above the rim while walking up to the basket (the hand clears the rim and the
+    street furniture beside baskets)."""
     crouch_time: float = 1.2
     reach_time: float = 1.5
     grasp_time: float = 0.3
@@ -666,7 +696,12 @@ class HandsActionCfg(ActionTermCfg):
     raise_extra: float = 1.5
     """Longest extra time (s) to bring held litter over a basket's opening before giving up."""
     release_time: float = 0.4
-    lower_time: float = 0.6
+    lower_time: float = 0.8
+    clear_distance: float = 0.95
+    """After putting litter in a basket, the robot steps back until its pelvis is this far (m) from the basket's
+    center (the arm is lowered only then) ..."""
+    back_off_time: float = 1.5
+    """... or for at most this much longer (s) than ``lower_time``."""
     alert_time: float = 1.5
     joint_speed: float = 2.5
     """Largest speed (rad/s) of the upper-body joint targets (as in the walker's training)."""

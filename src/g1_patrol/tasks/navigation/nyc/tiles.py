@@ -326,9 +326,10 @@ def _street_furniture(lay: TileLayout, d: float, curb_y: float, rng: np.random.G
             lay.decor.append(("tree", x, curb_y + 0.65))
 
 
-def _place_basket(lay: TileLayout, rng: np.random.Generator, x_ranges, y_range, clearance: float = 0.35) -> bool:
+def _place_basket(lay: TileLayout, rng: np.random.Generator, x_ranges, y_range, clearance: float = 0.5) -> bool:
     """Put a litter basket at a random spot in ``x_ranges`` x ``y_range`` that keeps ``clearance`` from the other
-    structures and 1.3 m from the robot's route ends. Returns whether a spot was found."""
+    structures (room for an arm reaching over it) and 1.3 m from the robot's route ends. Returns whether a spot was
+    found."""
     ends = [p for r in lay.routes for p in (r[:2], r[2:])]
     for _ in range(40):
         lo, hi = x_ranges[rng.integers(len(x_ranges))]
@@ -512,7 +513,7 @@ def build_crosswalk(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
         _place_basket(lay, civic_rng, beside, (street[1] + 0.7, street[1] + 0.8))
         _place_basket(lay, civic_rng, beside, (street[0] - 0.8, street[0] - 0.7))
         side = float(civic_rng.choice([-1.0, 1.0]))  # bags at one corner, against the curb
-        _place_pile(lay, civic_rng, beside, street[1] + 0.3 if side > 0 else street[0] - 0.3, -side)
+        _place_pile(lay, civic_rng, beside, street[1] + 0.3 if side > 0 else street[0] - 0.3, side)
         lay.crossings.append((cx - half, cx + half, street[0], street[1]))
     return lay
 
@@ -659,7 +660,7 @@ def build_plaza(d: float, rng: np.random.Generator, civic_rng: np.random.Generat
     lay.crowd = (6, 20)
     if civic_rng is not None:
         for sy in (1.0, -1.0):  # litter baskets against the building fronts
-            _place_basket(lay, civic_rng, [(-6.0, 6.0)], (sy * 4.0 - 0.05, sy * 4.0 + 0.05))
+            _place_basket(lay, civic_rng, [(-6.0, 6.0)], (sy * 4.0 - 0.05, sy * 4.0 + 0.05), clearance=0.35)
         if kiosk is not None:  # a line at the kiosk's window, away from it along the plaza
             kx, ky = kiosk
             direction = float(civic_rng.choice([-1.0, 1.0]))

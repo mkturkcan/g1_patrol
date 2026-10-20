@@ -173,7 +173,7 @@ def test_civic_additions_leave_the_tile_unchanged(kind):
 @pytest.mark.parametrize("kind", list(BUILDERS))
 def test_civic_features(kind):
     """Litter baskets, bag zones beside the curbside bag piles, lines of people and signalized crossings where they
-    belong, within the tensor caps, and the bag zones clear of other structures."""
+    belong, within the tensor caps, and the bag zones and baskets off the street."""
     from g1_patrol.tasks.navigation.nyc.tiles import MAX_BASKETS, MAX_CROSSINGS, MAX_PILES, MAX_QUEUES
 
     for d in np.linspace(0.0, 1.0, 4):
@@ -189,3 +189,11 @@ def test_civic_features(kind):
                 assert not lay.piles and not lay.baskets()
             for x0, x1, y0, y1 in lay.crossings:  # the crosswalk is the gap between the two street areas
                 assert any(abs(f[1] - x0) < 1e-6 for f in lay.forbidden) and any(abs(f[0] - x1) < 1e-6 for f in lay.forbidden)
+            for zx0, zx1, zy0, zy1 in lay.piles:  # bag zones (with their piles) on the sidewalk, not in the street
+                for fx0, fx1, fy0, fy1 in lay.forbidden:
+                    overlap = min(zx1, fx1) - max(zx0, fx0) > 1e-6 and min(zy1, fy1) - max(zy0, fy0) > 1e-6
+                    assert not overlap, f"{kind} d={d} seed={seed}: a bag zone reaches into the street"
+            for x, y, r, _ in lay.baskets():
+                for fx0, fx1, fy0, fy1 in lay.forbidden:
+                    gap = math.hypot(max(fx0 - x, 0.0, x - fx1), max(fy0 - y, 0.0, y - fy1))
+                    assert gap >= r, f"{kind} d={d} seed={seed}: a litter basket stands in the street"

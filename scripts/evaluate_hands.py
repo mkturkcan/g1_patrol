@@ -6,7 +6,8 @@ placed on clear, level sidewalk 0.3-1.0 m in front of it, within 0.45 m to eithe
 once. The robots that picked up their item are then placed 1.0-1.6 m from a litter basket, facing it to within
 35 degrees (with a bag: 0.5-1.0 m from the zone beside a bag pile, facing it to within 30 degrees), and the trigger
 is pressed once more. The script reports the share of items picked up (also by distance and lateral offset), of
-held items put where they belong, the times taken and the falls. The robot runs the reaching walker; no navigation
+held items put where they belong, the times taken, the falls, and how often the robot touched a structure (its
+footprint or an arm, as in the navigation tasks' obstacle-contact termination, which is off here). The robot runs the reaching walker; no navigation
 policy is involved.
 
 Usage:
@@ -92,6 +93,9 @@ def main(argv: list[str]) -> None:
         def fallen() -> torch.Tensor:
             return robot.data.root_pos_w.torch[:, 2] - ground(s.robot_pos()) < 0.45
 
+        def touching() -> torch.Tensor:
+            return (s.obstacle_clearance() < 0.0) | (s.limb_obstacle_clearance() < 0.0)
+
         def heading_vectors():
             yaw = s.robot_yaw()
             return torch.stack([torch.cos(yaw), torch.sin(yaw)], 1), torch.stack([-torch.sin(yaw), torch.cos(yaw)], 1)
@@ -127,8 +131,10 @@ def main(argv: list[str]) -> None:
         placed[ids] = True
         t_crouch = torch.full((n,), math.nan, device=dev)
         t_pick = torch.full((n,), math.nan, device=dev)
+        touched = torch.zeros(n, dtype=torch.bool, device=dev)
         for t in range(steps):
             step(placed if t == 0 else None)
+            touched |= touching()
             crouch = torch.isnan(t_crouch) & (hands.phase == CROUCH)
             t_crouch[crouch] = (t + 1) * env.step_dt
             got = torch.isnan(t_pick) & (s.held_item >= 0)
@@ -143,6 +149,7 @@ def main(argv: list[str]) -> None:
             "median_time_to_reach_s": float(t_crouch[reached].median()) if reached.any() else None,
             "median_time_to_hold_s": float(t_pick[held].median()) if held.any() else None,
             "falls": int((placed & fallen()).sum()),
+            "touched_a_structure": float((placed & touched).sum() / placed.sum().clamp(min=1)),
             "picked_by_distance": {},
             "picked_by_lateral_offset": {},
         }
@@ -156,11 +163,15 @@ def main(argv: list[str]) -> None:
         # 2. the held item to a basket or a bag pile
         ids = envs[held]
         k = len(ids)
-        if args.bags:  # beside the bag zone, on the sidewalk side, facing it
+        if args.bags:  # beside the bag zone, on its sidewalk side (the other side is the curb), facing it
             rect = s.piles[ids, 0]
             cx, cy = (rect[:, 0] + rect[:, 1]) / 2, (rect[:, 2] + rect[:, 3]) / 2
-            edge = torch.where(cy > 0, rect[:, 2], rect[:, 3])  # the zone's edge away from the curb
-            target = torch.stack([cx + (rand(k) - 0.5) * 0.6, edge - torch.sign(cy) * (0.5 + 0.5 * rand(k))], 1)
+            x, gap = cx + (rand(k) - 0.5) * 0.6, 0.5 + 0.5 * rand(k)
+            below = torch.stack([x, rect[:, 2] - gap], 1)
+            pts = s.robot_pos().clone()
+            pts[ids] = below
+            below_ok = ~s._street_mask(pts[:, None])[:, 0][ids]
+            target = torch.where(below_ok[:, None], below, torch.stack([x, rect[:, 3] + gap], 1))
             yaw = torch.atan2(cy - target[:, 1], cx - target[:, 0]) + (rand(k) - 0.5) * 1.0
         else:  # around a basket, facing it
             b = s.baskets[ids, 0]
@@ -171,13 +182,15 @@ def main(argv: list[str]) -> None:
         spot[ids] = target
         clear = (s.obstacle_clearance(spot[:, None], radius=0.3)[:, 0] > 0.0) & ~s._street_mask(spot[:, None])[:, 0]
         ids, target, yaw = ids[clear[ids]], target[clear[ids]], yaw[clear[ids]]
+        print(f"[HANDS] picked {int(held.sum())}; placed for putting down {len(ids)}", flush=True)
         pose = torch.zeros(len(ids), 7, device=dev)
         pose[:, :2] = target + s.tile_center[ids]
         pose[:, 2] = s.layout.ground_height(s.tile_row[ids], s.tile_col[ids], target[:, None])[:, 0] + 0.78
         zero = torch.zeros(len(ids), device=dev)
         pose[:, 3:] = quat_from_euler_xyz(zero, zero, yaw)
-        robot.write_root_pose_to_sim_index(root_pose=pose, env_ids=ids)
-        robot.write_root_velocity_to_sim_index(root_velocity=torch.zeros(len(ids), 6, device=dev), env_ids=ids)
+        if len(ids):
+            robot.write_root_pose_to_sim_index(root_pose=pose, env_ids=ids)
+            robot.write_root_velocity_to_sim_index(root_velocity=torch.zeros(len(ids), 6, device=dev), env_ids=ids)
         for _ in range(15):
             step()
         carrying = torch.zeros(n, dtype=torch.bool, device=dev)
@@ -185,8 +198,10 @@ def main(argv: list[str]) -> None:
         carrying &= s.held_item >= 0
         done = torch.zeros(n, device=dev)
         t_done = torch.full((n,), math.nan, device=dev)
+        touched[:] = False
         for t in range(steps):
             step(carrying if t == 0 else None)
+            touched |= touching()
             done += s.bags_delivered if args.bags else s.trash_deposited
             first = torch.isnan(t_done) & (done > 0)
             t_done[first] = (t + 1) * env.step_dt
@@ -197,6 +212,7 @@ def main(argv: list[str]) -> None:
             "let_go_elsewhere": float((carrying & (s.held_item < 0) & ~delivered).sum() / carrying.sum().clamp(min=1)),
             "median_time_s": float(t_done[delivered].median()) if delivered.any() else None,
             "falls": int((carrying & fallen()).sum()),
+            "touched_a_structure": float((carrying & touched).sum() / carrying.sum().clamp(min=1)),
         }
         metrics = {"items": "bags" if args.bags else "litter", "picking_up": picking, "putting_down": putting}
         print("[RESULT] Hands controller:")
