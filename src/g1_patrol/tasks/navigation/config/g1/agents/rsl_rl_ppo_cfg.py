@@ -64,7 +64,7 @@ class G1CivicTeacherPPORunnerCfg(G1NycTeacherPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "g1_civic_teacher"
-        self.max_iterations = 20000
+        self.max_iterations = 12000
 
 
 @configclass
