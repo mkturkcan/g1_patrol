@@ -216,6 +216,10 @@ class CivicObservationsCfg:
     policy: TeacherCfg = TeacherCfg()
 
 
+LITTER_REWARDS = (250.0, 800.0, 1000.0)
+"""Reward weights of an item picked up, an item in a basket and a bag set down beside a bag pile (x 0.1 s per event)."""
+
+
 @configclass
 class CivicRewardsCfg(RewardsCfg):
     # the street task's terms (contacts, falls, the roadway, personal space, giving way, margins, walking style), with
@@ -229,15 +233,17 @@ class CivicRewardsCfg(RewardsCfg):
     roadway = RewTerm(func=mdp.is_terminated_term, weight=-300.0, params={"term_keys": "roadway"})
     success = RewTerm(func=mdp.civic_success, weight=100.0, params={"command_name": "nyc"})
     walking_speed = RewTerm(func=mdp.walking_speed, weight=-4.0, params={"command_name": "nyc", "limit": 1.0})
-    # litter and bags: +15 per item picked up, +40 per item in a basket, +50 per bag at the bag pile (worth the detour
-    # and the time standing still), and progress towards the next item or place to put it (more per meter than
-    # progress towards the goal, so that a detour to a basket pays even while it leads away from the goal)
-    picked = RewTerm(func=mdp.hands_event, weight=150.0, params={"event": "picked"})
+    # litter and bags: +25 per item picked up, +80 per item in a basket, +100 per bag at the bag pile (worth the detour
+    # and the time standing still), taken back if the episode ends in a contact, fall or the roadway, and progress
+    # towards the next item or place to put it (more per meter than progress towards the goal, so that a detour to a
+    # basket pays even while it leads away from the goal)
+    picked = RewTerm(func=mdp.hands_event, weight=LITTER_REWARDS[0], params={"event": "picked"})
     pick_failed = RewTerm(func=mdp.hands_event, weight=-20.0, params={"event": "failed"})
     # a small cost for triggering with nothing to do, so that the trigger keeps being explored
     invalid_trigger = RewTerm(func=mdp.hands_event, weight=-0.2, params={"event": "invalid"})
-    deposited = RewTerm(func=mdp.trash_event, weight=400.0, params={"command_name": "nyc", "event": "trash_deposited"})
-    bag_delivered = RewTerm(func=mdp.trash_event, weight=500.0, params={"command_name": "nyc", "event": "bags_delivered"})
+    deposited = RewTerm(func=mdp.trash_event, weight=LITTER_REWARDS[1], params={"command_name": "nyc", "event": "trash_deposited"})
+    bag_delivered = RewTerm(func=mdp.trash_event, weight=LITTER_REWARDS[2], params={"command_name": "nyc", "event": "bags_delivered"})
+    litter_clawback = RewTerm(func=mdp.litter_clawback, weight=-1.0, params={"command_name": "nyc", "values": LITTER_REWARDS})
     trash_lost = RewTerm(func=mdp.trash_event, weight=-20.0, params={"command_name": "nyc", "event": "trash_lost"})
     trash_progress = RewTerm(func=mdp.trash_progress, weight=3.0, params={"command_name": "nyc", "max_distance": 12.0})
     # attacks: get away, keep the attacker at a distance, never go at them, brace when they are close

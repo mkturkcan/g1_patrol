@@ -134,6 +134,25 @@ def trash_event(env: ManagerBasedRLEnv, command_name: str, event: str) -> torch.
     return getattr(_scenario(env, command_name), event)
 
 
+def litter_clawback(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    values: tuple[float, float, float],
+    failure_terms: tuple[str, ...] = ("pedestrian_collision", "obstacle_collision", "fall", "roadway"),
+) -> torch.Tensor:
+    """At a failure (contact, fall, the roadway), what the episode's litter work earned (``values``: the reward weights
+    of an item picked up, an item in a basket, a bag set down), so that with weight -1 it is taken back: litter work
+    pays only in episodes that end well, and cashing it in before a collision is no trade."""
+    s = _scenario(env, command_name)
+    tm = env.termination_manager
+    failed = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for name in failure_terms:
+        if name in tm.active_terms:
+            failed |= tm.get_term(name)
+    earned = values[0] * s.episode_picked + values[1] * s.episode_deposited + values[2] * s.episode_delivered
+    return earned * failed
+
+
 class trash_progress(ManagerTermBase):
     """Progress (m/s, clipped) towards the next step of clearing litter: towards the nearest item on the ground (from
     the reach zone in front of the robot) while empty-handed, towards a place to put it while holding something (a
