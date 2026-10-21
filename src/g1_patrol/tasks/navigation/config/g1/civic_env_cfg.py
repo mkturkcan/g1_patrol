@@ -224,8 +224,8 @@ class CivicRewardsCfg(RewardsCfg):
     success = RewTerm(func=mdp.civic_success, weight=100.0, params={"command_name": "nyc"})
     walking_speed = RewTerm(func=mdp.walking_speed, weight=-4.0, params={"command_name": "nyc", "limit": 1.0})
     # litter and bags: +15 per item picked up, +40 per item in a basket, +50 per bag at the bag pile (worth the detour
-    # and the time standing still), and progress towards the next item or place to put it (as much per meter as
-    # progress towards the goal)
+    # and the time standing still), and progress towards the next item or place to put it (more per meter than
+    # progress towards the goal, so that a detour to a basket pays even while it leads away from the goal)
     picked = RewTerm(func=mdp.hands_event, weight=150.0, params={"event": "picked"})
     pick_failed = RewTerm(func=mdp.hands_event, weight=-20.0, params={"event": "failed"})
     # a small cost for triggering with nothing to do, so that the trigger keeps being explored
@@ -233,7 +233,7 @@ class CivicRewardsCfg(RewardsCfg):
     deposited = RewTerm(func=mdp.trash_event, weight=400.0, params={"command_name": "nyc", "event": "trash_deposited"})
     bag_delivered = RewTerm(func=mdp.trash_event, weight=500.0, params={"command_name": "nyc", "event": "bags_delivered"})
     trash_lost = RewTerm(func=mdp.trash_event, weight=-20.0, params={"command_name": "nyc", "event": "trash_lost"})
-    trash_progress = RewTerm(func=mdp.trash_progress, weight=2.0, params={"command_name": "nyc", "max_distance": 12.0})
+    trash_progress = RewTerm(func=mdp.trash_progress, weight=3.0, params={"command_name": "nyc", "max_distance": 12.0})
     # attacks: get away, keep the attacker at a distance, never go at them, brace when they are close
     flee = RewTerm(func=mdp.flee, weight=2.0, params={"command_name": "nyc"})
     threat_proximity = RewTerm(func=mdp.threat_proximity, weight=-4.0, params={"command_name": "nyc", "distance": 1.5})

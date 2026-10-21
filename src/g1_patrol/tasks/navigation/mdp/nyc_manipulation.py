@@ -57,6 +57,9 @@ MIRROR = (1.0, -1.0, -1.0, 1.0, -1.0)
 """Sign of each arm joint of the left arm relative to the right arm."""
 # right-arm joint angles (the left arm mirrors them), all within the ranges the walker was trained with. Shoulder pitch:
 # negative raises the arm forward; elbow pitch: 0 bends the forearm forward at a right angle, about 1.57 straightens it
+TUCK_RIGHT = (0.35, 0.0, 0.0, 0.87, 0.0)
+"""Arm at rest: the default pose without its outward roll (the default pose's arms reach as wide as the robot's
+footprint and brush walls and poles in narrow passages)."""
 CARRY_RIGHT = (-0.1, -0.25, 0.0, 0.3, 0.0)
 """Holding litter in front of the hip (forearm forward)."""
 HANG_RIGHT = (0.0, -0.42, 0.0, 0.2, 0.0)
@@ -99,7 +102,8 @@ class HandsAction(ActionTerm):
             sign = mirror if side == "left" else torch.ones(5, device=dev)
             self._pose[side] = {
                 name: torch.tensor(pose, device=dev) * sign
-                for name, pose in (("carry", CARRY_RIGHT), ("hang", HANG_RIGHT), ("guard", GUARD_RIGHT), ("alert", ALERT_RIGHT))
+                for name, pose in (("tuck", TUCK_RIGHT), ("carry", CARRY_RIGHT), ("hang", HANG_RIGHT), ("guard", GUARD_RIGHT),
+                                   ("alert", ALERT_RIGHT))
             }
             closed = [CLOSED_RIGHT[f.split("_")[1]] * (-1.0 if side == "left" and f.split("_")[1] != "zero" else 1.0) for f in fingers]
             self._pose[side]["closed"] = torch.tensor(closed, device=dev)
@@ -294,6 +298,8 @@ class HandsAction(ActionTerm):
         walker.set_posture(height, lean, dt)
         # arm targets
         targets = self._default.clone()
+        for side in ("left", "right"):  # arms at rest unless used below
+            targets[:, self._arm_ub[side]] = self._pose[side]["tuck"]
         # litter is lifted over a basket's rim while walking up to it (carried at the hip, it would hit the basket)
         # after letting litter go, the robot steps back with the hand raised over the rim, then lowers the arm
         backing_off = (self.phase == LOWER) & ~self.drop_bag & (self.target >= 0)

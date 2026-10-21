@@ -65,6 +65,9 @@ class G1CivicTeacherPPORunnerCfg(G1NycTeacherPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "g1_civic_teacher"
         self.max_iterations = 12000
+        # with the trigger and brace outputs and many more events, the action noise collapsed under the street
+        # teacher's entropy bonus (std 0.42 -> 0.13 in 1,000 iterations, then 0.03 for the yaw rate)
+        self.algorithm.entropy_coef = 0.003
 
 
 @configclass
