@@ -221,6 +221,12 @@ class CivicRewardsCfg(RewardsCfg):
     # the street task's terms (contacts, falls, the roadway, personal space, giving way, margins, walking style), with
     # goal progress paused while getting away from an attacker and success also for helping someone who has fallen
     progress = RewTerm(func=mdp.civic_goal_progress, weight=2.0, params={"command_name": "nyc", "max_speed": 1.0})
+    # contacts, falls and the roadway cost twice as much as in the street task: with the litter rewards below, the
+    # street task's costs let a basket bumped into after binning litter look like a fair trade
+    pedestrian_contact = RewTerm(func=mdp.is_terminated_term, weight=-400.0, params={"term_keys": "pedestrian_collision"})
+    obstacle_contact = RewTerm(func=mdp.is_terminated_term, weight=-300.0, params={"term_keys": "obstacle_collision"})
+    fall = RewTerm(func=mdp.is_terminated_term, weight=-400.0, params={"term_keys": "fall"})
+    roadway = RewTerm(func=mdp.is_terminated_term, weight=-300.0, params={"term_keys": "roadway"})
     success = RewTerm(func=mdp.civic_success, weight=100.0, params={"command_name": "nyc"})
     walking_speed = RewTerm(func=mdp.walking_speed, weight=-4.0, params={"command_name": "nyc", "limit": 1.0})
     # litter and bags: +15 per item picked up, +40 per item in a basket, +50 per bag at the bag pile (worth the detour

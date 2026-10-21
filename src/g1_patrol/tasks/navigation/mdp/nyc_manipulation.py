@@ -703,7 +703,7 @@ class HandsActionCfg(ActionTermCfg):
     """Longest extra time (s) to bring held litter over a basket's opening before giving up."""
     release_time: float = 0.4
     lower_time: float = 0.8
-    clear_distance: float = 0.95
+    clear_distance: float = 1.1
     """After putting litter in a basket, the robot steps back until its pelvis is this far (m) from the basket's
     center (the arm is lowered only then) ..."""
     back_off_time: float = 1.5
