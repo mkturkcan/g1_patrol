@@ -286,9 +286,10 @@ Curriculum.
 
 
 class civic_curriculum(nyc_adaptive_curriculum):
-    """:class:`nyc_adaptive_curriculum` where getting through an attack without a fall or collision also counts as a
-    success (the robot may have had to give up on its goal to get away). Extra parameters: ``command_name`` and
-    ``failure_terms``."""
+    """:class:`nyc_adaptive_curriculum` where an episode that runs out of time without a fall, collision or step into
+    the roadway also counts as a success if the robot got through an attack (it may have had to give up on its goal
+    to get away) or did civic work (picked up, put in a basket or set down litter or a bag: detours that the goal's
+    time limit does not allow for). Extra parameters: ``command_name`` and ``failure_terms``."""
 
     def __call__(
         self,
@@ -313,7 +314,8 @@ class civic_curriculum(nyc_adaptive_curriculum):
         for name in params.get("failure_terms", ("pedestrian_collision", "obstacle_collision", "fall", "roadway")):
             if name in tm.active_terms:
                 failed |= tm.get_term(name)[env_ids]
-        survived = s.attacked_episode[env_ids] & tm.get_term("time_out")[env_ids] & ~failed
+        worked = (s.episode_picked[env_ids] + s.episode_deposited[env_ids] + s.episode_delivered[env_ids]) > 0
+        survived = (s.attacked_episode[env_ids] | worked) & tm.get_term("time_out")[env_ids] & ~failed
         return tm.get_term(success_term)[env_ids] | survived
 
 

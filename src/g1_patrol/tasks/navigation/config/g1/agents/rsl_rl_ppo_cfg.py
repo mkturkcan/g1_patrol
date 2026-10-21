@@ -11,6 +11,17 @@ from isaaclab_rl.rsl_rl import (
 
 
 @configclass
+class TargetNoisePpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    """PPO with the entropy coefficient adapted to hold the mean action noise near ``target_std``
+    (:class:`TargetNoisePPO`)."""
+
+    class_name: str = "g1_patrol.tasks.navigation.config.g1.agents.ppo:TargetNoisePPO"
+    target_std: float = 0.35
+    entropy_rate: float = 0.02
+    entropy_range: tuple[float, float] = (1.0e-4, 1.0e-2)
+
+
+@configclass
 class G1CrowdNavPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 32
     max_iterations = 3000
@@ -65,9 +76,16 @@ class G1CivicTeacherPPORunnerCfg(G1NycTeacherPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "g1_civic_teacher"
         self.max_iterations = 12000
-        # with the trigger and brace outputs and many more events, the action noise collapsed under the street
-        # teacher's entropy bonus (std 0.42 -> 0.13 in 1,000 iterations, then 0.03 for the yaw rate)
-        self.algorithm.entropy_coef = 0.003
+        # a fixed entropy bonus let the action noise collapse (0.001: std 0.42 -> 0.13 in 1,000 iterations, 0.03 for
+        # the yaw rate) or inflate (0.003: 0.31 -> 0.77 between iterations 600 and 1,500): adapt it to hold the noise
+        alg = self.algorithm
+        self.algorithm = TargetNoisePpoAlgorithmCfg(
+            value_loss_coef=alg.value_loss_coef, use_clipped_value_loss=alg.use_clipped_value_loss,
+            clip_param=alg.clip_param, entropy_coef=0.002, num_learning_epochs=alg.num_learning_epochs,
+            num_mini_batches=alg.num_mini_batches, learning_rate=alg.learning_rate, schedule=alg.schedule,
+            gamma=alg.gamma, lam=alg.lam, desired_kl=alg.desired_kl, max_grad_norm=alg.max_grad_norm,
+            target_std=0.35,
+        )  # fmt: skip
 
 
 @configclass
