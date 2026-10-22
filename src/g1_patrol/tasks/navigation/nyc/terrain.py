@@ -17,11 +17,10 @@ import trimesh
 from isaaclab.terrains import SubTerrainBaseCfg, TerrainGenerator, TerrainGeneratorCfg, TerrainImporter
 from isaaclab.terrains.utils import create_prim_from_mesh
 
+from .indoor import ALL_BUILDERS, ALL_KINDS, passable_routes
 from .terrain_cfg import STRUCTURES_PRIM_PATH, NycTileCfg
 from .tiles import (
-    BUILDERS,
     HF_RESOLUTION,
-    KINDS,
     MAX_BASKETS,
     MAX_BOXES,
     MAX_CIRCLES,
@@ -63,7 +62,18 @@ class NycTerrainGenerator(TerrainGenerator):
         rng = np.random.default_rng(seed)
         # civic additions draw from their own stream, so that the rest of the tile is the same with or without them
         civic_rng = np.random.default_rng([seed, 1]) if cfg.civic else None
-        self._pending = BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
+        self._pending = ALL_BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
+        if cfg.route_half_width is not None:  # only routes this robot can drive; rebuild tiles that have none
+            for attempt in range(1, 20):
+                keep = passable_routes(self._pending, cfg.route_half_width, cfg.route_overhead)
+                if keep:
+                    lay = self._pending
+                    lay.routes = [lay.routes[k] for k in keep]
+                    lay.route_headings = [lay.route_headings[k] for k in keep] if lay.route_headings else []
+                    break
+                rng = np.random.default_rng([seed, 2, attempt])
+                civic_rng = np.random.default_rng([seed, 1, attempt]) if cfg.civic else None
+                self._pending = ALL_BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
         return self._pending.ground_mesh(), np.zeros(3)
 
     def _add_sub_terrain(self, mesh, origin, row, col, sub_terrain_cfg):
@@ -77,6 +87,14 @@ class NycTerrainGenerator(TerrainGenerator):
             self._structures.append(structures)
         self.layouts[(row, col)] = self._pending
         self._pending = None
+
+
+def _pad_nan(items, cap):
+    out = np.full((cap, 1), np.nan, dtype=np.float32)
+    n = min(len(items), cap)
+    if n:
+        out[:n] = np.asarray(items[:n], dtype=np.float32)
+    return out, n
 
 
 class NycLayout:
@@ -105,6 +123,7 @@ class NycLayout:
             "piles": (4, MAX_PILES),
             "queues": (5, MAX_QUEUES),
             "crossings": (4, MAX_CROSSINGS),
+            "route_headings": (1, MAX_ROUTES),
         }
         data = {name: np.zeros((rows, cols, cap, width), dtype=np.float32) for name, (width, cap) in fields.items()}
         counts = {name: np.zeros((rows, cols), dtype=np.int64) for name in fields}
@@ -115,11 +134,15 @@ class NycLayout:
         difficulty = np.zeros((rows, cols), dtype=np.float32)
         for (r, c), lay in generator.layouts.items():
             for name, (width, cap) in fields.items():
+                if name == "route_headings":  # NaN: start facing the goal
+                    heads = list(lay.route_headings) + [float("nan")] * (len(lay.routes) - len(lay.route_headings))
+                    data[name][r, c], counts[name][r, c] = _pad_nan([[h] for h in heads], cap)
+                    continue
                 items = lay.path_rows() if name == "paths" else lay.baskets() if name == "baskets" else getattr(lay, name)
                 data[name][r, c], counts[name][r, c] = pad(items, width, cap)
             heights[r, c] = lay.heights
             crowd[r, c] = lay.crowd
-            kind[r, c] = KINDS.index(lay.kind)
+            kind[r, c] = ALL_KINDS.index(lay.kind)
             difficulty[r, c] = lay.difficulty
         for name in fields:
             setattr(self, name, torch.from_numpy(data[name]).to(device))

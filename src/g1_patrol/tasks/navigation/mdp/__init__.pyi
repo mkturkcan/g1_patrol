@@ -4,6 +4,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
+    "BaseVelocityActionCfg",
+    "base_command",
+    "base_fall",
+    "base_velocity",
     "detected_litter",
     "known_places",
     "tracked_people",
@@ -80,6 +84,7 @@ __all__ = [
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .actions import WalkerPolicyActionCfg
+from .base_velocity import BaseVelocityActionCfg, base_command, base_fall, base_velocity
 from .civic_perception import detected_litter, known_places, tracked_people
 from .civic_terms import (
     approach_threat,

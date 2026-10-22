@@ -12,6 +12,10 @@ in [0, 1]. A builder fills a :class:`TileLayout` with
 * looks, for rendering only: a material name per structure, painted ground regions (asphalt, sidewalk, zebra stripes,
   steel plates, ...) and visual-only decor (trees). They never change the geometry the robot trains on.
 
+A structure's mesh is normally the box or cylinder of its primitive. Where the two differ (a table: its whole box keeps
+people and robots out, while sensors see a top on four legs), the primitive is kept without a mesh and the parts
+are added as mesh-only parts (:meth:`TileLayout.table`).
+
 Coordinates are tile-local, centered on the tile, x along the street; heights are meters above street level.
 """
 
@@ -47,6 +51,7 @@ class TileLayout:
     circles: list = field(default_factory=list)  # (x, y, radius, z0, z1)
     boxes: list = field(default_factory=list)  # (cx, cy, yaw, half_x, half_y, z0, z1)
     routes: list = field(default_factory=list)  # (start_x, start_y, goal_x, goal_y)
+    route_headings: list = field(default_factory=list)  # start heading per route (rad); missing: towards the goal
     paths: list = field(default_factory=list)  # (points, half_width, weight, free_length), walked first to last
     standing: list = field(default_factory=list)  # (x, y)
     forbidden: list = field(default_factory=list)  # (x0, x1, y0, y1) street areas
@@ -62,6 +67,9 @@ class TileLayout:
     box_mats: list = field(default_factory=list)  # material name per box
     paint: list = field(default_factory=list)  # (x0, x1, y0, y1, material) ground regions, painted in order
     decor: list = field(default_factory=list)  # visual-only extras: ("tree", x, y)
+    # meshes that differ from the primitives (sensors see the meshes)
+    mesh_parts: list = field(default_factory=list)  # ("box", cx, cy, yaw, half_x, half_y, z0, z1, mat) / ("circle", x, y, radius, z0, z1, mat)
+    unmeshed: set = field(default_factory=set)  # ("box" | "circle", index): primitives without a mesh of their own
 
     # -- geometry helpers ---------------------------------------------------------------------------------------------
 
@@ -121,6 +129,21 @@ class TileLayout:
     def box(self, cx, cy, yaw, length: float, width: float, height: float, z0: float = 0.0, mat: str = "concrete"):
         self.boxes.append((cx, cy, yaw, length / 2, width / 2, z0, z0 + height))
         self.box_mats.append(mat)
+
+    def mesh_box(self, cx, cy, yaw, length: float, width: float, height: float, z0: float = 0.0, mat: str = "concrete"):
+        """A box that sensors see but that is not a collision primitive (part of a structure whose primitive differs)."""
+        self.mesh_parts.append(("box", cx, cy, yaw, length / 2, width / 2, z0, z0 + height, mat))
+
+    def table(self, cx, cy, yaw, length: float, width: float, height: float = 0.75, mat: str = "table", leg: float = 0.05):
+        """A table: for collisions its whole box (nobody walks or drives under it); sensors see a top on four legs."""
+        self.box(cx, cy, yaw, length, width, height, mat=mat)
+        self.unmeshed.add(("box", len(self.boxes) - 1))
+        self.mesh_box(cx, cy, yaw, length, width, 0.04, z0=height - 0.04, mat=mat)
+        c, s = math.cos(yaw), math.sin(yaw)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                lx, ly = sx * (length / 2 - leg), sy * (width / 2 - leg)
+                self.mesh_box(cx + c * lx - s * ly, cy + s * lx + c * ly, yaw, leg, leg, height - 0.04, mat=mat)
 
     def segment_box(self, ax, ay, bx, by, width: float, height: float, z0: float = 0.0, mat: str = "concrete"):
         length = math.hypot(bx - ax, by - ay)
@@ -200,7 +223,9 @@ class TileLayout:
     def _structure_parts(self, sections: int = 12):
         import trimesh
 
-        for (x, y, r, z0, z1), mat in zip(self.circles, self.circle_mats):
+        for i, ((x, y, r, z0, z1), mat) in enumerate(zip(self.circles, self.circle_mats)):
+            if ("circle", i) in self.unmeshed:
+                continue
             if mat == "litter_basket" and self.civic:  # open top: a wall and a floor, so that dropped trash falls in
                 wall = trimesh.creation.annulus(r_min=r - BASKET_WALL, r_max=r, height=z1 - z0, sections=max(sections, 24))
                 wall.apply_translation((x, y, self.ground(x, y) + (z0 + z1) / 2))
@@ -211,10 +236,16 @@ class TileLayout:
             m = trimesh.creation.cylinder(radius=r, height=z1 - z0, sections=sections)
             m.apply_translation((x, y, self.ground(x, y) + (z0 + z1) / 2))
             yield mat, m
-        for (cx, cy, yaw, hx, hy, z0, z1), mat in zip(self.boxes, self.box_mats):
+        boxes = [(i, b, mat) for i, (b, mat) in enumerate(zip(self.boxes, self.box_mats)) if ("box", i) not in self.unmeshed]
+        boxes += [(None, part[1:8], part[8]) for part in self.mesh_parts if part[0] == "box"]
+        for _, (cx, cy, yaw, hx, hy, z0, z1), mat in boxes:
             m = trimesh.creation.box(extents=(2 * hx, 2 * hy, z1 - z0))
             m.apply_transform(trimesh.transformations.rotation_matrix(yaw, (0, 0, 1)))
             m.apply_translation((cx, cy, self.ground(cx, cy) + (z0 + z1) / 2))
+            yield mat, m
+        for _, x, y, r, z0, z1, mat in (part for part in self.mesh_parts if part[0] == "circle"):
+            m = trimesh.creation.cylinder(radius=r, height=z1 - z0, sections=sections)
+            m.apply_translation((x, y, self.ground(x, y) + (z0 + z1) / 2))
             yield mat, m
 
     def ground_materials(self) -> np.ndarray:

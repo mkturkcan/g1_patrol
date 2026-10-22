@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
+from isaaclab.utils.math import quat_apply_inverse
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -155,6 +156,10 @@ class accumulated_height_map(ManagerTermBase):
     (relative range noise, growing with distance) and ``dropout`` (missing returns) degrade the returns as in
     :class:`depth_frames`. The robot's pose estimate drifts from its true pose as a random walk of ``drift_pos`` (m)
     and ``drift_yaw`` (rad) per step, so that older parts of the map are misaligned as with real odometry.
+
+    As on the robot, returns can be filtered before they are binned: ``crop_box`` (center and half sizes in the base
+    frame) removes returns from the robot's own body, ``drop_above`` removes returns higher than this above the
+    ground (ceilings, overhangs the robot passes under).
     """
 
     UNKNOWN = -1.0e3
@@ -222,6 +227,8 @@ class accumulated_height_map(ManagerTermBase):
         robot_ground_offset: float = 0.76,
         drift_pos: float = 0.0,
         drift_yaw: float = 0.0,
+        crop_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
+        drop_above: float | None = None,
     ) -> torch.Tensor:
         robot = env.scene["robot"]
         true_root = robot.data.root_pos_w.torch
@@ -253,6 +260,13 @@ class accumulated_height_map(ManagerTermBase):
 
         # bin the current scan (world heights) into the map grid, placed with the estimated pose
         pts = self._points(env, sensor_cfg, max_range, noise_std, dropout)
+        if crop_box is not None:  # the robot's own body
+            local = quat_apply_inverse(q[:, None].expand(-1, pts.shape[1], -1), torch.nan_to_num(pts - true_root[:, None], posinf=1e3))
+            center, half = torch.tensor(crop_box[0], device=pts.device), torch.tensor(crop_box[1], device=pts.device)
+            pts = torch.where(((local - center).abs() <= half).all(dim=-1, keepdim=True), torch.full_like(pts, float("inf")), pts)
+        if drop_above is not None:  # overhead: ceilings, scaffold decks, table tops the robot passes under
+            high = pts[..., 2:3] - (true_root[:, None, 2:3] - robot_ground_offset) > drop_above
+            pts = torch.where(high, torch.full_like(pts, float("inf")), pts)
         rel = pts - true_root[:, None]
         c, s = torch.cos(self.pose_error[:, 2])[:, None], torch.sin(self.pose_error[:, 2])[:, None]
         pts = torch.stack([root[:, None, 0] + c * rel[..., 0] - s * rel[..., 1],

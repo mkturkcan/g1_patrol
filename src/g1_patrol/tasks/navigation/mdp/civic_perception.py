@@ -163,7 +163,7 @@ class tracked_people(ManagerTermBase):
 
         yaw = s.robot_yaw()[:, None]
         present = take(tracked).float()[..., None]
-        robot_v = s.robot.data.root_lin_vel_w.torch[:, None, :2]
+        robot_v = s.robot_vel()[:, None]
         radius = s.ped_radius + 0.03 * torch.randn(n, p, device=dev)
         other = s.ped_link.clamp(min=0)
         link_ok = (s.ped_link >= 0) & tracked & torch.gather(tracked, 1, other)

@@ -79,24 +79,34 @@ def in_street(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
 
 
 def social_speed(
-    env: ManagerBasedRLEnv, command_name: str, slow_speed: float = 0.3, near: float = 0.3, far: float = 1.5
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    slow_speed: float = 0.3,
+    near: float = 0.3,
+    far: float = 1.5,
+    free_speed: float = 1.0,
 ) -> torch.Tensor:
     """How much (m/s) the robot walks faster than people do near others: at most ``slow_speed`` within ``near`` of a
-    pedestrian (gap between bodies), rising linearly to 1 m/s at ``far``."""
+    pedestrian (gap between bodies), rising linearly to ``free_speed`` at ``far``."""
     s = _scenario(env, command_name)
-    allowed = slow_speed + (1.0 - slow_speed) * ((s.pedestrian_clearance() - near) / (far - near)).clamp(0.0, 1.0)
-    speed = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1)
+    allowed = slow_speed + (free_speed - slow_speed) * ((s.pedestrian_clearance() - near) / (far - near)).clamp(0.0, 1.0)
+    speed = torch.linalg.norm(s.robot_vel(), dim=1)
     return (speed - allowed).clamp(min=0.0)
 
 
 def obstacle_speed(
-    env: ManagerBasedRLEnv, command_name: str, slow_speed: float = 0.4, near: float = 0.1, far: float = 0.4
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    slow_speed: float = 0.4,
+    near: float = 0.1,
+    far: float = 0.4,
+    free_speed: float = 1.0,
 ) -> torch.Tensor:
     """How much (m/s) the robot walks faster than people do in tight spaces: at most ``slow_speed`` within ``near`` of
-    a structure, rising linearly to 1 m/s at ``far``."""
+    a structure, rising linearly to ``free_speed`` at ``far``."""
     s = _scenario(env, command_name)
-    allowed = slow_speed + (1.0 - slow_speed) * ((s.obstacle_clearance() - near) / (far - near)).clamp(0.0, 1.0)
-    speed = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1)
+    allowed = slow_speed + (free_speed - slow_speed) * ((s.obstacle_clearance() - near) / (far - near)).clamp(0.0, 1.0)
+    speed = torch.linalg.norm(s.robot_vel(), dim=1)
     return (speed - allowed).clamp(min=0.0)
 
 

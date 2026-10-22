@@ -55,7 +55,7 @@ def civic_pedestrians(env: ManagerBasedRLEnv, command_name: str, count: int = 10
 
     yaw = s.robot_yaw()[:, None]
     near = (take(dist) < max_range).float()[..., None]
-    vel = take(s.ped_vel) - s.robot.data.root_lin_vel_w.torch[:, None, :2]
+    vel = take(s.ped_vel) - s.robot_vel()[:, None]
     feats = torch.cat(
         [
             _rotate(take(rel), yaw),
@@ -216,7 +216,7 @@ def flee(env: ManagerBasedRLEnv, command_name: str, max_speed: float = 1.5) -> t
     k = s.incident_ped.clamp(min=0)
     rel = s.robot_pos() - s.ped_pos[envs, k]
     u = rel / torch.linalg.norm(rel, dim=1, keepdim=True).clamp(min=1e-3)
-    away = ((s.robot.data.root_lin_vel_w.torch[:, :2] - s.ped_vel[envs, k]) * u).sum(-1)
+    away = ((s.robot_vel() - s.ped_vel[envs, k]) * u).sum(-1)
     return away.clamp(-max_speed, max_speed) * s.under_attack
 
 
@@ -231,7 +231,7 @@ def approach_threat(env: ManagerBasedRLEnv, command_name: str, distance: float =
     envs = torch.arange(env.num_envs, device=env.device)
     rel = s.ped_pos[envs, s.incident_ped.clamp(min=0)] - s.robot_pos()
     u = rel / torch.linalg.norm(rel, dim=1, keepdim=True).clamp(min=1e-3)
-    towards = (s.robot.data.root_lin_vel_w.torch[:, :2] * u).sum(-1).clamp(min=0.0)
+    towards = (s.robot_vel() * u).sum(-1).clamp(min=0.0)
     return towards * (s.threat() < distance)
 
 
@@ -271,7 +271,7 @@ def split_group(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
 def walking_speed(env: ManagerBasedRLEnv, command_name: str, limit: float = 1.0) -> torch.Tensor:
     """Speed (m/s) above ``limit``; faster is for getting away from an attacker only."""
     s = _scenario(env, command_name)
-    speed = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1)
+    speed = torch.linalg.norm(s.robot_vel(), dim=1)
     return (speed - limit).clamp(min=0.0) * ~s.under_attack
 
 

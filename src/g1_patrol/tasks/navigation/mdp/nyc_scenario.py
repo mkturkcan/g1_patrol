@@ -105,6 +105,43 @@ def box_distance(points: torch.Tensor, boxes: torch.Tensor) -> tuple[torch.Tenso
     return torch.linalg.norm(local - clamped, dim=-1), closest
 
 
+_CORNERS = ((1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0))
+
+
+def _unrotate(v: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
+    """Rotate 2D vectors (..., 2) by +yaw (heading -> world frame); yaw broadcasts over leading dims."""
+    c, s = torch.cos(yaw), torch.sin(yaw)
+    return torch.stack([c * v[..., 0] - s * v[..., 1], s * v[..., 0] + c * v[..., 1]], dim=-1)
+
+
+def rect_box_distance(center: torch.Tensor, yaw: torch.Tensor, half: tuple[float, float], boxes: torch.Tensor) -> torch.Tensor:
+    """Distance between rectangles (one per env: ``center`` (n, 2), ``yaw`` (n,), half sizes ``half``) and oriented
+    boxes (n, b, 7) -> (n, b); zero where they overlap.
+
+    Two disjoint convex polygons are closest at a vertex of one of them, so the distance is the smaller of the
+    rectangle's vertices to the boxes and the boxes' vertices to the rectangle; overlap is found with separating axes.
+    """
+    corners = torch.tensor(_CORNERS, device=center.device)
+    hx, hy = half
+    rect = center[:, None] + _unrotate(corners * torch.tensor([hx, hy], device=center.device), yaw[:, None])  # (n, 4, 2)
+    d_rect = box_distance(rect, boxes)[0].amin(dim=1)
+    bhalf, byaw = boxes[..., 3:5], boxes[..., 2]
+    verts = boxes[:, :, None, :2] + _unrotate(corners * bhalf[:, :, None], byaw[:, :, None])  # (n, b, 4, 2)
+    local = _rotate(verts - center[:, None, None], yaw[:, None, None])
+    out = torch.stack([(local[..., 0].abs() - hx).clamp(min=0.0), (local[..., 1].abs() - hy).clamp(min=0.0)], -1)
+    d_box = torch.linalg.norm(out, dim=-1).amin(dim=-1)
+    # separating axes: the rectangle's and each box's
+    c, s = torch.cos(yaw)[:, None], torch.sin(yaw)[:, None]
+    cb, sb = torch.cos(byaw), torch.sin(byaw)
+    delta = boxes[..., :2] - center[:, None]
+    separated = torch.zeros_like(d_rect, dtype=torch.bool)
+    for ax, ay in ((c, s), (-s, c), (cb, sb), (-sb, cb)):
+        r_rect = hx * (c * ax + s * ay).abs() + hy * (-s * ax + c * ay).abs()
+        r_box = bhalf[..., 0] * (cb * ax + sb * ay).abs() + bhalf[..., 1] * (-sb * ax + cb * ay).abs()
+        separated |= (delta[..., 0] * ax + delta[..., 1] * ay).abs() > r_rect + r_box
+    return torch.where(separated, torch.minimum(d_rect, d_box), torch.zeros_like(d_rect))
+
+
 def ray_box_hits(origin: torch.Tensor, dirs: torch.Tensor, boxes: torch.Tensor, max_range: float) -> torch.Tensor:
     """Distance along rays (n, r, 2) from origins (n, 2) to the nearest of the oriented boxes (n, b, 7) -> (n, r)."""
     center, yaw, half = boxes[:, None, :, :2], boxes[:, None, :, 2], boxes[:, None, :, 3:5]
@@ -181,6 +218,11 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         self.contact_ped_approach_speed = torch.zeros(n, device=dev)
         self.metrics["min_ped_clearance"] = torch.full((n,), 10.0, device=dev)
         self.metrics["level"] = torch.zeros(n, device=dev)
+        # footprint: a disc of robot_radius around the root, or a rectangle with corners rounded by robot_radius, i.e.
+        # its core (the root, or the inner rectangle) grown by robot_radius
+        self.fp_rect = cfg.footprint is not None
+        self.fp_core = (0.0, 0.0) if cfg.footprint is None else tuple(h - cfg.robot_radius for h in cfg.footprint)
+        assert min(self.fp_core) >= 0.0, "the footprint's half sizes must be at least robot_radius"
         self._init_social(cfg)
         self._init_trash(cfg, env)
         self._init_assist(cfg, env)
@@ -202,6 +244,36 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
     def robot_yaw(self) -> torch.Tensor:
         q = self.robot.data.root_quat_w.torch  # (x, y, z, w)
         return torch.atan2(2 * (q[:, 3] * q[:, 2] + q[:, 0] * q[:, 1]), 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2))
+
+    def robot_vel(self) -> torch.Tensor:
+        """Linear velocity (n, 2) of the robot in the world frame: the simulated root velocity, or that of the action
+        term that moves a kinematic robot (``cfg.velocity_action``)."""
+        if self.cfg.velocity_action is None:
+            return self.robot.data.root_lin_vel_w.torch[:, :2]
+        return self._env.action_manager.get_term(self.cfg.velocity_action).velocity_w[:, :2]
+
+    def robot_nearest(self, points: torch.Tensor) -> torch.Tensor:
+        """Points (n, m, 2) of the footprint's core nearest to ``points`` (n, m, 2): the root, or for a rectangular
+        footprint the nearest point of its inner rectangle. Gaps to the footprint are distances to these points minus
+        ``robot_radius``."""
+        pos = self.robot_pos()
+        if not self.fp_rect:
+            return pos[:, None].expand_as(points)
+        yaw = self.robot_yaw()[:, None]
+        local = _rotate(points - pos[:, None], yaw)
+        hx, hy = self.fp_core
+        core = torch.stack([local[..., 0].clamp(-hx, hx), local[..., 1].clamp(-hy, hy)], dim=-1)
+        return pos[:, None] + _unrotate(core, yaw)
+
+    def footprint_points(self, pos: torch.Tensor | None = None, yaw: torch.Tensor | None = None) -> torch.Tensor:
+        """The root and, for a rectangular footprint, the corners of its inner rectangle (n, 1 or 5, 2) at ``pos``,
+        ``yaw`` (default: the robot's pose); for a wheeled robot the corners are about where the wheels are."""
+        pos = self.robot_pos() if pos is None else pos
+        if not self.fp_rect:
+            return pos[:, None]
+        yaw = self.robot_yaw() if yaw is None else yaw
+        corners = torch.tensor(_CORNERS, device=self.device) * torch.tensor(self.fp_core, device=self.device)
+        return torch.cat([pos[:, None], pos[:, None] + _unrotate(corners, yaw[:, None])], dim=1)
 
     def goal_distance(self) -> torch.Tensor:
         return torch.linalg.norm(self.goal - self.robot_pos(), dim=1)
@@ -230,7 +302,7 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
     def pedestrian_clearance(self, exclude_hostile: bool = False, only: torch.Tensor | None = None) -> torch.Tensor:
         """Gap (m) between the robot's footprint and the nearest visible pedestrian; optionally not counting attackers
         and blockers, or among the pedestrians in ``only`` (n, p)."""
-        d = torch.linalg.norm(self.ped_pos - self.robot_pos().unsqueeze(1), dim=-1)
+        d = torch.linalg.norm(self.ped_pos - self.robot_nearest(self.ped_pos), dim=-1)
         gap = d - self.ped_radius - self.cfg.robot_radius
         mask = self.visible_peds()
         if exclude_hostile:
@@ -247,8 +319,8 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         where ``d`` is below ``reach`` (sum of the radii plus ``margin``), else zero. It is reduced by slowing down or stepping out of a
         pedestrian's path, including the path of pedestrians that do not react to the robot.
         """
-        rel = self.ped_pos - self.robot_pos().unsqueeze(1)
-        vel = self.ped_vel - self.robot.data.root_lin_vel_w.torch[:, None, :2]
+        rel = self.ped_pos - self.robot_nearest(self.ped_pos)
+        vel = self.ped_vel - self.robot_vel()[:, None]
         t = (-(rel * vel).sum(-1) / (vel * vel).sum(-1).clamp(min=1e-6)).clamp(min=0.0, max=horizon)
         closest = torch.linalg.norm(rel + vel * t.unsqueeze(-1), dim=-1)
         reach = self.ped_radius + self.cfg.robot_radius + margin
@@ -257,35 +329,58 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
 
     def record_contacts(self):
         """Remember, per env, whether the nearest pedestrian noticed the robot and who closed the gap faster."""
-        rel = self.ped_pos - self.robot_pos().unsqueeze(1)
+        rel = self.ped_pos - self.robot_nearest(self.ped_pos)
         d = torch.where(self.visible_peds(), torch.linalg.norm(rel, dim=-1), torch.full(rel.shape[:2], 1e3, device=self.device))
         k = d.argmin(dim=1)
         envs = torch.arange(self.num_envs, device=self.device)
         u = rel[envs, k] / d[envs, k].clamp(min=1e-3)[:, None]
         self.contact_ped_aware[:] = self.ped_aware[envs, k]
-        self.contact_robot_approach_speed[:] = (self.robot.data.root_lin_vel_w.torch[:, :2] * u).sum(-1)
+        self.contact_robot_approach_speed[:] = (self.robot_vel() * u).sum(-1)
         self.contact_ped_approach_speed[:] = -(self.ped_vel[envs, k] * u).sum(-1)
 
     def obstacle_clearance(
         self, points: torch.Tensor | None = None, radius: float | None = None, env_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
-        """Gap between discs at points (n, m, 2) (default: the robot) and the nearest non-overhead structure.
+        """Gap between discs at points (n, m, 2) (default: the robot's footprint) and the nearest non-overhead
+        structure.
 
         With ``env_ids``, ``points`` belong to those environments only.
         """
+        if points is None and self.fp_rect:
+            return self.footprint_clearance()
         squeeze = points is None
         points = self.robot_pos().unsqueeze(1) if points is None else points
         radius = self.cfg.robot_radius if radius is None else radius
         ids = slice(None) if env_ids is None else env_ids
         circ, circle_valid, boxes, box_valid = self.circles[ids], self.circle_valid[ids], self.boxes[ids], self.box_valid[ids]
         d_c = torch.linalg.norm(points[:, :, None] - circ[:, None, :, :2], dim=-1) - circ[:, None, :, 2]
-        mask_c = circle_valid & (circ[..., 3] < OVERHEAD_Z)
+        mask_c = circle_valid & (circ[..., 3] < self.cfg.overhead_z)
         d_c = torch.where(mask_c[:, None], d_c, torch.full_like(d_c, 1e3)).amin(dim=-1)
         d_b, _ = box_distance(points, boxes)
-        mask_b = box_valid & (boxes[..., 5] < OVERHEAD_Z)
+        mask_b = box_valid & (boxes[..., 5] < self.cfg.overhead_z)
         d_b = torch.where(mask_b[:, None], d_b, torch.full_like(d_b, 1e3)).amin(dim=-1)
         gap = torch.minimum(d_c, d_b) - radius
         return gap.squeeze(1) if squeeze else gap
+
+    def footprint_clearance(
+        self, pos: torch.Tensor | None = None, yaw: torch.Tensor | None = None, env_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Gap (n,) between the robot's footprint at ``pos``, ``yaw`` (default: its pose; with ``env_ids``, poses of
+        those environments) and the nearest non-overhead structure."""
+        ids = slice(None) if env_ids is None else env_ids
+        pos = self.robot_pos()[ids] if pos is None else pos
+        if not self.fp_rect:
+            return self.obstacle_clearance(pos[:, None], env_ids=env_ids)[:, 0]
+        yaw = self.robot_yaw()[ids] if yaw is None else yaw
+        circ, circle_valid, boxes, box_valid = self.circles[ids], self.circle_valid[ids], self.boxes[ids], self.box_valid[ids]
+        hx, hy = self.fp_core
+        local = _rotate(circ[..., :2] - pos[:, None], yaw[:, None])
+        out = torch.stack([(local[..., 0].abs() - hx).clamp(min=0.0), (local[..., 1].abs() - hy).clamp(min=0.0)], -1)
+        d_c = torch.linalg.norm(out, dim=-1) - circ[..., 2]
+        d_c = torch.where(circle_valid & (circ[..., 3] < self.cfg.overhead_z), d_c, torch.full_like(d_c, 1e3)).amin(dim=-1)
+        d_b = rect_box_distance(pos, yaw, self.fp_core, boxes)
+        d_b = torch.where(box_valid & (boxes[..., 5] < self.cfg.overhead_z), d_b, torch.full_like(d_b, 1e3)).amin(dim=-1)
+        return torch.minimum(d_c, d_b) - self.cfg.robot_radius
 
     def limb_points(self) -> torch.Tensor:
         """Tile-local positions (n, k, 3) of the robot's arm and hand links; z is the height above the ground below them."""
@@ -299,6 +394,8 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
     def limb_obstacle_clearance(self) -> torch.Tensor:
         """Gap between the arm and hand links and the nearest structure that spans their height (n,). Litter baskets
         are open at the top: a hand over the opening, or reaching a little into it, keeps its gap to the wall."""
+        if self.cfg.limb_bodies is None:
+            return torch.full((self.num_envs,), 1e3, device=self.device)
         pts = self.limb_points()
         xy, h, r = pts[..., :2], pts[..., 2:3], self.cfg.limb_radius
         circ = self.circles
@@ -335,12 +432,20 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
 
     def limb_pedestrian_clearance(self, exclude_hostile: bool = False) -> torch.Tensor:
         """Gap between the arm and hand links and the nearest pedestrian (n,)."""
+        if self.cfg.limb_bodies is None:
+            return torch.full((self.num_envs,), 1e3, device=self.device)
         xy = self.limb_points()[..., :2]
         d = torch.linalg.norm(self.ped_pos[:, None] - xy[:, :, None], dim=-1) - self.ped_radius[:, None] - self.cfg.limb_radius
         mask = self.visible_peds() & ~self.hostile if exclude_hostile else self.visible_peds()
         return torch.where(mask[:, None], d, torch.full_like(d, 1e3)).amin(dim=(1, 2))
 
     def in_street(self) -> torch.Tensor:
+        """Whether the robot's root (or, for a rectangular footprint, a corner of its inner rectangle) is in a
+        forbidden street area."""
+        if self.fp_rect:
+            p, f = self.footprint_points(), self.forbidden[:, :, None]
+            inside = (p[:, None, :, 0] > f[..., 0]) & (p[:, None, :, 0] < f[..., 1]) & (p[:, None, :, 1] > f[..., 2]) & (p[:, None, :, 1] < f[..., 3])
+            return (inside.any(dim=-1) & self.forbidden_valid).any(dim=1)
         p = self.robot_pos()
         f = self.forbidden
         inside = (p[:, None, 0] > f[..., 0]) & (p[:, None, 0] < f[..., 1]) & (p[:, None, 1] > f[..., 2]) & (p[:, None, 1] < f[..., 3])
@@ -358,7 +463,7 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         dist = torch.where(self.visible_peds(), dist, torch.full_like(dist, 1e3))
         order = dist.argsort(dim=1)[:, :k]
         rel = torch.gather(rel, 1, order[..., None].expand(-1, -1, 2))
-        robot_vel = self.robot.data.root_lin_vel_w.torch[:, None, :2]
+        robot_vel = self.robot_vel()[:, None]
         vel = torch.gather(self.ped_vel, 1, order[..., None].expand(-1, -1, 2)) - robot_vel
         near = torch.gather(dist, 1, order) < max_range
         yaw = self.robot_yaw()[:, None]
@@ -377,14 +482,14 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
             ang = yaw[:, None] + (torch.arange(2 * num_sectors, device=dev) + 0.5) * (math.pi / num_sectors) - math.pi
             dirs = torch.stack([torch.cos(ang), torch.sin(ang)], dim=-1)
             tall_box = self.boxes[..., 6] >= low_height
-            box_mask = self.box_valid & (self.boxes[..., 5] < OVERHEAD_Z) & (~tall_box if low else tall_box)
+            box_mask = self.box_valid & (self.boxes[..., 5] < self.cfg.overhead_z) & (~tall_box if low else tall_box)
             boxes = torch.where(box_mask[..., None], self.boxes, torch.full_like(self.boxes, 1e4))  # far away
             d = ray_box_hits(p, dirs, boxes, max_range).view(n, num_sectors, 2).amin(dim=-1)
             # circles: closest surface point, scattered into its sector (exact for thin poles)
             rel = self.circles[..., :2] - p[:, None]
             dist = (torch.linalg.norm(rel, dim=-1) - self.circles[..., 2]).clamp(min=0.0)
             tall_c = self.circles[..., 4] >= low_height
-            mask = self.circle_valid & (self.circles[..., 3] < OVERHEAD_Z) & (~tall_c if low else tall_c)
+            mask = self.circle_valid & (self.circles[..., 3] < self.cfg.overhead_z) & (~tall_c if low else tall_c)
             dist = torch.where(mask, dist, torch.full_like(dist, max_range)).clamp(max=max_range)
             bearing = torch.atan2(rel[..., 1], rel[..., 0]) - yaw[:, None]
             sector = (((bearing + math.pi) % (2 * math.pi)) / (2 * math.pi) * num_sectors).long().clamp(0, num_sectors - 1)
@@ -393,7 +498,14 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         return torch.cat(out, dim=1)
 
     def street_clearance(self) -> torch.Tensor:
-        """Distance (m) from the robot's center to the nearest street area (roadway outside crosswalks); 0 inside."""
+        """Distance (m) from the robot's center (or, for a rectangular footprint, its inner rectangle) to the nearest
+        street area (roadway outside crosswalks); 0 inside."""
+        if self.fp_rect:
+            f = self.forbidden
+            boxes = torch.stack([(f[..., 0] + f[..., 1]) / 2, (f[..., 2] + f[..., 3]) / 2, torch.zeros_like(f[..., 0]),
+                                 (f[..., 1] - f[..., 0]) / 2, (f[..., 3] - f[..., 2]) / 2, f[..., 0], f[..., 0]], dim=-1)
+            dist = rect_box_distance(self.robot_pos(), self.robot_yaw(), self.fp_core, boxes)
+            return torch.where(self.forbidden_valid, dist, torch.full_like(dist, 1e3)).amin(dim=1)
         p, f = self.robot_pos(), self.forbidden
         dx = torch.maximum(f[..., 0] - p[:, None, 0], p[:, None, 0] - f[..., 1]).clamp(min=0.0)
         dy = torch.maximum(f[..., 2] - p[:, None, 1], p[:, None, 1] - f[..., 3]).clamp(min=0.0)
@@ -473,11 +585,13 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         k = (torch.rand(n, device=dev) * lay.num_routes[r, c]).long()
         route = lay.routes[r, c, k]
         start = route[:, :2] + (torch.rand(n, 2, device=dev) - 0.5) * 0.6
+        heading = torch.atan2(route[:, 3] - route[:, 1], route[:, 2] - route[:, 0])
+        given = lay.route_headings[r, c, k, 0]
+        heading = torch.where(torch.isnan(given), heading, given) + (torch.rand(n, device=dev) - 0.5) * self.cfg.spawn_heading_noise
         # the jitter must not put the robot against a structure (the route ends themselves are clear)
-        crowded = self.obstacle_clearance(start[:, None], env_ids=env_ids)[:, 0] < 0.15
+        crowded = self.footprint_clearance(start, heading, env_ids) < 0.15
         start = torch.where(crowded[:, None], route[:, :2], start)
         self.start[env_ids], self.goal[env_ids] = start, route[:, 2:]
-        heading = torch.atan2(route[:, 3] - route[:, 1], route[:, 2] - route[:, 0]) + (torch.rand(n, device=dev) - 0.5) * 1.2
         pose = torch.zeros(n, 7, device=dev)
         pose[:, :2] = start + self.tile_center[env_ids]
         pose[:, 2] = lay.ground_height(r, c, start[:, None])[:, 0] + self.cfg.robot_spawn_height
@@ -506,6 +620,17 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
             weight = weight * (1.0 + 1.5 * ((u * rdir[:, None]).sum(-1) < 0.5))
         weight = weight + 1e-6 * self.path_valid[env_ids]
         return torch.multinomial(weight.clamp(min=1e-9), count, replacement=True)
+
+    def _nearest_path(self, env_ids: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        """Index (m, p) of the valid path of each environment that passes closest to the positions ``pos`` (m, p, 2)."""
+        m, p = pos.shape[:2]
+        pts = self.path_pts[env_ids][:, None].expand(m, p, MAX_PATHS, MAX_PATH_POINTS, 2)
+        cum = self.path_cum[env_ids][:, None].expand(m, p, MAX_PATHS, MAX_PATH_POINTS)
+        x = pos[:, :, None].expand(m, p, MAX_PATHS, 2)
+        closest, _ = path_at(pts, cum, path_project(pts, cum, x))
+        dist = torch.linalg.norm(closest - x, dim=-1)
+        dist = torch.where(self.path_valid[env_ids][:, None], dist, torch.full_like(dist, 1e6))
+        return dist.argmin(dim=-1)
 
     @staticmethod
     def _on_tile_range(pts: torch.Tensor, cum: torch.Tensor, samples: int = 48) -> tuple[torch.Tensor, torch.Tensor]:
@@ -561,7 +686,13 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         # standing: at a random standing spot of the tile, setting off after a while
         spot = (torch.rand(n, p, device=dev) * self.num_standing[env_ids].clamp(min=1)[:, None]).long()
         spots = torch.gather(self.standing[env_ids], 1, spot[..., None].expand(-1, -1, 2))
-        stand_pos = spots + (torch.rand(n, p, 2, device=dev) - 0.5) * 0.6
+        stand_pos = spots + (torch.rand(n, p, 2, device=dev) - 0.5) * cfg.standing_spread
+        if cfg.standing_nearest_path:  # they will leave along the path that passes closest to them
+            path = torch.where(standing, self._nearest_path(env_ids, stand_pos), path)
+            self.ped_path[env_ids] = path
+            stand_pts, stand_cum = self.ped_paths(env_ids)
+        else:
+            stand_pts, stand_cum = pts, cum
 
         mode = torch.full((n, p), PARKED, dtype=torch.long, device=dev)
         mode = torch.where(walking & (delay <= 0), torch.full_like(mode, WALKING), mode)
@@ -578,7 +709,7 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         timer = torch.where(near & (mode == PARKED), timer.clamp(min=1.0 + 3.0 * torch.rand(n, p, device=dev)), timer)
         self.ped_mode[env_ids] = mode
         self.ped_pos[env_ids] = pos
-        self.ped_s[env_ids] = torch.where(standing, path_project(pts, cum, pos), s0)
+        self.ped_s[env_ids] = torch.where(standing, path_project(stand_pts, stand_cum, pos), s0)
         self.ped_timer[env_ids] = torch.where(active, timer, torch.full_like(timer, 1e9))  # inactive: never appear
         self.ped_vel[env_ids] = self.ped_speed[env_ids][..., None] * u * (mode == WALKING)[..., None]
         self.ped_delay[env_ids] = 0.0
@@ -645,7 +776,7 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         v_des = self.ped_speed[..., None] * to_target / torch.linalg.norm(to_target, dim=-1, keepdim=True).clamp(min=1e-3)
 
         # give way: pedestrians who notice the robot slow down when it stands in their way
-        to_robot = self.robot_pos()[:, None] - self.ped_pos
+        to_robot = self.robot_nearest(self.ped_pos) - self.ped_pos
         heading = v_des / torch.linalg.norm(v_des, dim=-1, keepdim=True).clamp(min=1e-3)
         left = torch.stack([-heading[..., 1], heading[..., 0]], -1)
         ahead = (to_robot * heading).sum(-1)
@@ -793,11 +924,21 @@ class NycScenarioCommandCfg(CommandTermCfg):
 
     success_threshold: float = 0.5
     robot_radius: float = 0.25
-    limb_bodies: str = ".*_(shoulder_roll|elbow_pitch|elbow_roll|palm|zero|one|two|three|four|five|six)_link"
+    footprint: tuple[float, float] | None = None
+    """Half length and half width (m) of a rectangular footprint centered on the root (x forward), with corners rounded
+    by ``robot_radius``; None: a disc of ``robot_radius``."""
+    overhead_z: float = OVERHEAD_Z
+    """Structures whose bottom is higher than this (m) do not block the robot (pedestrians: ``tiles.OVERHEAD_Z``)."""
+    velocity_action: str | None = None
+    """Action term that moves a kinematic robot and holds its velocity (``velocity_w``); None: the simulated root
+    velocity."""
+    limb_bodies: str | None = ".*_(shoulder_roll|elbow_pitch|elbow_roll|palm|zero|one|two|three|four|five|six)_link"
     limb_radius: float = 0.04
     """Arm and hand links (spheres of this radius) checked for contact in addition to the footprint ``robot_radius``: the
-    G1 model has no collision geometry on its arms, and the footprint does not cover their swing."""
+    G1 model has no collision geometry on its arms, and the footprint does not cover their swing. None: no limbs."""
     robot_spawn_height: float = 0.8
+    spawn_heading_noise: float = 1.2
+    """Width (rad) of the uniform noise on the robot's start heading (towards the goal, or the route's own heading)."""
     robot_nominal_speed: float = 0.8
     """Speed (m/s) used to time pedestrian encounters with the robot."""
 
@@ -807,6 +948,11 @@ class NycScenarioCommandCfg(CommandTermCfg):
     speed_hard: tuple[float, float] = (0.8, 1.6)
     slow_ratio: float = 0.1
     standing_ratio: float = 0.2
+    standing_spread: float = 0.6
+    """Side (m) of the square around a standing spot in which a standing person is placed."""
+    standing_nearest_path: bool = False
+    """Standing people leave along the path that passes closest to them (indoors: past their bench), instead of a
+    random one."""
     encounter_ratio: float = 0.65
     """Fraction of walkers timed to reach the robot's route when the robot does."""
     aware_easy: float = 0.9

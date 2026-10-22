@@ -375,7 +375,7 @@ class HandsAction(ActionTerm):
             w = torch.where(back, torch.sign(y) * cfg.approach_turn, w)
             return torch.stack([vx, torch.zeros_like(x), w], dim=1)
 
-        slow = torch.linalg.norm(s.robot.data.root_lin_vel_w.torch[:, :2], dim=1) < cfg.arrive_speed
+        slow = torch.linalg.norm(s.robot_vel(), dim=1) < cfg.arrive_speed
         cmd = torch.zeros(n, 3, device=dev)
         arrived = torch.zeros(n, dtype=torch.bool, device=dev)
         gone = torch.zeros(n, dtype=torch.bool, device=dev)

@@ -418,7 +418,7 @@ class SocialMixin:
         incident = masks["incident"]
         if incident.any():
             to_robot = self.robot_pos()[:, None] - self.ped_pos
-            robot_vel = self.robot.data.root_lin_vel_w.torch[:, None, :2]
+            robot_vel = self.robot_vel()[:, None]
             attacker = masks["attacker"]
             # attacker: at the robot (where it is going); blocker: to a spot 1 m in front of the robot, towards its goal
             chase = to_robot + 0.4 * robot_vel
