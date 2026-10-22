@@ -1,12 +1,14 @@
 #!/bin/bash
-# Three-phase training of the locomotion policy (used by 1_walker.sh and 5_ablations.sh):
+# Three-phase (reaching walker: four-phase) training of the locomotion policy (used by 1_walker.sh and 5_ablations.sh):
 #   walker.sh <run tag> [extra Hydra overrides, applied in every phase]
 #   A  10,000 iterations from scratch with moderate randomization: friction 0.6-1.2, no payload (torso or hands), rated
 #      motor torque, actuation latency up to 10 ms, no sensor biases;
 #   B   8,000 iterations from A with the task's full randomization on ground of friction 1.0: MuJoCo-Warp uses the
 #      larger coefficient of a contact, so the contact friction is at least 1.0; shoves ramp up to full strength;
 #   C   3,000 iterations from B on the task's ground (friction 0.1, combined by maximum), so that the contact friction is
-#      the robot's randomized value (0.3-1.2); shoves at full strength.
+#      the robot's randomized value (0.3-1.2); shoves at full strength;
+#   D   (reaching walker only) 2,000 iterations from C with 30% of the commands slow walking or turning on the spot and
+#      half of the robots on yaw-rate instead of heading commands: the navigation policy's commands in a crowd.
 # Newton (MuJoCo-Warp), 16,384 robots on 4 GPUs. WALKER_TASK selects the task (default G1Patrol-Walk-Reach, the walker that
 # also squats and leans to pick things up; G1Patrol-Walk-City drives all joints and only walks). The final policy is
 # logs/rsl_rl/<experiment>/<run tag>/model_*.pt (experiment g1_walk_reach or g1_walk_city).
@@ -58,6 +60,14 @@ phase() {  # phase <run directory name> <log name> <master port> <arguments...>
 phase "${RUN_TAG}_phase_a" "${EXP}_${RUN_TAG}_a" 29601 agent.max_iterations=10000 "${MODERATE[@]}" "${EXTRA[@]}"
 phase "${RUN_TAG}_phase_b" "${EXP}_${RUN_TAG}_b" 29602 --checkpoint "$(latest "$LOGS/$EXP/${RUN_TAG}_phase_a")" \
     agent.max_iterations=8000 "${HIGH_FRICTION[@]}" "${EXTRA[@]}"
-phase "$RUN_TAG" "${EXP}_${RUN_TAG}_c" 29603 --checkpoint "$(latest "$LOGS/$EXP/${RUN_TAG}_phase_b")" \
-    agent.max_iterations=3000 "${FULL_SHOVES[@]}" "${EXTRA[@]}"
+if [ "$WALKER_TASK" = G1Patrol-Walk-Reach ]; then
+    AGILE=(env.commands.base_velocity.slow_ratio=0.3 env.commands.base_velocity.rel_heading_envs=0.5)
+    phase "${RUN_TAG}_phase_c" "${EXP}_${RUN_TAG}_c" 29603 --checkpoint "$(latest "$LOGS/$EXP/${RUN_TAG}_phase_b")" \
+        agent.max_iterations=3000 "${FULL_SHOVES[@]}" "${EXTRA[@]}"
+    phase "$RUN_TAG" "${EXP}_${RUN_TAG}_d" 29604 --checkpoint "$(latest "$LOGS/$EXP/${RUN_TAG}_phase_c")" \
+        agent.max_iterations=2000 "${FULL_SHOVES[@]}" "${AGILE[@]}" "${EXTRA[@]}"
+else
+    phase "$RUN_TAG" "${EXP}_${RUN_TAG}_c" 29603 --checkpoint "$(latest "$LOGS/$EXP/${RUN_TAG}_phase_b")" \
+        agent.max_iterations=3000 "${FULL_SHOVES[@]}" "${EXTRA[@]}"
+fi
 echo "walker $RUN_TAG: $(latest "$LOGS/$EXP/$RUN_TAG")"

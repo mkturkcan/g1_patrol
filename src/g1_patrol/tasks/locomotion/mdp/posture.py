@@ -80,8 +80,6 @@ class VelocityPostureCommand(UniformVelocityCommand):
 
     def _resample_command(self, env_ids: Sequence[int]):
         super()._resample_command(env_ids)
-        if not self.cfg.sample_postures:
-            return
         if isinstance(env_ids, slice):
             env_ids = torch.arange(self.num_envs, device=self.device)[env_ids]
         env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
@@ -89,6 +87,21 @@ class VelocityPostureCommand(UniformVelocityCommand):
         if k == 0:
             return
         cfg, dev = self.cfg, self.device
+        if cfg.slow_ratio > 0.0:  # slow walking, or turning on the spot, with a yaw-rate command (no heading target)
+            slow = env_ids[torch.rand(k, device=dev) < cfg.slow_ratio]
+            m = len(slow)
+            if m:
+                turn = torch.rand(m, device=dev) < 0.5
+                vx = (2 * torch.rand(m, device=dev) - 1) * torch.where(turn, 0.1, cfg.slow_speed)
+                vy = (2 * torch.rand(m, device=dev) - 1) * torch.where(turn, 0.0, cfg.slow_lateral)
+                lo, hi = cfg.turn_rate
+                rate = (lo + (hi - lo) * torch.rand(m, device=dev)) * torch.where(torch.rand(m, device=dev) < 0.5, -1.0, 1.0)
+                wz = torch.where(turn, rate, (2 * torch.rand(m, device=dev) - 1) * hi)
+                self.vel_command_b[slow] = torch.stack([vx, vy, wz], dim=1)
+                if cfg.heading_command:
+                    self.is_heading_env[slow] = False
+        if not cfg.sample_postures:
+            return
         posture = torch.rand(k, device=dev) < cfg.posture_ratio
         deep = torch.rand(k, device=dev) < cfg.deep_ratio
         h_lo, h_hi = cfg.height_range
@@ -157,6 +170,13 @@ class VelocityPostureCommandCfg(UniformVelocityCommandCfg):
     height_rate: float = 0.4
     lean_rate: float = 1.2
     height_sensor_name: str = "height_scanner"
+    slow_ratio: float = 0.0
+    """Share of command samples that are slow walking (up to ``slow_speed`` forward or backward and ``slow_lateral``
+    sideways, any yaw rate) or, half of them, turning on the spot (``turn_rate``), all with a yaw-rate command instead
+    of a heading target: what a navigation policy asks for in a crowd."""
+    slow_speed: float = 0.3
+    slow_lateral: float = 0.15
+    turn_rate: tuple[float, float] = (0.4, 1.5)
 
 
 def measured_posture(env, asset, sensor_name: str | None) -> tuple[torch.Tensor, torch.Tensor]:

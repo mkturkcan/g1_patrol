@@ -75,7 +75,7 @@ class G1CivicTeacherPPORunnerCfg(G1NycTeacherPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "g1_civic_teacher"
-        self.max_iterations = 12000
+        self.max_iterations = 3000
         # a fixed entropy bonus let the action noise collapse (0.001: std 0.42 -> 0.13 in 1,000 iterations, 0.03 for
         # the yaw rate) or inflate (0.003: 0.31 -> 0.77 between iterations 600 and 1,500): adapt it to hold the noise
         alg = self.algorithm

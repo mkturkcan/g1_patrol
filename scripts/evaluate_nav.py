@@ -153,7 +153,7 @@ def main(argv: list[str]) -> None:
                 steps_in_episode += 1
                 if civic:
                     done = dones.bool()
-                    m = scenario.metrics  # finalized for the episodes that just ended
+                    m = scenario.last_episode  # the episodes that just ended (the logged metrics are zeroed at reset)
                     for key in ("trash_items", "trash_picked", "trash_deposited", "bags", "bags_delivered", "fallen", "assisted", "shoves"):
                         add(key, m[key][done].sum())
                     add("episodes", done.sum())

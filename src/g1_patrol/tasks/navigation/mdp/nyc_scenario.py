@@ -434,6 +434,11 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         self._assist_metrics(ids)
         self.metrics["shoves"][ids] = self.episode_shoves[ids]
         self.metrics["attacked"][ids] = self.attacked_episode[ids].float()
+        # the logged metrics are zeroed by the reset: keep each ended episode's values (for evaluations)
+        if not hasattr(self, "last_episode"):
+            self.last_episode = {k: torch.zeros_like(v) for k, v in self.metrics.items()}
+        for k, v in self.metrics.items():
+            self.last_episode[k][ids] = v[ids]
         extras = super().reset(env_ids)
         self.metrics["min_ped_clearance"][ids] = 10.0
         return extras
@@ -832,12 +837,12 @@ class NycScenarioCommandCfg(CommandTermCfg):
     """Number of items lying along the route per episode (tiles with a litter basket only)."""
     trash_lateral: float = 2.0
     """Items lie within this distance (m) of the route line."""
-    trash_clearance: float = 0.35
+    trash_clearance: float = 0.5
     """Items keep this distance (m) from structures, so that the robot can reach them."""
     trash_candidates: int = 24
     bag_count: tuple[int, int] = (0, 1)
     """Number of trash bags lying along the route per episode (tiles with a curbside bag pile only)."""
-    bag_clearance: float = 0.45
+    bag_clearance: float = 0.6
     repark_interval: float = 2.0
     """Seconds between putting the unused (freely falling) litter back below the street."""
 
