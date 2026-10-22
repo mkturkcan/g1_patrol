@@ -19,6 +19,7 @@ from isaaclab.terrains.utils import create_prim_from_mesh
 
 from .indoor import ALL_BUILDERS, ALL_KINDS, passable_routes
 from .terrain_cfg import STRUCTURES_PRIM_PATH, NycTileCfg
+from .twin import build_twin, load_twin
 from .tiles import (
     HF_RESOLUTION,
     MAX_BASKETS,
@@ -62,7 +63,8 @@ class NycTerrainGenerator(TerrainGenerator):
         rng = np.random.default_rng(seed)
         # civic additions draw from their own stream, so that the rest of the tile is the same with or without them
         civic_rng = np.random.default_rng([seed, 1]) if cfg.civic else None
-        self._pending = ALL_BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
+        build = (lambda d, r, _: build_twin(load_twin(cfg.twin), d, r)) if cfg.kind == "twin" else ALL_BUILDERS[cfg.kind]
+        self._pending = build(float(difficulty), rng, civic_rng)
         if cfg.route_half_width is not None:  # only routes this robot can drive; rebuild tiles that have none
             for attempt in range(1, 20):
                 keep = passable_routes(self._pending, cfg.route_half_width, cfg.route_overhead)
@@ -73,7 +75,7 @@ class NycTerrainGenerator(TerrainGenerator):
                     break
                 rng = np.random.default_rng([seed, 2, attempt])
                 civic_rng = np.random.default_rng([seed, 1, attempt]) if cfg.civic else None
-                self._pending = ALL_BUILDERS[cfg.kind](float(difficulty), rng, civic_rng)
+                self._pending = build(float(difficulty), rng, civic_rng)
         return self._pending.ground_mesh(), np.zeros(3)
 
     def _add_sub_terrain(self, mesh, origin, row, col, sub_terrain_cfg):

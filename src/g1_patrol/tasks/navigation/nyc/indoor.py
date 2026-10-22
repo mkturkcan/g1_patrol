@@ -884,5 +884,8 @@ INDOOR_BUILDERS: dict[str, Callable[..., TileLayout]] = {
 INDOOR_KINDS = list(INDOOR_BUILDERS)
 
 ALL_BUILDERS: dict[str, Callable[..., TileLayout]] = {**BUILDERS, **INDOOR_BUILDERS}
-ALL_KINDS = KINDS + INDOOR_KINDS
-"""Every tile kind; the street kinds keep their indices."""
+TRAINING_KINDS = KINDS + INDOOR_KINDS
+"""The street and indoor kinds the B2-W trains on."""
+ALL_KINDS = TRAINING_KINDS + ["twin"]
+"""Every tile kind (the street kinds keep their indices); "twin" is built from a description of a real place
+(:mod:`.twin`)."""

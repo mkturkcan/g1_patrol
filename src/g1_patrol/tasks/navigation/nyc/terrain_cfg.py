@@ -26,6 +26,8 @@ class NycTileCfg(SubTerrainBaseCfg):
     """Keep only the routes that a robot this wide (half width, m) can drive (structures below ``route_overhead``),
     and rebuild the tile from a new seed if there are none; None: all routes (the G1)."""
     route_overhead: float = 1.0
+    twin: str | None = None
+    """Description (YAML) of the real place a "twin" tile reproduces (:mod:`.twin`)."""
 
 
 @configclass
@@ -43,13 +45,15 @@ def nyc_terrain_generator_cfg(
     civic: bool = False,
     kinds: list[str] | None = None,
     route_half_width: float | None = None,
+    twin: str | None = None,
 ) -> TerrainGeneratorCfg:
     """Terrain with ``variants_per_kind`` columns per scenario type (default: the street kinds; see
     :data:`.indoor.ALL_KINDS` for the indoor ones) and ``num_rows`` difficulty levels; with ``route_half_width``, only
     routes a robot that wide can drive."""
     kinds = KINDS if kinds is None else kinds
     sub_terrains = {
-        kind: NycTileCfg(kind=kind, proportion=1.0, civic=civic, route_half_width=route_half_width) for kind in kinds
+        kind: NycTileCfg(kind=kind, proportion=1.0, civic=civic, route_half_width=route_half_width, twin=twin)
+        for kind in kinds
     }
     return TerrainGeneratorCfg(
         class_type=f"{_IMPL}:NycTerrainGenerator",

@@ -14,8 +14,8 @@ controller, only a faithful model of how the controller follows commands. The ro
   stairwell, a loading dock) is a fall.
 
 Every episode draws its own parameters from the ``*_range`` intervals, so that the policy works with a controller whose
-response is known only approximately. ``scripts/b2w/sysid.py`` fits the same model to logs of the real robot; its
-fitted values should lie inside these intervals.
+response is known only approximately. The tracking equations are in :mod:`g1_patrol.controller_model`;
+``scripts/b2w/sysid.py`` fits them to logs of the real robot, and the fitted values should lie inside these intervals.
 """
 
 from __future__ import annotations
@@ -30,6 +30,9 @@ import torch
 from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_from_euler_xyz
+
+from g1_patrol.b2w import BASE_HEIGHT, COMMAND_RANGES, CONTROLLER
+from g1_patrol.controller_model import track
 
 if TYPE_CHECKING:
     from isaaclab.assets import RigidObject
@@ -150,11 +153,8 @@ class BaseVelocityAction(ActionTerm):
         self._queue = torch.roll(self._queue, 1, dims=1)
         self._queue[:, 0] = self._command
         command = self._queue[torch.arange(self.num_envs, device=self.device), self._delay]
-        # tracking: deadband, gain, yaw drift, first-order response with bounded acceleration, noise
-        target = torch.where(command.abs() < self.deadband, torch.zeros_like(command), command) * self.gain
-        target[:, 2] += self.drift * self._tracked[:, 0]
-        step = (target - self._tracked) * (1.0 - torch.exp(-dt / self.tau))
-        self._tracked += torch.maximum(torch.minimum(step, self.accel * dt), -self.accel * dt)
+        # tracking: deadband, gain, yaw drift, first-order response with bounded acceleration (shared with sysid), noise
+        self._tracked = track(self._tracked, command, dt, self.gain, self.deadband, self.tau, self.accel, self.drift)
         decay = math.exp(-dt / cfg.noise_time)
         self._noise = self._noise * decay + self.noise_std * math.sqrt(1.0 - decay**2) * torch.randn_like(self._noise)
         moving = (self._tracked.abs() > 1e-3).any(dim=1, keepdim=True)  # a robot at rest does not jitter
@@ -243,9 +243,9 @@ class BaseVelocityActionCfg(ActionTermCfg):
     class_type: type = BaseVelocityAction
     scenario_name: str = MISSING
     """Scenario command, whose tile layout gives the ground height under the wheels."""
-    command_ranges: tuple[tuple[float, float], ...] = ((-0.8, 1.5), (-0.3, 0.3), (-1.2, 1.2))
+    command_ranges: tuple[tuple[float, float], ...] = COMMAND_RANGES
     """(min, max) of the forward, lateral and yaw-rate commands (m/s, m/s, rad/s)."""
-    base_height: float = 0.55
+    base_height: float = BASE_HEIGHT
     """Height (m) of the root (base_link) above the ground."""
     wheel_base: tuple[float, float] = (0.33, 0.24)
     """Half distances (m) between the wheels' contact points along and across the body."""
@@ -253,21 +253,21 @@ class BaseVelocityActionCfg(ActionTermCfg):
     """Height difference (m) of the ground under two wheels beyond which the robot falls."""
     terrain_time: float = 0.08
     """Time constant (s) with which the body follows the ground (height, pitch, roll)."""
-    delay_range: tuple[float, float] = (0.04, 0.16)
+    delay_range: tuple[float, float] = CONTROLLER["delay_range"]
     """Command latency (s): network, the controller's own filtering and the motors."""
-    gain_range: tuple[tuple[float, float], ...] = ((0.85, 1.1), (0.6, 1.05), (0.85, 1.1))
+    gain_range: tuple[tuple[float, float], ...] = CONTROLLER["gain_range"]
     """Ratio of the steady-state velocity to the commanded one, per axis."""
-    deadband_max: tuple[float, float, float] = (0.05, 0.05, 0.06)
+    deadband_max: tuple[float, float, float] = CONTROLLER["deadband_max"]
     """Commands smaller than a deadband drawn up to these values are ignored, per axis."""
-    tau_range: tuple[tuple[float, float], ...] = ((0.15, 0.45), (0.15, 0.5), (0.08, 0.3))
+    tau_range: tuple[tuple[float, float], ...] = CONTROLLER["tau_range"]
     """Time constant (s) of the first-order response, per axis."""
-    accel_range: tuple[tuple[float, float], ...] = ((1.0, 3.0), (0.5, 2.0), (2.0, 6.0))
+    accel_range: tuple[tuple[float, float], ...] = CONTROLLER["accel_range"]
     """Acceleration bound (m/s^2, m/s^2, rad/s^2), per axis."""
-    drift_max: float = 0.05
+    drift_max: float = CONTROLLER["drift_max"]
     """Yaw drift (rad/s per m/s of forward speed), drawn within +-this."""
-    noise_max: tuple[float, float, float] = (0.05, 0.03, 0.05)
+    noise_max: tuple[float, float, float] = CONTROLLER["noise_max"]
     """Velocity noise (m/s, m/s, rad/s; standard deviation) drawn up to these values, per axis."""
-    noise_time: float = 0.3
+    noise_time: float = CONTROLLER["noise_time"]
     """Correlation time (s) of the velocity noise."""
 
 

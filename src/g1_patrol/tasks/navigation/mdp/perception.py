@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
-from isaaclab.utils.math import quat_apply_inverse
+
+from g1_patrol.heightmap import HeightMap, drop_returns, rotate_inverse
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -162,39 +163,16 @@ class accumulated_height_map(ManagerTermBase):
     ground (ceilings, overhangs the robot passes under).
     """
 
-    UNKNOWN = -1.0e3
+    UNKNOWN = HeightMap.UNKNOWN
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         p = cfg.params
-        self.res = p.get("resolution", 0.2)
-        self.cells = int(round(p.get("size", 8.0) / self.res))
-        self.map_cells = int(math.ceil(self.cells * math.sqrt(2))) + 2  # the rotated output window fits inside
-        n, m, dev = env.num_envs, self.map_cells, env.device
-        self.height = torch.full((n, m, m), self.UNKNOWN, device=dev)
-        self.age = torch.full((n, m, m), 1.0e3, device=dev)
-        self.prev_scan = torch.full((n, m, m), self.UNKNOWN, device=dev)
-        self.origin = torch.zeros(n, 2, dtype=torch.long, device=dev)  # world cell index of map cell (0, 0)
-        self.fresh = torch.ones(n, dtype=torch.bool, device=dev)
-        self.pose_error = torch.zeros(n, 3, device=dev)  # odometry drift: x, y, yaw
-        # output cell centres in the robot frame
-        c = (torch.arange(self.cells, device=dev, dtype=torch.float) + 0.5) * self.res - self.cells * self.res / 2
-        self.local = torch.stack(torch.meshgrid(c, c, indexing="ij"), dim=-1).view(-1, 2)  # (cells^2, 2): x, y
+        self.map = HeightMap(env.num_envs, p.get("size", 8.0), p.get("resolution", 0.2), env.device)
+        self.pose_error = torch.zeros(env.num_envs, 3, device=env.device)  # odometry drift: x, y, yaw
 
     def reset(self, env_ids=None):
-        ids = slice(None) if env_ids is None else env_ids
-        self.fresh[ids] = True
-
-    def _shift(self, grid: torch.Tensor, d: torch.Tensor, fill: float) -> torch.Tensor:
-        """grid[i, j] <- grid[i + d0, j + d1] per env; cells shifted in from outside are ``fill``."""
-        n, m = grid.shape[0], self.map_cells
-        ar = torch.arange(m, device=grid.device)
-        si = ar[None, :, None] + d[:, 0, None, None]
-        sj = ar[None, None, :] + d[:, 1, None, None]
-        valid = (si >= 0) & (si < m) & (sj >= 0) & (sj < m)
-        flat = (si.clamp(0, m - 1) * m + sj.clamp(0, m - 1)).view(n, -1)
-        out = grid.view(n, -1).gather(1, flat).view(n, m, m)
-        return torch.where(valid, out, torch.full_like(out, fill))
+        self.map.reset(env_ids)
 
     def _points(self, env, sensor_cfg, max_range, noise_std, dropout) -> torch.Tensor:
         sensor = env.scene.sensors[sensor_cfg.name]
@@ -234,71 +212,25 @@ class accumulated_height_map(ManagerTermBase):
         true_root = robot.data.root_pos_w.torch
         q = robot.data.root_quat_w.torch
         true_yaw = torch.atan2(2 * (q[:, 3] * q[:, 2] + q[:, 0] * q[:, 1]), 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2))
-        n, m, res = true_root.shape[0], self.map_cells, self.res
+        n = true_root.shape[0]
         # estimated pose: the true pose plus a drifting odometry error (zero at the start of an episode)
-        self.pose_error[self.fresh] = 0.0
+        fresh = self.map.fresh
+        self.pose_error[fresh] = 0.0
         if drift_pos > 0 or drift_yaw > 0:
             step = torch.randn(n, 3, device=true_root.device) * torch.tensor([drift_pos, drift_pos, drift_yaw], device=true_root.device)
-            self.pose_error += torch.where(self.fresh[:, None], torch.zeros_like(step), step)
+            self.pose_error += torch.where(fresh[:, None], torch.zeros_like(step), step)
         root = true_root.clone()
         root[:, :2] += self.pose_error[:, :2]
         yaw = true_yaw + self.pose_error[:, 2]
 
-        # scroll the map with the robot (episodes that just started begin with an empty map)
-        origin = torch.floor(root[:, :2] / res).long() - m // 2
-        if self.fresh.any():
-            f = self.fresh
-            self.height[f], self.age[f], self.prev_scan[f] = self.UNKNOWN, 1.0e3, self.UNKNOWN
-            self.origin[f] = origin[f]
-            self.fresh[:] = False
-        d = origin - self.origin
-        if (d != 0).any():
-            self.height = self._shift(self.height, d, self.UNKNOWN)
-            self.age = self._shift(self.age, d, 1.0e3)
-            self.prev_scan = self._shift(self.prev_scan, d, self.UNKNOWN)
-            self.origin = origin
-
-        # bin the current scan (world heights) into the map grid, placed with the estimated pose
+        # the scan, filtered as on the robot and placed with the estimated pose
         pts = self._points(env, sensor_cfg, max_range, noise_std, dropout)
-        if crop_box is not None:  # the robot's own body
-            local = quat_apply_inverse(q[:, None].expand(-1, pts.shape[1], -1), torch.nan_to_num(pts - true_root[:, None], posinf=1e3))
-            center, half = torch.tensor(crop_box[0], device=pts.device), torch.tensor(crop_box[1], device=pts.device)
-            pts = torch.where(((local - center).abs() <= half).all(dim=-1, keepdim=True), torch.full_like(pts, float("inf")), pts)
-        if drop_above is not None:  # overhead: ceilings, scaffold decks, table tops the robot passes under
-            high = pts[..., 2:3] - (true_root[:, None, 2:3] - robot_ground_offset) > drop_above
-            pts = torch.where(high, torch.full_like(pts, float("inf")), pts)
+        if crop_box is not None or drop_above is not None:
+            local = rotate_inverse(q[:, None].expand(-1, pts.shape[1], -1), pts - true_root[:, None]) if crop_box is not None else None
+            pts = drop_returns(pts, local, true_root[:, 2] - robot_ground_offset, crop_box, drop_above)
         rel = pts - true_root[:, None]
         c, s = torch.cos(self.pose_error[:, 2])[:, None], torch.sin(self.pose_error[:, 2])[:, None]
         pts = torch.stack([root[:, None, 0] + c * rel[..., 0] - s * rel[..., 1],
                            root[:, None, 1] + s * rel[..., 0] + c * rel[..., 1], pts[..., 2]], dim=-1)
-        ci = torch.floor(pts[..., 0] / res) - origin[:, 0, None]
-        cj = torch.floor(pts[..., 1] / res) - origin[:, 1, None]
-        valid = torch.isfinite(pts).all(dim=-1) & (ci >= 0) & (ci < m) & (cj >= 0) & (cj < m)
-        flat = torch.where(valid, ci * m + cj, torch.zeros_like(ci)).long()
-        z = torch.where(valid, pts[..., 2], torch.full_like(ci, self.UNKNOWN))
-        scan = torch.full((n, m * m), self.UNKNOWN, device=root.device).scatter_reduce(1, flat, z, reduce="amax")
-        scan = scan.view(n, m, m)
-        seen = scan > self.UNKNOWN / 2
-
-        # latest observation wins; unobserved cells age and are forgotten after memory_s
-        self.height = torch.where(seen, scan, self.height)
-        self.age = torch.where(seen, torch.zeros_like(self.age), self.age + env.step_dt)
-        self.height = torch.where(self.age > memory_s, torch.full_like(self.height, self.UNKNOWN), self.height)
-
-        # resample the three grids into the robot's heading frame
-        c, s = torch.cos(yaw)[:, None], torch.sin(yaw)[:, None]
-        lx, ly = self.local[None, :, 0], self.local[None, :, 1]
-        wx = root[:, 0, None] + c * lx - s * ly
-        wy = root[:, 1, None] + s * lx + c * ly
-        gi = (torch.floor(wx / res).long() - origin[:, 0, None]).clamp(0, m - 1)
-        gj = (torch.floor(wy / res).long() - origin[:, 1, None]).clamp(0, m - 1)
-        idx = gi * m + gj
-        ground = root[:, 2, None] - robot_ground_offset
-        out = []
-        for grid in (self.height, scan, self.prev_scan):
-            v = grid.view(n, -1).gather(1, idx)
-            known = v > self.UNKNOWN / 2
-            v = torch.where(known, (v - ground).clamp(*z_range), torch.full_like(v, unknown_value))
-            out.append(v.view(n, self.cells, self.cells))
-        self.prev_scan = scan
-        return torch.stack(out, dim=1)
+        ground = root[:, 2] - robot_ground_offset
+        return self.map.update(pts, root, yaw, ground, env.step_dt, memory_s, z_range, unknown_value)

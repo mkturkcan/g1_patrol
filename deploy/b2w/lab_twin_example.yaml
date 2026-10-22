@@ -1,0 +1,27 @@
+# Digital twin of a lab (src/g1_patrol/tasks/navigation/nyc/twin.py): edit to match the real room, then
+#   python scripts/b2w/evaluate.py --task G1Patrol-B2W-Navigate-Lidar --checkpoint <student.pt> --twin <this file>
+# Coordinates in meters from the room's center, x along its long side (the room must fit in 16 x 10 m).
+name: lab_example
+walls:                     # (x0, y0, x1, y1[, thickness, height])
+  - [-7.0, 4.0, -3.5, 4.0]
+  - [-2.5, 4.0, 7.0, 4.0]  # gap -3.5..-2.5: the door
+  - [-7.0, -4.0, 7.0, -4.0]
+  - [-7.0, -4.0, -7.0, 4.0]
+  - [7.0, -4.0, 7.0, 4.0]
+doors:                     # (x, y, nx, ny, width): opening center on the room side, normal into the room
+  - [-3.0, 3.92, 0, -1, 1.0]
+boxes:                     # solid furniture (cx, cy, yaw_deg, length, width, height[, z0])
+  - [-2.0, 0.9, 0, 3.0, 0.75, 0.9]   # bench
+  - [3.5, 0.9, 0, 3.0, 0.75, 0.9]    # bench
+  - [6.5, -2.5, 0, 0.8, 1.6, 2.0]    # shelf
+tables:                    # open underneath (cx, cy, yaw_deg, length, width, height)
+  - [-2.0, -2.2, 0, 1.6, 0.8, 0.75]
+circles:                   # posts, bins, stools (x, y, radius, height)
+  - [0.8, 2.8, 0.25, 0.7]
+drops: []                  # stairwells etc. (x0, x1, y0, y1, depth)
+routes:                    # robot start and goal (sx, sy, gx, gy); omit to draw them between open spots
+  - [-5.5, 2.5, 5.5, -1.0]
+  - [5.5, 2.5, -5.0, -1.0]
+standing:                  # where people stand around
+  - [0.5, -0.2]
+crowd: [1, 5]              # people at the lowest and highest difficulty

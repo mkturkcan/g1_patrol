@@ -35,36 +35,17 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import RoughPhysicsCfg
 
+from g1_patrol.b2w import BASE_HEIGHT, BODY, CORNER_RADIUS, CROP_BOX, FOOTPRINT, LIDAR, LIDAR_MOUNT, LIDARS, MAP
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 
 from ... import mdp
-from ...nyc.indoor import ALL_KINDS
+from ...nyc.indoor import TRAINING_KINDS
 from ...nyc.terrain_cfg import NycTerrainImporterCfg, nyc_terrain_generator_cfg
 
 ##
 # Robot.
 ##
 
-BASE_HEIGHT = 0.55
-"""Height (m) of base_link above the ground when the B2-W stands (measure on the robot)."""
-FOOTPRINT = (0.56, 0.29)
-"""Half length and half width (m) of the footprint (Unitree: 1098 x 550 mm standing, plus a little margin)."""
-CORNER_RADIUS = 0.12
-"""Rounding of the footprint's corners (m); the wheels are 225 mm across."""
-BODY = (0.86, 0.3, 0.15)
-"""Box (m) standing in for the body (head to tail, URDF): it shades the lidar as the real body does; the lidar sits
-0.1 m above its top, so the ground is hidden within about 0.7 m ahead, 1 m to the sides and 5 m behind."""
-CROP_BOX = ((0.0, 0.0, -0.15), (0.6, 0.33, 0.45))
-"""Center and half sizes (m, base frame) of the box in which lidar returns are the robot itself and are dropped."""
-LIDAR_MOUNT = (0.34218, 0.0, 0.17851)
-"""lidar_link in base_link (Unitree's b2w_description URDF), mounted upright."""
-LIDARS = {
-    # model: (channels, vertical field of view (deg), maximum range (m))
-    "helios_5515": (32, (-55.0, 15.0), 30.0),
-    "helios_1615": (32, (-16.0, 15.0), 30.0),
-    "bpearl": (32, (0.0, 90.0), 30.0),
-}
-"""RoboSense lidars that Unitree fits; select with :func:`lidar_cfg`."""
 NUM_PEDESTRIANS = 20
 
 SCENARIO = mdp.NycScenarioCommandCfg(
@@ -126,7 +107,7 @@ class B2WSceneCfg(InteractiveSceneCfg):
     terrain = NycTerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="generator",
-        terrain_generator=nyc_terrain_generator_cfg(kinds=ALL_KINDS, route_half_width=FOOTPRINT[1]),
+        terrain_generator=nyc_terrain_generator_cfg(kinds=TRAINING_KINDS, route_half_width=FOOTPRINT[1]),
         max_init_terrain_level=1,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
@@ -291,7 +272,7 @@ SENSOR_TARGETS = [
 drops, as on the robot)."""
 
 
-def lidar_cfg(model: str = "helios_5515") -> MultiMeshRayCasterCfg:
+def lidar_cfg(model: str = LIDAR) -> MultiMeshRayCasterCfg:
     """A RoboSense lidar on the B2-W's lidar mount (10 Hz; 1 deg horizontal resolution)."""
     channels, vfov, max_range = LIDARS[model]
     return MultiMeshRayCasterCfg(
@@ -342,18 +323,19 @@ class LidarMapCfg(ObsGroup):
         func=mdp.accumulated_height_map,
         params={
             "sensor_cfg": SceneEntityCfg("lidar"),
-            "size": 8.0,
-            "resolution": 0.1,
-            "memory_s": 8.0,
-            "max_range": 20.0,
+            "size": MAP["size"],
+            "resolution": MAP["resolution"],
+            "memory_s": MAP["memory_s"],
+            "max_range": MAP["max_range"],
             "noise_std": 0.01,
             "dropout": 0.02,
-            "z_range": (-0.6, 1.0),
+            "z_range": MAP["z_range"],
+            "unknown_value": MAP["unknown_value"],
             "robot_ground_offset": BASE_HEIGHT,
             "drift_pos": 0.005,
             "drift_yaw": 0.002,
             "crop_box": CROP_BOX,
-            "drop_above": 1.0,
+            "drop_above": MAP["drop_above"],
         },
         delay_max_lag=1,
     )

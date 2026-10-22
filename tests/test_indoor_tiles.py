@@ -41,7 +41,7 @@ def _layouts(kind):
 
 def test_street_kinds_keep_their_indices():
     assert ALL_KINDS[: len(KINDS)] == KINDS
-    assert set(ALL_BUILDERS) == set(ALL_KINDS)
+    assert set(ALL_BUILDERS) | {"twin"} == set(ALL_KINDS)
 
 
 @pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
@@ -130,3 +130,23 @@ def test_drops_are_forbidden(kind):
         for x0, x1, y0, y1 in lay.forbidden:
             inside |= (px >= x0 - 0.1) & (px <= x1 + 0.1) & (py >= y0 - 0.1) & (py <= y1 + 0.1)
         assert not ((lay.heights < -0.25) & ~inside).any(), f"{kind} d={d} seed={seed}"
+
+
+def test_example_twin_builds_and_is_drivable():
+    """The example lab twin shipped for the robot builds: people come and go through its door, its routes are
+    drivable by the B2-W."""
+    from pathlib import Path
+
+    import yaml
+
+    from g1_patrol.tasks.navigation.nyc.indoor import passable_routes
+    from g1_patrol.tasks.navigation.nyc.twin import build_twin
+
+    spec = yaml.safe_load((Path(__file__).resolve().parents[1] / "deploy" / "b2w" / "lab_twin_example.yaml").read_text())
+    for d in (0.0, 1.0):
+        lay = build_twin(spec, d, np.random.default_rng(0))
+        assert len(lay.paths) >= 2 and len(lay.routes) == len(spec["routes"]) == len(lay.route_headings)
+        assert passable_routes(lay, B2W_HALF[1]) == list(range(len(lay.routes)))
+        for points, *_ in lay.paths:
+            for x, y in (points[0], points[-1]):
+                assert abs(x) > IN_L + 0.1 or abs(y) > 4.0, "people must enter and leave through the door"
