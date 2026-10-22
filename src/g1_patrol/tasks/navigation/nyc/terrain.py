@@ -17,7 +17,8 @@ import trimesh
 from isaaclab.terrains import SubTerrainBaseCfg, TerrainGenerator, TerrainGeneratorCfg, TerrainImporter
 from isaaclab.terrains.utils import create_prim_from_mesh
 
-from .indoor import ALL_BUILDERS, ALL_KINDS, passable_routes
+from .indoor import passable_routes
+from .kinds import ALL_BUILDERS, ALL_KINDS
 from .terrain_cfg import STRUCTURES_PRIM_PATH, NycTileCfg
 from .twin import build_twin, load_twin
 from .tiles import (

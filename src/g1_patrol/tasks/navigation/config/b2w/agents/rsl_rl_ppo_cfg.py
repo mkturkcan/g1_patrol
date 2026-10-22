@@ -89,3 +89,21 @@ class B2WFusedDistillationRunnerCfg(B2WLidarDistillationRunnerCfg):
 
     experiment_name = "b2w_nav_fused_student"
     obs_groups = {"student": ["student", "height_map"], "teacher": ["policy"]}
+
+
+@configclass
+class B2WLabTeacherPPORunnerCfg(B2WTeacherPPORunnerCfg):
+    """Fine-tuning of the general teacher on the lab mixture (``--checkpoint`` the general teacher)."""
+
+    experiment_name = "b2w_nav_lab_teacher"
+    max_iterations = 1000
+
+
+@configclass
+class B2WLabFusedDistillationRunnerCfg(B2WFusedDistillationRunnerCfg):
+    experiment_name = "b2w_nav_lab_fused_student"
+
+
+@configclass
+class B2WLabLidarDistillationRunnerCfg(B2WLidarDistillationRunnerCfg):
+    experiment_name = "b2w_nav_lab_lidar_student"

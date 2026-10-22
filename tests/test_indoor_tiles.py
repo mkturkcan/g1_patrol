@@ -5,15 +5,9 @@ import math
 import numpy as np
 import pytest
 
-from g1_patrol.tasks.navigation.nyc.indoor import (
-    ALL_BUILDERS,
-    ALL_KINDS,
-    IN_L,
-    IN_W,
-    INDOOR_BUILDERS,
-    ROBOT_HALF_WIDTH,
-    Planner,
-)
+from g1_patrol.tasks.navigation.nyc.indoor import IN_L, IN_W, INDOOR_BUILDERS, ROBOT_HALF_WIDTH, Planner
+from g1_patrol.tasks.navigation.nyc.kinds import ALL_BUILDERS, ALL_KINDS
+from g1_patrol.tasks.navigation.nyc.makerlab import LAB_BUILDERS
 from g1_patrol.tasks.navigation.nyc.tiles import (
     HALF_L,
     HALF_W,
@@ -33,10 +27,13 @@ DIFFICULTIES = (0.0, 0.3, 0.6, 1.0)
 SEEDS = range(6)
 
 
+BUILDERS_UNDER_TEST = {**INDOOR_BUILDERS, **LAB_BUILDERS}
+
+
 def _layouts(kind):
     for d in DIFFICULTIES:
         for seed in SEEDS:
-            yield d, seed, INDOOR_BUILDERS[kind](d, np.random.default_rng(seed))
+            yield d, seed, BUILDERS_UNDER_TEST[kind](d, np.random.default_rng(seed))
 
 
 def test_street_kinds_keep_their_indices():
@@ -44,7 +41,7 @@ def test_street_kinds_keep_their_indices():
     assert set(ALL_BUILDERS) | {"twin"} == set(ALL_KINDS)
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_tiles_fit_the_tensor_caps(kind):
     for d, seed, lay in _layouts(kind):
         where = f"{kind} d={d} seed={seed}"
@@ -58,7 +55,7 @@ def test_tiles_fit_the_tensor_caps(kind):
         assert len(lay.forbidden) <= MAX_FORBIDDEN, where
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_routes_are_passable_for_the_b2w(kind):
     """A 0.58 m wide robot can drive every route, up to the hardest difficulty."""
     for d, seed, lay in _layouts(kind):
@@ -76,7 +73,7 @@ def _footprint_clearance(plan: Planner, x: float, y: float, heading: float) -> f
     return min(plan.clearance((x + c * u - s * v, y + s * u + c * v)) for u, v in zip(us.ravel(), vs.ravel()))
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_robot_starts_clear_along_its_route(kind):
     """The footprint at the route's start heading (within the spawn noise of +-0.15 rad) touches nothing."""
     for d, seed, lay in _layouts(kind):
@@ -87,7 +84,7 @@ def test_robot_starts_clear_along_its_route(kind):
                 assert gap > 0.05, f"{kind} d={d} seed={seed}: start ({sx:.1f}, {sy:.1f}) heading {heading + dh:.2f}: {gap:.2f}"
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_pedestrians_enter_and_leave_out_of_view(kind):
     """Every path starts and ends behind a wall (a door), beyond the tile's ends (corridors) or in a stairwell."""
     for d, seed, lay in _layouts(kind):
@@ -99,7 +96,7 @@ def test_pedestrians_enter_and_leave_out_of_view(kind):
                 assert hidden or in_stairwell, f"{kind} d={d} seed={seed}: path end ({x:.1f}, {y:.1f}) in view"
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_paths_keep_clear_of_furniture(kind):
     """Inside the room, people keep clear of structures (by 0.2 m on the planner's 0.1 m grid, i.e. about their
     radius), except while coming through a door (the first meters of a path) or walking on stairs."""
@@ -118,7 +115,7 @@ def test_paths_keep_clear_of_furniture(kind):
                     assert plan.clearance(p) > 0.2, f"{kind} d={d} seed={seed}: path at ({p[0]:.1f}, {p[1]:.1f})"
 
 
-@pytest.mark.parametrize("kind", list(INDOOR_BUILDERS))
+@pytest.mark.parametrize("kind", list(BUILDERS_UNDER_TEST))
 def test_drops_are_forbidden(kind):
     """Every place the floor drops by more than a step (stairwell, loading dock) lies in a forbidden area."""
     for d, seed, lay in _layouts(kind):

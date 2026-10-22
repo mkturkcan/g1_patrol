@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from .tiles import BUILDERS, HALF_L, HALF_W, KINDS, MAX_PATH_POINTS, MAX_ROUTES, OFF, TileLayout, _lerp, _new_layout
+from .tiles import HALF_L, HALF_W, MAX_PATH_POINTS, MAX_ROUTES, OFF, TileLayout, _lerp, _new_layout
 
 WALL_T, WALL_H = 0.15, 2.7
 IN_L, IN_W = HALF_L - WALL_T, HALF_W - WALL_T
@@ -882,10 +882,3 @@ INDOOR_BUILDERS: dict[str, Callable[..., TileLayout]] = {
 }
 
 INDOOR_KINDS = list(INDOOR_BUILDERS)
-
-ALL_BUILDERS: dict[str, Callable[..., TileLayout]] = {**BUILDERS, **INDOOR_BUILDERS}
-TRAINING_KINDS = KINDS + INDOOR_KINDS
-"""The street and indoor kinds the B2-W trains on."""
-ALL_KINDS = TRAINING_KINDS + ["twin"]
-"""Every tile kind (the street kinds keep their indices); "twin" is built from a description of a real place
-(:mod:`.twin`)."""

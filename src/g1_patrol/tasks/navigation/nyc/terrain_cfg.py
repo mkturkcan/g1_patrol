@@ -46,13 +46,16 @@ def nyc_terrain_generator_cfg(
     kinds: list[str] | None = None,
     route_half_width: float | None = None,
     twin: str | None = None,
+    proportions: dict[str, float] | None = None,
 ) -> TerrainGeneratorCfg:
-    """Terrain with ``variants_per_kind`` columns per scenario type (default: the street kinds; see
-    :data:`.indoor.ALL_KINDS` for the indoor ones) and ``num_rows`` difficulty levels; with ``route_half_width``, only
-    routes a robot that wide can drive."""
+    """Terrain with ``variants_per_kind`` columns per scenario type on average (default: the street kinds; see
+    :data:`.kinds.ALL_KINDS` for the others) and ``num_rows`` difficulty levels; ``proportions`` weighs kinds (default
+    1); with ``route_half_width``, only routes a robot that wide can drive."""
     kinds = KINDS if kinds is None else kinds
+    proportions = proportions or {}
     sub_terrains = {
-        kind: NycTileCfg(kind=kind, proportion=1.0, civic=civic, route_half_width=route_half_width, twin=twin)
+        kind: NycTileCfg(kind=kind, proportion=proportions.get(kind, 1.0), civic=civic, route_half_width=route_half_width,
+                         twin=twin)
         for kind in kinds
     }
     return TerrainGeneratorCfg(

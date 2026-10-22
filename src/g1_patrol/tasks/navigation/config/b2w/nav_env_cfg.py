@@ -55,7 +55,7 @@ from g1_patrol.b2w import (
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 
 from ... import mdp
-from ...nyc.indoor import TRAINING_KINDS
+from ...nyc.kinds import LAB_KINDS, TRAINING_KINDS
 from ...nyc.terrain_cfg import NycTerrainImporterCfg, nyc_terrain_generator_cfg
 
 ##
@@ -453,3 +453,46 @@ class B2WNavFusedStudentEnvCfg(B2WNavEnvCfg):
         super().__post_init__()
         for sensor in (self.scene.lidar, self.scene.front_depth, self.scene.rear_depth):
             sensor.update_period = self.decimation * self.sim.dt
+
+
+##
+# The lab: half the tiles are sections of the lab hall (:mod:`...nyc.makerlab`), half the general mixture.
+##
+
+LAB_TERRAIN = nyc_terrain_generator_cfg(
+    kinds=TRAINING_KINDS + LAB_KINDS,
+    proportions={kind: float(len(TRAINING_KINDS)) for kind in LAB_KINDS},
+    route_half_width=FOOTPRINT[1],
+)
+"""13 x 2 columns of 10 levels: 13 of the lab, 13 of the street and indoor kinds."""
+LAB_FLOOR = (0.0, 0.7)
+"""Share of the floor returns beyond 2 m lost per episode (the lab's polished concrete)."""
+
+
+@configclass
+class B2WLabNavEnvCfg(B2WNavEnvCfg):
+    """Teacher specialized on the lab (fine-tuned from the general teacher)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = LAB_TERRAIN
+
+
+@configclass
+class B2WLabFusedStudentEnvCfg(B2WNavFusedStudentEnvCfg):
+    """Fused student (lidar and depth cameras) on the lab mixture, with the polished floor."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = LAB_TERRAIN
+        self.observations.height_map.height_map.params["floor_dropout"] = LAB_FLOOR
+
+
+@configclass
+class B2WLabLidarStudentEnvCfg(B2WNavLidarStudentEnvCfg):
+    """Lidar-only student on the lab mixture, with the polished floor."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = LAB_TERRAIN
+        self.observations.lidar_map.lidar_map.params["floor_dropout"] = LAB_FLOOR

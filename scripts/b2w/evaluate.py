@@ -117,7 +117,7 @@ def main(argv: list[str]) -> None:
         if odometry_drift is not None:
             params["drift_pos"], params["drift_yaw"] = float(odometry_drift), float(odometry_drift) * 0.4
     with launch_simulation(env_cfg, args_cli), contextlib.ExitStack() as cleanup:
-        from g1_patrol.tasks.navigation.nyc.indoor import ALL_KINDS
+        from g1_patrol.tasks.navigation.nyc.kinds import ALL_KINDS
 
         agent_cfg = handle_deprecated_rsl_rl_cfg(cli_args.update_rsl_rl_cfg(agent_cfg, args_cli), check_rsl_rl_version())
         env_cfg.seed = agent_cfg.seed

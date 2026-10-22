@@ -30,7 +30,8 @@ from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 import g1_patrol.tasks  # noqa: F401
 from g1_patrol.b2w import LIDAR, deploy_config
 
-MAPS = {"G1Patrol-B2W-Navigate-Fused": "height_map", "G1Patrol-B2W-Navigate-Lidar": "lidar_map"}
+MAPS = {"G1Patrol-B2W-Navigate-Lab-Fused": "height_map", "G1Patrol-B2W-Navigate-Lab-Lidar": "lidar_map",
+        "G1Patrol-B2W-Navigate-Fused": "height_map", "G1Patrol-B2W-Navigate-Lidar": "lidar_map"}
 
 
 def main(argv):
@@ -38,7 +39,7 @@ def main(argv):
     parser.add_argument("--out", required=True, help="Output directory.")
     parser.add_argument("--samples", type=int, default=200)
     parser.add_argument("--lidar", default=LIDAR)
-    parser.add_argument("--task", default="G1Patrol-B2W-Navigate-Fused", choices=list(MAPS))
+    parser.add_argument("--task", default="G1Patrol-B2W-Navigate-Lab-Fused", choices=list(MAPS))
     cli_args.add_rsl_rl_args(parser)
     add_launcher_args(parser)
     args, remaining = setup_preset_cli(parser, argv)

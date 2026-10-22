@@ -165,6 +165,10 @@ class accumulated_height_map(ManagerTermBase):
     ``extra_sensors`` fuses further sensors into the same map (e.g. depth cameras next to a lidar): one dict per sensor
     with ``sensor_cfg`` and optionally ``max_range``, ``min_range``, ``noise_std``, ``dropout`` and
     ``episode_dropout``, the probability that the sensor delivers nothing for a whole episode (a camera that failed).
+
+    ``floor_dropout`` (min, max): per episode, a share drawn from this range of the returns from the floor farther than
+    ``floor_dropout_from`` m from the robot is lost -- polished floors reflect the lidar and the depth cameras' light
+    away at shallow angles.
     """
 
     UNKNOWN = HeightMap.UNKNOWN
@@ -175,6 +179,7 @@ class accumulated_height_map(ManagerTermBase):
         self.map = HeightMap(env.num_envs, p.get("size", 8.0), p.get("resolution", 0.2), env.device)
         self.pose_error = torch.zeros(env.num_envs, 3, device=env.device)  # odometry drift: x, y, yaw
         self.sensor_off = torch.zeros(env.num_envs, len(p.get("extra_sensors", ())), dtype=torch.bool, device=env.device)
+        self.floor_loss = torch.zeros(env.num_envs, device=env.device)
 
     def reset(self, env_ids=None):
         self.map.reset(env_ids)
@@ -215,6 +220,8 @@ class accumulated_height_map(ManagerTermBase):
         crop_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         drop_above: float | None = None,
         extra_sensors: tuple[dict, ...] = (),
+        floor_dropout: tuple[float, float] = (0.0, 0.0),
+        floor_dropout_from: float = 2.0,
     ) -> torch.Tensor:
         robot = env.scene["robot"]
         true_root = robot.data.root_pos_w.torch
@@ -243,6 +250,15 @@ class accumulated_height_map(ManagerTermBase):
                                     e.get("dropout", 0.0), e.get("min_range", 0.0))
                 parts.append(torch.where(self.sensor_off[:, k, None, None], torch.full_like(more, float("inf")), more))
             pts = torch.cat(parts, dim=1)
+        if floor_dropout[1] > 0:  # polished floor: far floor returns go missing
+            if fresh.any():
+                lo, hi = floor_dropout
+                self.floor_loss[fresh] = lo + (hi - lo) * torch.rand(int(fresh.sum()), device=pts.device)
+            ground_z = true_root[:, None, 2] - robot_ground_offset
+            far = torch.linalg.norm(torch.nan_to_num(pts[..., :2] - true_root[:, None, :2], posinf=1e3), dim=-1) > floor_dropout_from
+            floor = (pts[..., 2] - ground_z).abs() < 0.05
+            lost = floor & far & (torch.rand_like(pts[..., 0]) < self.floor_loss[:, None])
+            pts = torch.where(lost[..., None], torch.full_like(pts, float("inf")), pts)
         if crop_box is not None or drop_above is not None:
             local = rotate_inverse(q[:, None].expand(-1, pts.shape[1], -1), pts - true_root[:, None]) if crop_box is not None else None
             pts = drop_returns(pts, local, true_root[:, 2] - robot_ground_offset, crop_box, drop_above)

@@ -36,3 +36,36 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:B2WFusedDistillationRunnerCfg",
     },
 )
+
+gym.register(
+    id="G1Patrol-B2W-Navigate-Lab",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.nav_env_cfg:B2WLabNavEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:B2WLabTeacherPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="G1Patrol-B2W-Navigate-Lab-Fused",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.nav_env_cfg:B2WLabFusedStudentEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:B2WLabFusedDistillationRunnerCfg",
+    },
+)
+
+gym.register(
+    id="G1Patrol-B2W-Navigate-Lab-Lidar",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.nav_env_cfg:B2WLabLidarStudentEnvCfg",
+        "default_agent": "rsl_rl",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:B2WLabLidarDistillationRunnerCfg",
+    },
+)
