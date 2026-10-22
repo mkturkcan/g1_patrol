@@ -39,7 +39,7 @@ def main():
     nav = Navigator(args.config, policy, device=args.device)
     nav.set_goal(50.0, 0.0)
     rng = np.random.default_rng(0)
-    times = {"map": [], "policy": [], "step": []}
+    times = {"map": [], "policy": [], "shield": [], "step": []}
     for k in range(args.steps):
         # a synthetic scan: floor around the robot and a few walls, in the lidar frame
         az = rng.uniform(-np.pi, np.pi, args.points)
@@ -51,9 +51,12 @@ def main():
         t0 = time.perf_counter()
         height_map = nav.update_map(scan, pose, 0.1, depth)
         t1 = time.perf_counter()
-        policy(nav.proprio(pose, np.zeros(3)), height_map)
+        action = policy(nav.proprio(pose, np.zeros(3)), height_map)
         t2 = time.perf_counter()
-        times["map"].append(t1 - t0), times["policy"].append(t2 - t1), times["step"].append(t2 - t0)
+        nav.shielded(nav.to_command(action), np.zeros(3), height_map)
+        t3 = time.perf_counter()
+        times["map"].append(t1 - t0), times["policy"].append(t2 - t1), times["shield"].append(t3 - t2)
+        times["step"].append(t3 - t0)
     for k, v in times.items():
         v = np.array(v[10:]) * 1000
         print(f"{k:6s} mean {v.mean():6.1f} ms  p99 {np.percentile(v, 99):6.1f} ms  max {v.max():6.1f} ms")

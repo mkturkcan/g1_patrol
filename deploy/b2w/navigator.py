@@ -1,4 +1,4 @@
-"""Robot-side navigation for the Unitree B2-W: observations from the lidar, odometry and goal, the policy, a guard.
+"""Robot-side navigation for the Unitree B2-W: observations from the sensors, odometry and goal, the policy, the shield.
 
 Everything the robot computes before and after the policy lives here, without ROS, so that the ROS 2 node
 (:mod:`ros2_node`), the replay of recorded drives (``scripts/b2w/replay.py``) and the tests all run the same code. The
@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from g1_patrol.heightmap import HeightMap, drop_returns
+from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
 
 
 @dataclass
@@ -73,7 +74,7 @@ class Navigator:
     """
 
     def __init__(self, config: dict | str | Path, policy=None, device: str = "cpu", max_speed: float | None = None,
-                 guard: bool = True):
+                 guard: bool = True, shield_cfg: ShieldCfg | None = None):
         self.cfg = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else config
         m = self.cfg["map"]
         self.device = device
@@ -88,6 +89,7 @@ class Navigator:
                         for name, c in self.cfg.get("depth_cameras", {}).items()}
         self.max_speed = max_speed
         self.guard = guard
+        self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}))
         self.goal: np.ndarray | None = None
         self.last_action = np.zeros(3)
         self.last_stamp: float | None = None
@@ -160,33 +162,30 @@ class Navigator:
         """Policy output -> velocity command, as in training (tanh into the command ranges)."""
         return self.mid + self.half * np.tanh(action)
 
-    def guarded(self, command: np.ndarray) -> tuple[np.ndarray, bool]:
-        """Stop translation (keep turning) if lidar returns lie in the box the footprint sweeps in the next 0.6 s
-        (at least 0.25 m), between 5 cm and 1 m above the ground -- a last line of defence, independent of the
-        policy."""
-        if not self.guard or self.last_scan_base is None or len(self.last_scan_base) == 0:
-            return command, False
-        g = self.cfg["guard"]
-        hx, hy = g["half_length"], g["half_width"]
-        pts = self.last_scan_base
-        z = pts[:, 2] + self.cfg["map"]["base_height"]
-        pts = pts[(z > 0.05) & (z < 1.0)]
-        vx, vy = command[0], command[1]
-        reach_x = max(abs(vx) * g["horizon"], g["min_reach"]) if abs(vx) > 0.05 else 0.0
-        reach_y = max(abs(vy) * g["horizon"], g["min_reach"]) if abs(vy) > 0.05 else 0.0
-        x0 = -hx - (reach_x if vx < 0 else 0.0)
-        x1 = hx + (reach_x if vx > 0 else 0.0)
-        y0 = -hy - (reach_y if vy < 0 else 0.0)
-        y1 = hy + (reach_y if vy > 0 else 0.0)
-        inside = (pts[:, 0] > x0) & (pts[:, 0] < x1) & (pts[:, 1] > y0) & (pts[:, 1] < y1)
-        # returns inside the footprint itself are the robot (the crop box), not obstacles
-        outside_body = ~((np.abs(pts[:, 0]) < hx) & (np.abs(pts[:, 1]) < hy))
-        if int((inside & outside_body).sum()) >= g["min_points"]:
-            return np.array([0.0, 0.0, command[2]]), True
-        return command, False
+    def shielded(self, command: np.ndarray, velocity_b: np.ndarray, height_map: np.ndarray | None,
+                 person: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
+        """The safety shield (:mod:`g1_patrol.shield`) on the latest returns and the map's remembered obstacles: never
+        into anything seen, slowly towards people. ``person``: which of the latest returns a detector marks."""
+        if not self.guard or self.last_scan_base is None:
+            return command, {}
+        pts = torch.as_tensor(self.last_scan_base, dtype=torch.float32)[None]
+        mask = None if person is None else torch.as_tensor(person, dtype=torch.bool)[None]
+        moving = None
+        if height_map is not None:
+            res = self.cfg["map"]["resolution"]
+            hm = torch.as_tensor(height_map, dtype=torch.float32)[None]
+            moving = moving_returns(pts, hm, res, self.shield_cfg.ground_z)  # what moved since the previous scan
+            cells = map_points(hm[:, 0], res, self.shield_cfg.ground_z)  # obstacles that left the sensors' view
+            pts = torch.cat([pts, cells], dim=1)
+            moving = torch.cat([moving, torch.zeros(1, cells.shape[1], dtype=torch.bool)], dim=1)
+            if mask is not None:
+                mask = torch.cat([mask, torch.zeros(1, cells.shape[1], dtype=torch.bool)], dim=1)
+        safe, info = shield(pts, torch.as_tensor(command, dtype=torch.float32)[None], self.shield_cfg,
+                            torch.as_tensor(velocity_b, dtype=torch.float32)[None], moving, mask)
+        return safe[0].numpy().astype(np.float64), {k: float(v[0]) for k, v in info.items()}
 
     def step(self, points_lidar: np.ndarray, pose: Pose, velocity_b: np.ndarray, stamp: float,
-             depth: dict | None = None) -> tuple[np.ndarray, dict]:
+             depth: dict | None = None, person: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
         """One policy step for a new scan (and the latest depth frames): the command (forward m/s, lateral m/s, yaw
         rate rad/s) and diagnostics."""
         dt = 0.1 if self.last_stamp is None else float(np.clip(stamp - self.last_stamp, 0.02, 0.5))
@@ -208,8 +207,9 @@ class Navigator:
             speed = float(np.hypot(command[0], command[1]))
             if speed > self.max_speed:
                 command[:2] *= self.max_speed / speed
-        command, stopped = self.guarded(command)
-        return command, {**info, "state": "guard stop" if stopped else "driving", "obs": obs, "action": action}
+        command, report = self.shielded(command, velocity_b, height_map, person)
+        state = "emergency stop" if report.get("emergency") else "shield" if report.get("scale", 1.0) < 0.999 else "driving"
+        return command, {**info, "state": state, "shield": report, "obs": obs, "action": action}
 
 
 def depth_image_points(depth: np.ndarray, fx: float, fy: float, cx: float, cy: float, width: int, height: int,

@@ -12,8 +12,9 @@ Modes (parameter ``mode``):
 
 * ``shadow`` (default): compute and publish the commands the policy would give on ``~/command`` (and log them), but
   do not move the robot -- drive it by hand and watch what the policy would do;
-* ``drive``: send the commands, capped at ``max_speed`` (default 0.5 m/s), with the lidar guard on; the command is
-  zeroed if lidar or odometry are older than ``timeout`` s;
+* ``drive``: send the commands, capped at ``max_speed`` (default 0.5 m/s) and filtered by the safety shield
+  (:mod:`g1_patrol.shield`); the robot stops if lidar or odometry are older than ``timeout`` s, and while
+  ``~/stop`` (``std_msgs/Bool``) is true;
 * ``sysid``: play the command profile ``profile`` (CSV from ``scripts/b2w/sysid.py profile``) and log commands and
   odometry for ``scripts/b2w/sysid.py fit``.
 
@@ -41,7 +42,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Bool, Float32MultiArray, String
 
 from .navigator import Navigator, OnnxPolicy, Pose, depth_image_points
 
@@ -119,6 +120,9 @@ class B2WNavNode(Node):
                                      lambda msg, n=name: self.on_depth(n, msg), qos_profile_sensor_data)
             self.create_subscription(CameraInfo, p(f"{name}_info_topic", f"/{name}_camera/depth/camera_info").value,
                                      lambda msg, n=name: self.on_info(n, msg), 1)
+        # emergency stop: True stops the robot until False is published (latched)
+        self.stopped = bool(p("start_stopped", False).value)
+        self.create_subscription(Bool, "~/stop", self.on_stop, 10)
         self.command_pub = self.create_publisher(Float32MultiArray, "~/command", 10)
         self.state_pub = self.create_publisher(String, "~/state", 10)
         self.out = None
@@ -148,6 +152,12 @@ class B2WNavNode(Node):
         c = self.nav.cameras[name][2]
         self.depth[name] = (time.monotonic(), depth_image_points(depth, *self.intrinsics[name], c["width"], c["height"]))
 
+    def on_stop(self, msg: Bool):
+        self.stopped = bool(msg.data)
+        self.get_logger().warning("STOP" if self.stopped else "stop released")
+        if self.stopped and self.out is not None:
+            self.out.stop()
+
     def on_goal(self, msg: PoseStamped):
         self.nav.set_goal(msg.pose.position.x, msg.pose.position.y)
         self.get_logger().info(f"goal ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
@@ -170,9 +180,14 @@ class B2WNavNode(Node):
         depth = {name: pts for name, (t, pts) in self.depth.items() if now - t < self.timeout}
         command, info = self.nav.step(points, pose, velocity, stamp, depth)
         self.command_pub.publish(Float32MultiArray(data=[float(c) for c in command]))
-        self.state_pub.publish(String(data=info.get("state", "")))
-        if self.mode == "drive" and self.out is not None and self.fresh():
-            self.out.send(*command)
+        shield = info.get("shield", {})
+        self.state_pub.publish(String(data=f"{info.get('state', '')} scale={shield.get('scale', 1.0):.2f} "
+                                           f"gap={shield.get('min_gap', 1e3):.2f} person={shield.get('min_person_gap', 1e3):.2f}"))
+        if self.mode == "drive" and self.out is not None:
+            if self.stopped or not self.fresh():
+                self.out.stop()
+            else:
+                self.out.send(*command)
         if self.record_path is not None:
             self.records.append({"stamp": stamp, "points": points.astype(np.float32),
                 "depth": {k: v.astype(np.float32) for k, v in depth.items()}, "pose": np.array(
@@ -184,7 +199,7 @@ class B2WNavNode(Node):
         return now - self.scan_time < self.timeout and now - self.odom_time < self.timeout
 
     def watchdog(self):
-        if self.mode == "drive" and self.out is not None and not self.fresh():
+        if self.mode == "drive" and self.out is not None and (self.stopped or not self.fresh()):
             self.out.stop()
 
     # -- system identification ----------------------------------------------------------------------------------------

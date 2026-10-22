@@ -67,7 +67,8 @@ def test_deployed_map_matches_training():
     assert deployed[1][39:41, 39:41].max() <= MAP["unknown_value"] + 1e-6 or deployed[1][39:41, 39:41].max() < 0.1
 
 
-def test_guard_stops_before_an_obstacle():
+def test_shield_stops_before_an_obstacle():
+    """The policy asks for full speed at a box 0.2 m ahead: the shield stops the robot; with the way clear it drives."""
     cfg = deploy_config()
     nav = Navigator(cfg, policy=lambda obs, m: np.array([3.0, 0.0, 0.0]))  # full speed ahead
     nav.set_goal(10.0, 0.0)
@@ -77,7 +78,9 @@ def test_guard_stops_before_an_obstacle():
     floor = np.c_[rng.uniform(-3, 3, 500), rng.uniform(-3, 3, 500), np.zeros(500)]
     scan = np.concatenate([obstacle, floor]) - np.array([0, 0, BASE_HEIGHT]) - np.array(LIDAR_MOUNT)
     command, info = nav.step(scan, pose, np.zeros(3), 0.0)
-    assert info["state"] == "guard stop" and command[0] == 0.0
+    assert info["state"] == "shield" and command[0] < 0.2  # a creep at most
+    nav = Navigator(cfg, policy=lambda obs, m: np.array([3.0, 0.0, 0.0]))
+    nav.set_goal(10.0, 0.0)
     command, info = nav.step(floor - np.array([0, 0, BASE_HEIGHT]) - np.array(LIDAR_MOUNT), pose, np.zeros(3), 0.1)
     assert info["state"] == "driving" and command[0] > 1.0
 

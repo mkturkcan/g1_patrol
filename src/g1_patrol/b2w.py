@@ -73,6 +73,12 @@ MAP = {
 heights -0.6..1 m relative to the ground; returns from above 1 m (what the robot passes under) are dropped."""
 
 
+def shield_settings() -> dict:
+    """Settings of the safety shield (:class:`g1_patrol.shield.ShieldCfg`) for the B2-W."""
+    return {"half_length": FOOTPRINT[0], "half_width": FOOTPRINT[1], "corner_radius": CORNER_RADIUS,
+            "ground_z": -BASE_HEIGHT}
+
+
 def deploy_config(lidar: str = LIDAR, depth: bool = True) -> dict:
     """Settings for the robot-side code (``deploy.json``); ``depth``: the policy also uses the depth cameras."""
     channels, vfov, max_range = LIDARS[lidar]
@@ -92,8 +98,7 @@ def deploy_config(lidar: str = LIDAR, depth: bool = True) -> dict:
                   "mount": {"pos": list(LIDAR_MOUNT), "rpy": [0.0, 0.0, 0.0]},
                   # the simulated lidar casts channels x 360 rays (1 deg); denser real scans are thinned to this
                   "max_points": channels * 360},
-        "guard": {"half_length": FOOTPRINT[0], "half_width": FOOTPRINT[1], "horizon": 0.6, "min_reach": 0.25,
-                  "min_points": 3},
+        "shield": shield_settings(),
         "depth_cameras": {name: {"pos": list(pos), "rpy": list(rpy), **D435I} for name, (pos, rpy) in DEPTH_CAMERAS.items()}
         if depth else {},
     }

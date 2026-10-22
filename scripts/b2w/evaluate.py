@@ -10,6 +10,8 @@ Stress tests of the sim-to-real assumptions:
 * ``--lidar_dropout`` / ``--odometry_drift``: a degraded lidar map (student); ``--camera_failure``: the fused
   student's depth cameras deliver nothing;
 * ``--twin <place.yaml>``: only the digital twin of the real place (:mod:`g1_patrol.tasks.navigation.nyc.twin`);
+* ``--shield``: the policy's commands pass through the safety shield (:mod:`g1_patrol.shield`) as on the robot, fed
+  by the simulated lidar and depth cameras and the height map; reports how often it intervenes;
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
   (``scripts/b2w/replay.py``).
 
@@ -90,6 +92,7 @@ def main(argv: list[str]) -> None:
     odometry_drift = _extra(argv, "odometry_drift")
     want_map_stats = _extra(argv, "map_stats", flag=True)
     camera_failure = _extra(argv, "camera_failure", flag=True)
+    use_shield = _extra(argv, "shield", flag=True)
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
@@ -143,12 +146,44 @@ def main(argv: list[str]) -> None:
         goal_time = torch.zeros(len(cells), device=dev)
         steps_in_episode = torch.zeros(base_env.num_envs, device=dev)
         motion = {"speed": 0.0, "backward": 0.0, "lateral": 0.0, "command_change": 0.0, "near_people": 0.0, "steps": 0}
+        shield_stats = {"interventions": 0.0, "scale": 0.0, "emergencies": 0.0, "steps": 0}
+        if use_shield:
+            from g1_patrol.b2w import MAP, shield_settings
+            from g1_patrol.heightmap import rotate_inverse
+            from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
+
+            shield_cfg = ShieldCfg(**shield_settings())
+            sensors = [base_env.scene.sensors[name] for name in ("lidar", "front_depth", "rear_depth") if name in base_env.scene.sensors]
+
+            def shielded(actions):
+                robot = base_env.scene["robot"]
+                root, quat = robot.data.root_pos_w.torch, robot.data.root_quat_w.torch
+                hits = torch.cat([(sn.data.ray_hits_w if hasattr(sn.data, "ray_hits_w") else sn.ray_hits_w).torch for sn in sensors], dim=1)
+                hits = torch.nan_to_num(hits, nan=float("inf"), posinf=float("inf"))
+                local = rotate_inverse(quat[:, None].expand(-1, hits.shape[1], -1), torch.nan_to_num(hits - root[:, None], posinf=1e4))
+                local = torch.where((hits.abs() > 1e6).any(dim=-1, keepdim=True), torch.full_like(local, float("inf")), local)
+                moving = None
+                if group is not None:
+                    moving = moving_returns(local, obs[group], MAP["resolution"], shield_cfg.ground_z)
+                    cells = map_points(obs[group][:, 0], MAP["resolution"], shield_cfg.ground_z)
+                    local = torch.cat([local, cells], dim=1)
+                    moving = torch.cat([moving, torch.zeros(cells.shape[:2], dtype=torch.bool, device=cells.device)], dim=1)
+                command = base._mid + base._half * torch.tanh(actions)
+                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving)
+                shield_stats["interventions"] += float((info["scale"] < 0.999).sum())
+                shield_stats["scale"] += float(info["scale"].sum())
+                shield_stats["emergencies"] += float(info["emergency"].sum())
+                shield_stats["steps"] += base_env.num_envs
+                return torch.atanh(((safe - base._mid) / base._half).clamp(-0.999, 0.999))
         maps = []
         obs = env.get_observations()
         with torch.inference_mode():
             for t in range(args_cli.num_steps):
                 cell = cell_index[scenario.layout.kind[scenario.tile_row, scenario.tile_col], bucket_of_row[scenario.tile_row]]
-                obs, _, dones, _ = env.step(policy(obs))
+                actions = policy(obs)
+                if use_shield:
+                    actions = shielded(actions)
+                obs, _, dones, _ = env.step(actions)
                 policy.reset(dones)
                 steps_in_episode += 1
                 assigned = torch.zeros(base_env.num_envs, dtype=torch.bool, device=dev)
@@ -176,6 +211,7 @@ def main(argv: list[str]) -> None:
             "twin": twin,
             "lidar_dropout": lidar_dropout,
             "camera_failure": camera_failure,
+            "shield": use_shield,
             "odometry_drift": odometry_drift,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
@@ -195,6 +231,11 @@ def main(argv: list[str]) -> None:
                 for i, (k, b) in enumerate(cells)
             },
         }
+        if use_shield:
+            steps = max(shield_stats["steps"], 1)
+            metrics["shield_stats"] = {"intervention_rate": shield_stats["interventions"] / steps,
+                                       "mean_scale": shield_stats["scale"] / steps,
+                                       "emergency_rate": shield_stats["emergencies"] / steps}
         if maps:
             from g1_patrol.b2w import MAP
             from g1_patrol.heightmap import map_statistics
@@ -202,7 +243,7 @@ def main(argv: list[str]) -> None:
             metrics["map_stats"] = map_statistics(torch.cat(maps).numpy(), MAP["unknown_value"], MAP["resolution"])
         out = args_cli.out or os.path.join(os.path.dirname(resume_path), "eval",
                                            f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}"
-                                           f"{'_no_cameras' if camera_failure else ''}.json")
+                                           f"{'_no_cameras' if camera_failure else ''}{'_shield' if use_shield else ''}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w") as f:
             json.dump(metrics, f, indent=2)
