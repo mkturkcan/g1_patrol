@@ -90,7 +90,7 @@ either side), a basket up to 1 m beyond reach or a bag zone up to 1 m away, it f
 velocity command: arcs at 0.3–0.45 m/s (the walker stands still below about 0.15 m/s, hardly steps back below 0.4 m/s
 and turns on the spot only partly), stepping back at 0.4 m/s to turn towards a target close by, litter lined up 15 cm to
 the side of the working arm's foot; it gives up after 6 s. Litter is lifted over a basket's rim while walking up to it
-(stopping 0.63–0.79 m from its center), let go only over the opening, and the robot steps back to 0.95 m before lowering
+(stopping 0.63–0.79 m from its center), let go only over the opening, and the robot steps back to 1.1 m before lowering
 the arm. Picking up uses damped least-squares inverse kinematics
 of the waist and the arm towards the hand's grasp center (9 cm from the palm link towards the Dex3 fingertips); on the
 robot this needs the item's position from the litter detector and closing the Dex3 fingers on contact, where the
