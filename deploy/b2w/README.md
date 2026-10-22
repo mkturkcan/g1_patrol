@@ -12,7 +12,7 @@ on the robot before the policy drives it. Nothing here has been tested on hardwa
 | Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), latest depth frames (optical frames), odometry pose | 3 × 80 × 80 map |
 | Policy (`policy.onnx`) | per scan | `obs` (11), `height_map` (3 × 80 × 80) | 3 raw actions |
 | Command shaping | per scan | raw actions | `(vx, vy, wz)` = `mid + half · tanh(a)` |
-| Guard | per scan | latest scan | zero translation if the swept footprint holds returns |
+| Safety shield (`g1_patrol.shield`) | per scan | returns, map, measured velocity | the command, scaled down if needed |
 | Sport-mode controller | Unitree | `Move(vx, vy, wz)` | legs and wheels |
 
 Command ranges: `vx ∈ [−0.8, 1.5]` m/s, `vy ∈ [−0.3, 0.3]` m/s, `wz ∈ [−1.2, 1.2]` rad/s. The values used in training
@@ -40,6 +40,27 @@ density (32 × 360 rays).
 
 Footprint used in training: 1.12 × 0.58 m with rounded corners. Structures whose bottom is higher than 1 m do not
 block the robot; drops (stairwells, a loading dock) end an episode.
+
+## Safety shield
+
+The shield runs on the NX after the policy and is independent of it; it can only slow the robot down along the path
+it was taking, never steer it. A command is admissible if the robot, executing it, can still stop before anything it
+sees comes within a margin: it keeps the commanded arc for 0.35 s (sensing, policy, controller latency), then brakes at
+0.8 m/s² (allowing 12 % more speed than commanded and 8 cm of drift per meter); the footprint is swept along this
+stopping path and the command is scaled down until it comes to rest in time. Margins: 0.10 m to obstacles, 0.25 m to
+drops; to tall things (people, but also machines and walls) from 0.10 m below 0.25 m/s to 0.45 m above 0.75 m/s, so
+doors are passed slowly and people with room; returns that moved since the previous scan are assumed to walk at the
+robot at 1.4 m/s while it closes in on them. The closing speed towards a tall thing is held to 0.25 m/s within 0.8 m.
+Moving away is never limited; if the robot's own momentum already breaches, the command is zero. A person detector on
+the cameras' color images can mark people (`person`), who then keep 0.45 m at any speed.
+
+In simulation (`scripts/b2w/evaluate.py --shield`, fed by the simulated lidar, depth cameras and map), driving at full
+speed into everything for 30 s in 128 environments, the robot hit no structure and was still moving (more than
+0.1 m/s) at one of 21 pedestrian contacts; the other 20 were pedestrians walking into the stopped robot. Tests
+(`tests/test_shield.py`) cover doors, walls, drops, a person walking at the robot and closed loops through the slowest
+controller of the training ranges. Its deceleration and latency must be at least as pessimistic as the identified
+controller (`sysid.py fit`); the shield does not see low objects beside the robot that neither the lidar nor the cameras
+cover, except as remembered by the map. It does not replace the remote's stop: keep it in hand.
 
 ## Values to check on the robot
 
@@ -74,8 +95,17 @@ A wrong base height or mount shows up as a floor that does not read 0 in the rep
 5. **Twin evaluation.** Map the room (e.g. slam_toolbox with the lidar), draft a twin with
    `scripts/b2w/occupancy_to_twin.py`, add doors, tables and routes (see `lab_twin_example.yaml`), and run
    `evaluate.py --twin room.yaml` with the identified controller. Low success there predicts failure on the robot.
-6. **Slow closed loop.** `mode:=drive` with `max_speed:=0.3`, the guard on, an operator on the remote's stop, an empty
-   room first, then with people. The command is zeroed if lidar or odometry stop for 0.3 s.
+6. **Slow closed loop.** `mode:=drive` with `max_speed:=0.3`, the shield on, an operator on the remote's stop, the
+   empty aisle first; then a person walking towards the robot (it must stop well short), then normal traffic. The
+   robot stops if lidar or odometry stop for 0.3 s and while `~/stop` is true.
+
+## The lab
+
+The released policy is specialized on the lab it is deployed in: half its training tiles are sections of that hall
+(`src/g1_patrol/tasks/navigation/nyc/makerlab.py`, modeled on photographs: the painted main aisle, drawer-cabinet
+benches, test machines, open racks, bins, carts, pallets, a workstation area with office chairs and camera tripods;
+thin-legged objects are kept out of as a whole), and its students see the polished concrete floor lose far returns. A
+scan of the actual hall turned into a twin (step 5) adds its exact layout to the evaluation.
 
 ## Running the node
 
