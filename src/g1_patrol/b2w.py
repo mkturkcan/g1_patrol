@@ -1,9 +1,11 @@
 """Unitree B2-W: geometry, sensors and the settings its navigation policy is trained and deployed with.
 
-No simulator imports: the simulation configs (:mod:`g1_patrol.tasks.navigation.config.b2w`), the export script
+No simulator imports (only the standard library): the simulation configs (:mod:`g1_patrol.tasks.navigation.config.b2w`), the export script
 (``scripts/b2w/export.py``) and the robot-side code (``deploy/b2w``) all read these values, so that the robot
 computes its observations exactly as in training. Values marked "measure" should be checked on the robot.
 """
+
+import math
 
 BASE_HEIGHT = 0.55
 """Height (m) of base_link above the ground when the B2-W stands (measure)."""
@@ -26,7 +28,17 @@ LIDARS = {
 }
 """RoboSense lidars that Unitree fits (check the label on the robot's lidar)."""
 LIDAR = "helios_5515"
-"""The lidar the student is trained with."""
+"""The lidar the student is trained with: RoboSense RS-Helios-5515 (32 lines, 360 deg x 70 deg)."""
+DEPTH_CAMERAS = {
+    # name: position (m) and orientation (roll, pitch, yaw; rad; R = Rz Ry Rx) of the depth optical frame (z along the
+    # optical axis, x right, y down) in base_link, from the URDF's f_dc_link and r_dc_link: 45 deg down, front and rear
+    "front": ((0.42161, 0.025, 0.061851), (-2.3562, 0.0, -1.5708)),
+    "rear": ((-0.42244, -0.025, 0.038026), (-2.3562, 0.0, 1.5708)),
+}
+"""Intel RealSense D435i depth cameras (measure the mounts)."""
+D435I = {"hfov": 87.0, "vfov": 58.0, "width": 64, "height": 40, "min_range": 0.3, "max_range": 4.0}
+"""D435i depth: field of view (deg), rays per frame in simulation (a 13x decimated 848 x 480 image on the robot),
+the range (m) of returns used in the height map."""
 COMMAND_RANGES = ((-0.8, 1.5), (-0.3, 0.3), (-1.2, 1.2))
 """(min, max) of the forward, lateral and yaw-rate commands (m/s, m/s, rad/s); policy outputs are squashed into them
 with a tanh."""
@@ -61,8 +73,8 @@ MAP = {
 heights -0.6..1 m relative to the ground; returns from above 1 m (what the robot passes under) are dropped."""
 
 
-def deploy_config(lidar: str = LIDAR) -> dict:
-    """Settings for the robot-side code (``deploy.json``)."""
+def deploy_config(lidar: str = LIDAR, depth: bool = True) -> dict:
+    """Settings for the robot-side code (``deploy.json``); ``depth``: the policy also uses the depth cameras."""
     channels, vfov, max_range = LIDARS[lidar]
     return {
         "robot": "unitree_b2w",
@@ -82,4 +94,28 @@ def deploy_config(lidar: str = LIDAR) -> dict:
                   "max_points": channels * 360},
         "guard": {"half_length": FOOTPRINT[0], "half_width": FOOTPRINT[1], "horizon": 0.6, "min_reach": 0.25,
                   "min_points": 3},
+        "depth_cameras": {name: {"pos": list(pos), "rpy": list(rpy), **D435I} for name, (pos, rpy) in DEPTH_CAMERAS.items()}
+        if depth else {},
     }
+
+
+def rpy_matrix(rpy) -> list[list[float]]:
+    """Rotation matrix R = Rz(yaw) Ry(pitch) Rx(roll) (URDF convention)."""
+    r, p, y = rpy
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr]]
+
+
+def depth_camera_quat(name: str) -> tuple[float, float, float, float]:
+    """Orientation (x, y, z, w) in base_link of a depth camera's frame in the simulation's convention (x along the
+    optical axis, y left, z up), from its optical frame (z along the axis, x right, y down) in :data:`DEPTH_CAMERAS`."""
+    r = rpy_matrix(DEPTH_CAMERAS[name][1])
+    # columns of the camera frame in base_link: x = optical z, y = -optical x, z = -optical y
+    m = [[r[i][2], -r[i][0], -r[i][1]] for i in range(3)]
+    w = math.sqrt(max(0.0, 1.0 + m[0][0] + m[1][1] + m[2][2])) / 2
+    x = math.copysign(math.sqrt(max(0.0, 1.0 + m[0][0] - m[1][1] - m[2][2])) / 2, m[2][1] - m[1][2])
+    y = math.copysign(math.sqrt(max(0.0, 1.0 - m[0][0] + m[1][1] - m[2][2])) / 2, m[0][2] - m[2][0])
+    z = math.copysign(math.sqrt(max(0.0, 1.0 - m[0][0] - m[1][1] + m[2][2])) / 2, m[1][0] - m[0][1])
+    return (x, y, z, w)

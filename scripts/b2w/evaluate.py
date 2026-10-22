@@ -7,7 +7,8 @@ Stress tests of the sim-to-real assumptions:
 * ``--controller``: a built-in controller worse than in training -- ``laggy`` (0.16-0.25 s latency), ``sluggish``
   (twice the response time, half the acceleration), ``weak`` (moves at 70-80 % of the command), ``drifty`` (twice the
   yaw drift) -- or ``sysid:<file.json>`` with the values fitted on the robot (``scripts/b2w/sysid.py fit --json``);
-* ``--lidar_dropout`` / ``--odometry_drift``: a degraded lidar map (student);
+* ``--lidar_dropout`` / ``--odometry_drift``: a degraded lidar map (student); ``--camera_failure``: the fused
+  student's depth cameras deliver nothing;
 * ``--twin <place.yaml>``: only the digital twin of the real place (:mod:`g1_patrol.tasks.navigation.nyc.twin`);
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
   (``scripts/b2w/replay.py``).
@@ -88,8 +89,9 @@ def main(argv: list[str]) -> None:
     lidar_dropout = _extra(argv, "lidar_dropout")
     odometry_drift = _extra(argv, "odometry_drift")
     want_map_stats = _extra(argv, "map_stats", flag=True)
+    camera_failure = _extra(argv, "camera_failure", flag=True)
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
-        argv = ["--task", "G1Patrol-B2W-Navigate-Lidar", *argv]
+        argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
     env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent, play_mode=not args_cli.train_env_cfg)
     env_cfg.scene.terrain.max_init_terrain_level = None  # uniform over all levels
@@ -102,8 +104,11 @@ def main(argv: list[str]) -> None:
             num_rows=6, variants_per_kind=4, kinds=["twin"], route_half_width=FOOTPRINT[1], twin=os.path.abspath(twin))
     if controller != "nominal":
         _apply_controller(env_cfg.actions.base, controller)
-    if hasattr(env_cfg.observations, "lidar_map"):
-        params = env_cfg.observations.lidar_map.lidar_map.params
+    group = next((g for g in ("lidar_map", "height_map") if hasattr(env_cfg.observations, g)), None)
+    if group is not None:
+        params = getattr(getattr(env_cfg.observations, group), group).params
+        if camera_failure:
+            params["extra_sensors"] = tuple({**e, "episode_dropout": 1.0} for e in params.get("extra_sensors", ()))
         if lidar_dropout is not None:
             params["dropout"] = float(lidar_dropout)
         if odometry_drift is not None:
@@ -161,8 +166,8 @@ def main(argv: list[str]) -> None:
                 motion["command_change"] += float(((base.command - base.prev_command).abs().sum(dim=1) * live).sum())
                 motion["near_people"] += float(((scenario.pedestrian_clearance() < 0.5) & live).sum())
                 motion["steps"] += int(live.sum())
-                if want_map_stats and "lidar_map" in obs.keys() and t % 10 == 0:
-                    maps.append(obs["lidar_map"][:64].cpu())
+                if want_map_stats and group in obs.keys() and t % 10 == 0:
+                    maps.append(obs[group][:64].cpu())
         episodes = int(sum(float(c.sum()) for c in counts.values()))
         metrics = {
             "checkpoint": resume_path,
@@ -170,6 +175,7 @@ def main(argv: list[str]) -> None:
             "controller": controller,
             "twin": twin,
             "lidar_dropout": lidar_dropout,
+            "camera_failure": camera_failure,
             "odometry_drift": odometry_drift,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
@@ -195,7 +201,8 @@ def main(argv: list[str]) -> None:
 
             metrics["map_stats"] = map_statistics(torch.cat(maps).numpy(), MAP["unknown_value"], MAP["resolution"])
         out = args_cli.out or os.path.join(os.path.dirname(resume_path), "eval",
-                                           f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}.json")
+                                           f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}"
+                                           f"{'_no_cameras' if camera_failure else ''}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w") as f:
             json.dump(metrics, f, indent=2)

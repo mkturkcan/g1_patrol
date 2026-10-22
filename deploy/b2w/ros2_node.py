@@ -1,6 +1,8 @@
 """ROS 2 node that drives the Unitree B2-W with the navigation policy (runs on the robot's Jetson Orin NX).
 
-Subscribes to the lidar (``sensor_msgs/PointCloud2``, e.g. ``/rslidar_points`` from RoboSense's ``rslidar_sdk``),
+Subscribes to the lidar (``sensor_msgs/PointCloud2``, e.g. ``/rslidar_points`` from RoboSense's ``rslidar_sdk``), the
+depth images of the RealSense D435i cameras named in ``deploy.json`` (``<name>_depth_topic``, ``<name>_info_topic``;
+16-bit, millimeters, from ``realsense2_camera``),
 odometry (``nav_msgs/Odometry``: base_link in the odometry frame, twist in base_link) and a goal
 (``geometry_msgs/PoseStamped`` in the odometry frame, e.g. RViz's "2D Goal Pose"). One policy step per lidar scan; the
 command goes to the robot's sport-mode controller, either through ``unitree_sdk2py``'s sport client
@@ -37,11 +39,11 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Float32MultiArray, String
 
-from .navigator import Navigator, OnnxPolicy, Pose
+from .navigator import Navigator, OnnxPolicy, Pose, depth_image_points
 
 
 def _quat_to_rpy(q) -> tuple[float, float, float]:
@@ -109,6 +111,14 @@ class B2WNavNode(Node):
         self.create_subscription(PointCloud2, p("lidar_topic", "/rslidar_points").value, self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, p("odom_topic", "/odom").value, self.on_odom, 20)
         self.create_subscription(PoseStamped, p("goal_topic", "/goal_pose").value, self.on_goal, 1)
+        # depth cameras (RealSense D435i: realsense2_camera's aligned-to-depth image and its camera info)
+        self.depth: dict[str, tuple[float, np.ndarray]] = {}
+        self.intrinsics: dict[str, tuple[float, float, float, float]] = {}
+        for name in self.nav.cameras:
+            self.create_subscription(Image, p(f"{name}_depth_topic", f"/{name}_camera/depth/image_rect_raw").value,
+                                     lambda msg, n=name: self.on_depth(n, msg), qos_profile_sensor_data)
+            self.create_subscription(CameraInfo, p(f"{name}_info_topic", f"/{name}_camera/depth/camera_info").value,
+                                     lambda msg, n=name: self.on_info(n, msg), 1)
         self.command_pub = self.create_publisher(Float32MultiArray, "~/command", 10)
         self.state_pub = self.create_publisher(String, "~/state", 10)
         self.out = None
@@ -128,6 +138,16 @@ class B2WNavNode(Node):
         self.odom = msg
         self.odom_time = time.monotonic()
 
+    def on_info(self, name: str, msg: CameraInfo):
+        self.intrinsics[name] = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
+
+    def on_depth(self, name: str, msg: Image):
+        if name not in self.intrinsics or msg.encoding not in ("16UC1", "mono16"):
+            return
+        depth = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.step // 2)[:, : msg.width]
+        c = self.nav.cameras[name][2]
+        self.depth[name] = (time.monotonic(), depth_image_points(depth, *self.intrinsics[name], c["width"], c["height"]))
+
     def on_goal(self, msg: PoseStamped):
         self.nav.set_goal(msg.pose.position.x, msg.pose.position.y)
         self.get_logger().info(f"goal ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
@@ -146,13 +166,16 @@ class B2WNavNode(Node):
         points = point_cloud2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True)
         pose, velocity = self.pose()
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
-        command, info = self.nav.step(points, pose, velocity, stamp)
+        now = time.monotonic()
+        depth = {name: pts for name, (t, pts) in self.depth.items() if now - t < self.timeout}
+        command, info = self.nav.step(points, pose, velocity, stamp, depth)
         self.command_pub.publish(Float32MultiArray(data=[float(c) for c in command]))
         self.state_pub.publish(String(data=info.get("state", "")))
         if self.mode == "drive" and self.out is not None and self.fresh():
             self.out.send(*command)
         if self.record_path is not None:
-            self.records.append({"stamp": stamp, "points": points.astype(np.float32), "pose": np.array(
+            self.records.append({"stamp": stamp, "points": points.astype(np.float32),
+                "depth": {k: v.astype(np.float32) for k, v in depth.items()}, "pose": np.array(
                 [pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw]), "velocity": velocity, "command": command,
                 "goal": self.nav.goal if self.nav.goal is not None else np.full(2, np.nan)})
 
@@ -202,7 +225,7 @@ class B2WNavNode(Node):
     def save(self):
         if self.record_path is not None and self.records:
             keys = self.records[0].keys()
-            np.savez_compressed(self.record_path, **{k: np.array([r[k] for r in self.records], dtype=object if k == "points" else None) for k in keys})
+            np.savez_compressed(self.record_path, **{k: np.array([r[k] for r in self.records], dtype=object if k in ("points", "depth") else None) for k in keys})
             self.get_logger().info(f"recorded {len(self.records)} scans -> {self.record_path}")
 
 

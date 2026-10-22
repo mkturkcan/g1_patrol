@@ -161,6 +161,10 @@ class accumulated_height_map(ManagerTermBase):
     As on the robot, returns can be filtered before they are binned: ``crop_box`` (center and half sizes in the base
     frame) removes returns from the robot's own body, ``drop_above`` removes returns higher than this above the
     ground (ceilings, overhangs the robot passes under).
+
+    ``extra_sensors`` fuses further sensors into the same map (e.g. depth cameras next to a lidar): one dict per sensor
+    with ``sensor_cfg`` and optionally ``max_range``, ``min_range``, ``noise_std``, ``dropout`` and
+    ``episode_dropout``, the probability that the sensor delivers nothing for a whole episode (a camera that failed).
     """
 
     UNKNOWN = HeightMap.UNKNOWN
@@ -170,11 +174,12 @@ class accumulated_height_map(ManagerTermBase):
         p = cfg.params
         self.map = HeightMap(env.num_envs, p.get("size", 8.0), p.get("resolution", 0.2), env.device)
         self.pose_error = torch.zeros(env.num_envs, 3, device=env.device)  # odometry drift: x, y, yaw
+        self.sensor_off = torch.zeros(env.num_envs, len(p.get("extra_sensors", ())), dtype=torch.bool, device=env.device)
 
     def reset(self, env_ids=None):
         self.map.reset(env_ids)
 
-    def _points(self, env, sensor_cfg, max_range, noise_std, dropout) -> torch.Tensor:
+    def _points(self, env, sensor_cfg, max_range, noise_std, dropout, min_range: float = 0.0) -> torch.Tensor:
         sensor = env.scene.sensors[sensor_cfg.name]
         # lidars expose their hits in the data buffer, ray-cast cameras on the sensor
         hits = (sensor.data.ray_hits_w if hasattr(sensor.data, "ray_hits_w") else sensor.ray_hits_w).torch
@@ -183,6 +188,8 @@ class accumulated_height_map(ManagerTermBase):
         ray = hits - origin
         dist = torch.linalg.norm(ray, dim=-1, keepdim=True)
         ok = torch.isfinite(dist) & (dist < max_range)
+        if min_range > 0:
+            ok = ok & (dist >= min_range)
         if noise_std > 0:
             scale = 1.0 + torch.randn_like(dist) * noise_std * (0.5 + dist / max_range)
             hits = origin + torch.where(ok, ray * scale, ray)
@@ -207,6 +214,7 @@ class accumulated_height_map(ManagerTermBase):
         drift_yaw: float = 0.0,
         crop_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         drop_above: float | None = None,
+        extra_sensors: tuple[dict, ...] = (),
     ) -> torch.Tensor:
         robot = env.scene["robot"]
         true_root = robot.data.root_pos_w.torch
@@ -225,6 +233,16 @@ class accumulated_height_map(ManagerTermBase):
 
         # the scan, filtered as on the robot and placed with the estimated pose
         pts = self._points(env, sensor_cfg, max_range, noise_std, dropout)
+        if extra_sensors:
+            if fresh.any():  # which sensors fail for the episode
+                rates = torch.tensor([e.get("episode_dropout", 0.0) for e in extra_sensors], device=pts.device)
+                self.sensor_off[fresh] = torch.rand(int(fresh.sum()), len(extra_sensors), device=pts.device) < rates
+            parts = [pts]
+            for k, e in enumerate(extra_sensors):
+                more = self._points(env, e["sensor_cfg"], e.get("max_range", max_range), e.get("noise_std", 0.0),
+                                    e.get("dropout", 0.0), e.get("min_range", 0.0))
+                parts.append(torch.where(self.sensor_off[:, k, None, None], torch.full_like(more, float("inf")), more))
+            pts = torch.cat(parts, dim=1)
         if crop_box is not None or drop_above is not None:
             local = rotate_inverse(q[:, None].expand(-1, pts.shape[1], -1), pts - true_root[:, None]) if crop_box is not None else None
             pts = drop_returns(pts, local, true_root[:, 2] - robot_ground_offset, crop_box, drop_above)

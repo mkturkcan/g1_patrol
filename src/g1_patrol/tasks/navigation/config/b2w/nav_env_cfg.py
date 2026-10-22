@@ -12,9 +12,12 @@ corners; structures whose bottom is higher than 1 m do not block it (it is 0.76 
 drop (stairwell, loading dock) ends the episode.
 
 The teacher sees privileged state: the nearest pedestrians, distances to structures per direction, the street edge or
-drop and a terrain scan. The student (:class:`B2WNavLidarStudentEnvCfg`) sees what the robot has: its lidar, accumulated
-into a height map, odometry and the goal.
+drop and a terrain scan. The students see what the robot has, odometry and the goal, and a height map from its RoboSense
+RS-Helios-5515 lidar (:class:`B2WNavLidarStudentEnvCfg`) or from the lidar and the front and rear RealSense D435i depth
+cameras, which see the ground close around the robot that the lidar cannot (:class:`B2WNavFusedStudentEnvCfg`).
 """
+
+import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg, RigidObjectCollectionCfg
@@ -27,7 +30,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import RayCasterCfg, patterns
-from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg
+from isaaclab.sensors.ray_caster import MultiMeshRayCasterCameraCfg, MultiMeshRayCasterCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
@@ -35,7 +38,20 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import RoughPhysicsCfg
 
-from g1_patrol.b2w import BASE_HEIGHT, BODY, CORNER_RADIUS, CROP_BOX, FOOTPRINT, LIDAR, LIDAR_MOUNT, LIDARS, MAP
+from g1_patrol.b2w import (
+    BASE_HEIGHT,
+    BODY,
+    CORNER_RADIUS,
+    CROP_BOX,
+    D435I,
+    DEPTH_CAMERAS,
+    FOOTPRINT,
+    LIDAR,
+    LIDAR_MOUNT,
+    LIDARS,
+    MAP,
+    depth_camera_quat,
+)
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 
 from ... import mdp
@@ -287,9 +303,41 @@ def lidar_cfg(model: str = LIDAR) -> MultiMeshRayCasterCfg:
     )
 
 
+CAMERA_TARGETS = SENSOR_TARGETS[:-1]
+"""What the depth cameras see: as the lidar, but not the body (they sit inside the box standing in for it and do not
+see the robot)."""
+
+
+def depth_camera_cfg(name: str) -> MultiMeshRayCasterCameraCfg:
+    """A RealSense D435i depth stream at its URDF mount (``front`` or ``rear``; 45 deg down)."""
+    pos, _ = DEPTH_CAMERAS[name]
+    hfov, vfov = math.radians(D435I["hfov"]), math.radians(D435I["vfov"])
+    return MultiMeshRayCasterCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot",
+        offset=MultiMeshRayCasterCameraCfg.OffsetCfg(pos=pos, rot=depth_camera_quat(name), convention="world"),
+        pattern_cfg=patterns.PinholeCameraPatternCfg(
+            focal_length=1.0,
+            horizontal_aperture=2.0 * math.tan(hfov / 2),
+            vertical_aperture=2.0 * math.tan(vfov / 2),
+            width=D435I["width"],
+            height=D435I["height"],
+        ),
+        data_types=["distance_to_image_plane"],
+        depth_clipping_behavior="max",
+        max_distance=6.0,
+        mesh_prim_paths=CAMERA_TARGETS,
+    )
+
+
 @configclass
 class B2WStudentSceneCfg(B2WSceneCfg):
     lidar = lidar_cfg()
+
+
+@configclass
+class B2WFusedStudentSceneCfg(B2WStudentSceneCfg):
+    front_depth = depth_camera_cfg("front")
+    rear_depth = depth_camera_cfg("rear")
 
 
 @configclass
@@ -345,10 +393,40 @@ class LidarMapCfg(ObsGroup):
         self.concatenate_terms = True
 
 
+DEPTH_IN_MAP = tuple(
+    {"sensor_cfg": SceneEntityCfg(f"{name}_depth"), "min_range": D435I["min_range"], "max_range": D435I["max_range"],
+     "noise_std": 0.03, "dropout": 0.1, "episode_dropout": 0.05}
+    for name in DEPTH_CAMERAS
+)
+"""The depth cameras' returns in the fused map: 0.3-4 m, stereo noise growing with distance, 10 % missing pixels,
+and a camera that delivers nothing for 5 % of the episodes."""
+
+
+@configclass
+class FusedMapCfg(ObsGroup):
+    """Height map from the lidar and the front and rear depth cameras (as :class:`LidarMapCfg`)."""
+
+    height_map = ObsTerm(
+        func=mdp.accumulated_height_map,
+        params={**LidarMapCfg().lidar_map.params, "extra_sensors": DEPTH_IN_MAP},
+        delay_max_lag=1,
+    )
+
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True
+
+
 @configclass
 class LidarStudentObservationsCfg(ObservationsCfg):
     student: StudentProprioCfg = StudentProprioCfg()
     lidar_map: LidarMapCfg = LidarMapCfg()
+
+
+@configclass
+class FusedStudentObservationsCfg(ObservationsCfg):
+    student: StudentProprioCfg = StudentProprioCfg()
+    height_map: FusedMapCfg = FusedMapCfg()
 
 
 @configclass
@@ -362,3 +440,16 @@ class B2WNavLidarStudentEnvCfg(B2WNavEnvCfg):
         super().__post_init__()
         self.scene.lidar.update_period = self.decimation * self.sim.dt
 
+
+
+@configclass
+class B2WNavFusedStudentEnvCfg(B2WNavEnvCfg):
+    """Student with the lidar and the two depth cameras fused into one height map."""
+
+    scene: B2WFusedStudentSceneCfg = B2WFusedStudentSceneCfg(num_envs=4096, env_spacing=15.0)
+    observations: FusedStudentObservationsCfg = FusedStudentObservationsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        for sensor in (self.scene.lidar, self.scene.front_depth, self.scene.rear_depth):
+            sensor.update_period = self.decimation * self.sim.dt

@@ -10,9 +10,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
 
-from b2w.navigator import Navigator, Pose  # noqa: E402
+from b2w.navigator import Navigator, Pose, depth_image_points  # noqa: E402
 
-from g1_patrol.b2w import BASE_HEIGHT, CROP_BOX, LIDAR_MOUNT, MAP, deploy_config  # noqa: E402
+from g1_patrol.b2w import BASE_HEIGHT, CROP_BOX, D435I, DEPTH_CAMERAS, LIDAR_MOUNT, MAP, deploy_config, rpy_matrix  # noqa: E402
 from g1_patrol.controller_model import simulate  # noqa: E402
 from g1_patrol.heightmap import HeightMap, drop_returns, rotate_inverse  # noqa: E402
 
@@ -90,3 +90,49 @@ def test_controller_model_settles_at_gain():
     assert out[0, 12, 0] == 0.0  # still within the latency
     assert abs(float(out[0, -1, 0]) - 0.9) < 1e-3  # settles at gain x command
     assert float(out[0, 14:, 0].diff().max()) <= 2.0 * 0.02 + 1e-6  # bounded acceleration
+
+
+def test_deployed_fused_map_matches_training():
+    """With depth cameras: returns in each camera's optical frame, placed with the camera's mount, give the map the
+    simulation builds from the same world-frame returns (within the cameras' range)."""
+    rng = np.random.default_rng(2)
+    pose, world = _scene(rng)
+    nav = Navigator(deploy_config(depth=True), policy=None)
+    rot, origin = pose.rotation(), np.array([pose.x, pose.y, pose.z])
+    base = (world - origin) @ rot
+    lidar = base - np.array(LIDAR_MOUNT)
+    depth, sim_parts = {}, [world]
+    for name, (pos, rpy) in DEPTH_CAMERAS.items():
+        r_cam = np.array(rpy_matrix(rpy))
+        optical = (base - np.array(pos)) @ r_cam  # every return, seen from the camera
+        dist = np.linalg.norm(optical, axis=1)
+        keep = (optical[:, 2] > 0) & (dist >= D435I["min_range"]) & (dist < D435I["max_range"])
+        depth[name] = optical[keep]
+        sim_parts.append(world[keep])
+    deployed = nav.update_map(lidar, pose, 0.1, depth)
+    q = torch.tensor(_quat_xyzw(pose.roll, pose.pitch, pose.yaw), dtype=torch.float32)[None]
+    root = torch.tensor([[pose.x, pose.y, pose.z]], dtype=torch.float32)
+    pts = torch.tensor(np.concatenate(sim_parts), dtype=torch.float32)[None]
+    local = rotate_inverse(q[:, None].expand(-1, pts.shape[1], -1), pts - root[:, None])
+    ground = root[:, 2] - BASE_HEIGHT
+    pts = drop_returns(pts, local, ground, CROP_BOX, MAP["drop_above"])
+    trained = HeightMap(1, MAP["size"], MAP["resolution"]).update(
+        pts, root, torch.tensor([pose.yaw]), ground, 0.1, MAP["memory_s"], MAP["z_range"], MAP["unknown_value"])[0].numpy()
+    assert np.abs(deployed - trained).max() < 1e-4
+
+
+def test_depth_image_back_projection():
+    """A flat floor 0.6 m below a camera looking 45 degrees down comes back at the floor's height."""
+    fx = fy = 400.0
+    cx, cy, w, h = 424.0, 240.0, 848, 480
+    v, u = np.mgrid[0:h, 0:w].astype(np.float64)
+    # optical ray directions, rotated 45 deg down about the camera's x axis: the floor is at y_world = 0.6 below
+    d = np.stack([(u - cx) / fx, (v - cy) / fy, np.ones_like(u)], axis=-1)
+    c, s = np.cos(np.pi / 4), np.sin(np.pi / 4)
+    down = d[..., 1] * c + d[..., 2] * s  # component along gravity (down)
+    z = np.where(down > 0, 0.6 / np.maximum(down, 1e-9), 0.0)  # depth (z) at which the ray meets the floor
+    depth = np.round(np.where(z < 10, z, 0) * 1000).astype(np.uint16)
+    pts = depth_image_points(depth, fx, fy, cx, cy, D435I["width"], D435I["height"])
+    assert len(pts) > 0.8 * D435I["width"] * D435I["height"]
+    height = pts[:, 1] * c + pts[:, 2] * s
+    assert np.abs(height - 0.6).max() < 0.01

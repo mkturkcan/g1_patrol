@@ -81,3 +81,11 @@ class B2WLidarDistillationRunnerCfg(RslRlDistillationRunnerCfg):
         learning_rate=5.0e-4,
         gradient_length=16,
     )
+
+
+@configclass
+class B2WFusedDistillationRunnerCfg(B2WLidarDistillationRunnerCfg):
+    """Distil the teacher into the student with the fused lidar and depth-camera height map."""
+
+    experiment_name = "b2w_nav_fused_student"
+    obs_groups = {"student": ["student", "height_map"], "teacher": ["policy"]}

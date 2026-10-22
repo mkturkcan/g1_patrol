@@ -47,8 +47,9 @@ def main():
         r = np.where(el < 0, np.minimum(0.73 / np.tan(-el + 1e-3), 12.0), rng.uniform(2.0, 12.0, args.points))
         scan = np.c_[r * np.cos(el) * np.cos(az), r * np.cos(el) * np.sin(az), r * np.sin(el)]
         pose = Pose(0.1 * k, 0.0, 0.55, 0.0, 0.0, 0.0)
+        depth = {name: np.c_[rng.uniform(-1, 1, (2560, 2)), rng.uniform(0.4, 4.0, 2560)] for name in nav.cameras}
         t0 = time.perf_counter()
-        height_map = nav.update_map(scan, pose, 0.1)
+        height_map = nav.update_map(scan, pose, 0.1, depth)
         t1 = time.perf_counter()
         policy(nav.proprio(pose, np.zeros(3)), height_map)
         t2 = time.perf_counter()

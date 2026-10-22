@@ -1,16 +1,16 @@
 # Unitree B2-W: deployment and sim-to-real checks
 
 The B2-W navigation policy commands body velocities to Unitree's sport-mode controller; it was trained against a
-randomized model of that controller and a simulated RoboSense lidar. This note specifies the interface and a sequence
-of inexpensive checks that test the simulation's assumptions on the robot before the policy drives it. Nothing here
-has been tested on hardware yet.
+randomized model of that controller, a simulated RoboSense RS-Helios-5515 lidar and front and rear RealSense D435i depth
+cameras. This note specifies the interface and a sequence of inexpensive checks that test the simulation's assumptions
+on the robot before the policy drives it. Nothing here has been tested on hardware yet.
 
 ## Interface
 
 | Stage | Rate | Input | Output |
 |---|---|---|---|
-| Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), odometry pose | 3 × 80 × 80 map |
-| Policy (`policy.onnx`) | per scan | `obs` (11), `lidar_map` (3 × 80 × 80) | 3 raw actions |
+| Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), latest depth frames (optical frames), odometry pose | 3 × 80 × 80 map |
+| Policy (`policy.onnx`) | per scan | `obs` (11), `height_map` (3 × 80 × 80) | 3 raw actions |
 | Command shaping | per scan | raw actions | `(vx, vy, wz)` = `mid + half · tanh(a)` |
 | Guard | per scan | latest scan | zero translation if the swept footprint holds returns |
 | Sport-mode controller | Unitree | `Move(vx, vy, wz)` | legs and wheels |
@@ -27,8 +27,12 @@ and on the robot come from one module, `src/g1_patrol/b2w.py`; `scripts/b2w/expo
 | projected gravity | 3 | gravity unit vector in the base frame (IMU) | ±0.03 |
 | last action | 3 | the policy's previous raw output | – |
 
-`lidar_map` (3 × 80 × 80, 0.1 m cells, 8 × 8 m centred on the robot; rows: forward, columns: left): the highest return
-per cell relative to the ground under the robot (base height − 0.55 m), clipped to [−0.6, 1.0] m, −1 where unknown.
+`height_map` (3 × 80 × 80, 0.1 m cells, 8 × 8 m centred on the robot; rows: forward, columns: left): the highest return
+of the lidar and the depth cameras per cell relative to the ground under the robot (base height − 0.55 m), clipped to
+[−0.6, 1.0] m, −1 where unknown. The cameras look 45° down at the ground the lidar cannot see (within about 0.7 m in
+front, 5 m behind); their returns count from 0.3 to 4 m, sampled on a 64 × 40 grid of the depth image. In training a
+camera delivers nothing in 5 % of the episodes. A fallback policy uses the lidar alone (`release_lidar`, input
+`lidar_map`).
 Channel 0 accumulates scans for 8 s with odometry (the simulation drifts it by 5 mm and 2 mrad per step); channels 1
 and 2 are the current and the previous scan. Returns inside the crop box around the robot (its own body) and returns
 more than 1 m above the ground (what the robot passes under) are dropped; scans are thinned to the simulated lidar's
@@ -41,8 +45,10 @@ block the robot; drops (stairwells, a loading dock) end an episode.
 
 | Value | Where | Assumed |
 |---|---|---|
-| Lidar model (label on the lidar) | `b2w.LIDAR`, `b2w.LIDARS` | RoboSense RS-Helios-5515: 32 lines, −55° to +15° |
+| Lidar model | `b2w.LIDAR`, `b2w.LIDARS` | RoboSense RS-Helios-5515: 32 lines, −55° to +15° (confirmed) |
 | Lidar mount (x, y, z, rpy in base_link) | `b2w.LIDAR_MOUNT` | URDF `lidar_link`: (0.342, 0, 0.179), upright |
+| Depth camera mounts (optical frames) | `b2w.DEPTH_CAMERAS` | URDF `f_dc_link`, `r_dc_link`: 45° down, front and rear |
+| Depth topics (16-bit, mm) and camera info | node parameters | `/<front, rear>_camera/depth/image_rect_raw` |
 | Base height above the floor, standing | `b2w.BASE_HEIGHT` | 0.55 m |
 | Odometry: frame, rate, twist in base frame | ROS topic | `nav_msgs/Odometry`, ≥ 20 Hz |
 

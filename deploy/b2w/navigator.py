@@ -5,7 +5,8 @@ Everything the robot computes before and after the policy lives here, without RO
 height map is :class:`g1_patrol.heightmap.HeightMap`, the same implementation the policy was trained with; the
 settings (map size, crop box, mount, command ranges) come from ``deploy.json`` written by ``scripts/b2w/export.py``.
 
-Frames: the odometry frame is the world (x, y, z; yaw about z), the base frame is base_link (x forward, y left, z up).
+Frames: the odometry frame is the world (x, y, z; yaw about z), the base frame is base_link (x forward, y left, z up),
+a depth camera's optical frame has z along its axis, x right and y down.
 """
 
 from __future__ import annotations
@@ -83,6 +84,8 @@ class Navigator:
         mount = self.cfg["lidar"]["mount"]
         self.mount_pos = np.asarray(mount["pos"], dtype=np.float64)
         self.mount_rot = _euler_rotation(mount.get("rpy", (0.0, 0.0, 0.0)))
+        self.cameras = {name: (np.asarray(c["pos"], dtype=np.float64), _euler_rotation(c["rpy"]), c)
+                        for name, c in self.cfg.get("depth_cameras", {}).items()}
         self.max_speed = max_speed
         self.guard = guard
         self.goal: np.ndarray | None = None
@@ -106,8 +109,18 @@ class Navigator:
         """Lidar returns (k, 3) in the lidar frame -> base frame."""
         return points_lidar @ self.mount_rot.T + self.mount_pos
 
-    def update_map(self, points_lidar: np.ndarray, pose: Pose, dt: float) -> np.ndarray:
-        """Add a scan taken at ``pose`` and return the map (3, H, W) in the robot's heading frame."""
+    def depth_to_base(self, name: str, points_optical: np.ndarray) -> np.ndarray:
+        """Depth-camera returns (k, 3) in its optical frame -> base frame, within the camera's range used in training."""
+        pos, rot, c = self.cameras[name]
+        pts = np.asarray(points_optical, dtype=np.float64).reshape(-1, 3)
+        pts = pts[np.isfinite(pts).all(axis=1)]
+        r = np.linalg.norm(pts, axis=1)
+        pts = pts[(r >= c["min_range"]) & (r < c["max_range"])]
+        return pts @ rot.T + pos
+
+    def update_map(self, points_lidar: np.ndarray, pose: Pose, dt: float, depth: dict | None = None) -> np.ndarray:
+        """Add a scan taken at ``pose`` (and the latest depth frames, ``depth``: camera name -> returns in its optical
+        frame) and return the map (3, H, W) in the robot's heading frame."""
         m = self.cfg["map"]
         base = self.scan_to_base(np.asarray(points_lidar, dtype=np.float64).reshape(-1, 3))
         base = base[np.isfinite(base).all(axis=1)]
@@ -116,6 +129,9 @@ class Navigator:
         limit = self.cfg["lidar"].get("max_points")
         if limit and len(base) > limit:  # thin to the simulated lidar's density (the map's max per cell depends on it)
             base = base[self.rng.choice(len(base), limit, replace=False)]
+        for name, pts in (depth or {}).items():
+            if name in self.cameras and pts is not None:
+                base = np.concatenate([base, self.depth_to_base(name, pts)])
         self.last_scan_base = base
         world = base @ pose.rotation().T + np.array([pose.x, pose.y, pose.z])
         dev = self.device
@@ -169,11 +185,13 @@ class Navigator:
             return np.array([0.0, 0.0, command[2]]), True
         return command, False
 
-    def step(self, points_lidar: np.ndarray, pose: Pose, velocity_b: np.ndarray, stamp: float) -> tuple[np.ndarray, dict]:
-        """One policy step for a new scan: the command (forward m/s, lateral m/s, yaw rate rad/s) and diagnostics."""
+    def step(self, points_lidar: np.ndarray, pose: Pose, velocity_b: np.ndarray, stamp: float,
+             depth: dict | None = None) -> tuple[np.ndarray, dict]:
+        """One policy step for a new scan (and the latest depth frames): the command (forward m/s, lateral m/s, yaw
+        rate rad/s) and diagnostics."""
         dt = 0.1 if self.last_stamp is None else float(np.clip(stamp - self.last_stamp, 0.02, 0.5))
         self.last_stamp = stamp
-        height_map = self.update_map(points_lidar, pose, dt)
+        height_map = self.update_map(points_lidar, pose, dt, depth)
         info = {"map": height_map, "dt": dt}
         if self.goal is None:
             return np.zeros(3), {**info, "state": "no goal"}
@@ -192,3 +210,16 @@ class Navigator:
                 command[:2] *= self.max_speed / speed
         command, stopped = self.guarded(command)
         return command, {**info, "state": "guard stop" if stopped else "driving", "obs": obs, "action": action}
+
+
+def depth_image_points(depth: np.ndarray, fx: float, fy: float, cx: float, cy: float, width: int, height: int,
+                       scale: float = 0.001) -> np.ndarray:
+    """Returns (k, 3) in the optical frame from a depth image (z per pixel, ``scale`` m per unit; 0 = no return),
+    sampled on a ``width`` x ``height`` grid of pixels -- the rays of the simulated camera."""
+    h, w = depth.shape
+    us = np.linspace(0, w - 1, width).round().astype(int)
+    vs = np.linspace(0, h - 1, height).round().astype(int)
+    u, v = np.meshgrid(us, vs)
+    z = depth[v, u].astype(np.float64) * scale
+    ok = z > 0
+    return np.stack([(u[ok] - cx) * z[ok] / fx, (v[ok] - cy) * z[ok] / fy, z[ok]], axis=1)

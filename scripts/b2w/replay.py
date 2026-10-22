@@ -41,7 +41,8 @@ def main():
         if np.isfinite(goal).all():
             nav.set_goal(*goal)
         pose = Pose(*rec["pose"][k])
-        command, info = nav.step(rec["points"][k], pose, rec["velocity"][k], float(rec["stamp"][k]))
+        depth = rec["depth"][k] if "depth" in rec.files else None
+        command, info = nav.step(rec["points"][k], pose, rec["velocity"][k], float(rec["stamp"][k]), depth)
         maps.append(info["map"])
         commands.append(command)
         diffs.append(np.abs(command - rec["command"][k]).max())
