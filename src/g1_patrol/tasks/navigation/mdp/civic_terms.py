@@ -114,7 +114,7 @@ Rewards.
 def civic_goal_progress(env: ManagerBasedRLEnv, command_name: str, max_speed: float = 1.0) -> torch.Tensor:
     """Goal progress (m/s, clipped), not while an attacker is after the robot (getting away comes first)."""
     s = _scenario(env, command_name)
-    progress = ((s.prev_goal_dist - s.goal_distance()) / env.step_dt).clamp(-max_speed, max_speed)
+    progress = ((s.prev_goal_dist - s.route_distance()) / env.step_dt).clamp(-max_speed, max_speed)
     return progress * ~s.under_attack
 
 

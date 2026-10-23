@@ -17,8 +17,8 @@ import trimesh
 from isaaclab.terrains import SubTerrainBaseCfg, TerrainGenerator, TerrainGeneratorCfg, TerrainImporter
 from isaaclab.terrains.utils import create_prim_from_mesh
 
-from .indoor import passable_routes
 from .kinds import ALL_BUILDERS, ALL_KINDS
+from .routing import MAX_ROUTE_POINTS, plan_routes
 from .terrain_cfg import STRUCTURES_PRIM_PATH, NycTileCfg
 from .twin import build_twin, load_twin
 from .tiles import (
@@ -66,13 +66,15 @@ class NycTerrainGenerator(TerrainGenerator):
         civic_rng = np.random.default_rng([seed, 1]) if cfg.civic else None
         build = (lambda d, r, _: build_twin(load_twin(cfg.twin), d, r)) if cfg.kind == "twin" else ALL_BUILDERS[cfg.kind]
         self._pending = build(float(difficulty), rng, civic_rng)
-        if cfg.route_half_width is not None:  # only routes this robot can drive; rebuild tiles that have none
+        if cfg.route_half_width is not None:  # only routes this robot can drive, planned; rebuild tiles that have none
             for attempt in range(1, 20):
-                keep = passable_routes(self._pending, cfg.route_half_width, cfg.route_overhead)
+                keep = plan_routes(self._pending, cfg.route_half_width, cfg.route_overhead)
                 if keep:
                     lay = self._pending
                     lay.routes = [lay.routes[k] for k in keep]
                     lay.route_headings = [lay.route_headings[k] for k in keep] if lay.route_headings else []
+                    lay.route_paths = [lay.route_paths[k] for k in keep]
+                    lay.route_paths_coarse = [lay.route_paths_coarse[k] for k in keep]
                     break
                 rng = np.random.default_rng([seed, 2, attempt])
                 civic_rng = np.random.default_rng([seed, 1, attempt]) if cfg.civic else None
@@ -90,6 +92,17 @@ class NycTerrainGenerator(TerrainGenerator):
             self._structures.append(structures)
         self.layouts[(row, col)] = self._pending
         self._pending = None
+
+
+def _route_rows(lay: TileLayout, paths: list) -> list:
+    """Planned route paths as rows of ``2 * MAX_ROUTE_POINTS + 1`` (points padded with the last point, number of
+    points); routes without a plan get the straight line from start to goal."""
+    rows = []
+    for k, route in enumerate(lay.routes):
+        points = paths[k] if k < len(paths) and paths[k] else [route[:2], route[2:]]
+        padded = list(points) + [points[-1]] * (MAX_ROUTE_POINTS - len(points))
+        rows.append([float(c) for point in padded for c in point] + [len(points)])
+    return rows
 
 
 def _pad_nan(items, cap):
@@ -127,6 +140,8 @@ class NycLayout:
             "queues": (5, MAX_QUEUES),
             "crossings": (4, MAX_CROSSINGS),
             "route_headings": (1, MAX_ROUTES),
+            "route_paths": (2 * MAX_ROUTE_POINTS + 1, MAX_ROUTES),
+            "route_paths_coarse": (2 * MAX_ROUTE_POINTS + 1, MAX_ROUTES),
         }
         data = {name: np.zeros((rows, cols, cap, width), dtype=np.float32) for name, (width, cap) in fields.items()}
         counts = {name: np.zeros((rows, cols), dtype=np.int64) for name in fields}
@@ -141,7 +156,10 @@ class NycLayout:
                     heads = list(lay.route_headings) + [float("nan")] * (len(lay.routes) - len(lay.route_headings))
                     data[name][r, c], counts[name][r, c] = _pad_nan([[h] for h in heads], cap)
                     continue
-                items = lay.path_rows() if name == "paths" else lay.baskets() if name == "baskets" else getattr(lay, name)
+                if name.startswith("route_paths"):
+                    items = _route_rows(lay, getattr(lay, name))
+                else:
+                    items = lay.path_rows() if name == "paths" else lay.baskets() if name == "baskets" else getattr(lay, name)
                 data[name][r, c], counts[name][r, c] = pad(items, width, cap)
             heights[r, c] = lay.heights
             crowd[r, c] = lay.crowd

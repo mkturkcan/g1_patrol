@@ -3,10 +3,18 @@
 Subscribes to the lidar (``sensor_msgs/PointCloud2``, e.g. ``/rslidar_points`` from RoboSense's ``rslidar_sdk``), the
 depth images of the RealSense D435i cameras named in ``deploy.json`` (``<name>_depth_topic``, ``<name>_info_topic``;
 16-bit, millimeters, from ``realsense2_camera``),
-odometry (``nav_msgs/Odometry``: base_link in the odometry frame, twist in base_link) and a goal
-(``geometry_msgs/PoseStamped`` in the odometry frame, e.g. RViz's "2D Goal Pose"). One policy step per lidar scan; the
-command goes to the robot's sport-mode controller, either through ``unitree_sdk2py``'s sport client
-(``--ros-args -p output:=sdk``) or as ``geometry_msgs/Twist`` on ``cmd_vel`` for a bridge (``output:=twist``).
+odometry (``nav_msgs/Odometry``: base_link in the odometry frame, twist in base_link) and the route to follow:
+
+* a global planner's path (``nav_msgs/Path`` on ``path_topic``, default ``/plan``), e.g. from Nav2's planner server;
+* with ``planner_action`` (e.g. ``/compute_path_to_pose``, Nav2's planner server with a map and localization), the
+  node asks the planner for a path to each goal (``geometry_msgs/PoseStamped`` on ``goal_topic``, e.g. RViz's "2D Goal
+  Pose") and again every ``replan_period`` s while driving; the robot stands until the first path arrives;
+* without a planner, a goal is reached in a straight line (open spaces only).
+
+Paths and goals in another frame than the odometry's (e.g. ``map``) are brought into it with TF (``map`` -> ``odom``
+from the localization) when they arrive. One policy step per lidar scan; the command goes to the robot's sport-mode
+controller, either through ``unitree_sdk2py``'s sport client (``--ros-args -p output:=sdk``) or as
+``geometry_msgs/Twist`` on ``cmd_vel`` for a bridge (``output:=twist``).
 
 Modes (parameter ``mode``):
 
@@ -38,11 +46,13 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
+from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool, Float32MultiArray, String
+from tf2_ros import Buffer, TransformListener
 
 from .navigator import Navigator, OnnxPolicy, Pose, depth_image_points
 
@@ -112,6 +122,18 @@ class B2WNavNode(Node):
         self.create_subscription(PointCloud2, p("lidar_topic", "/rslidar_points").value, self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, p("odom_topic", "/odom").value, self.on_odom, 20)
         self.create_subscription(PoseStamped, p("goal_topic", "/goal_pose").value, self.on_goal, 1)
+        self.create_subscription(NavPath, p("path_topic", "/plan").value, self.on_path, 1)
+        self.tf = Buffer()
+        self.tf_listener = TransformListener(self.tf, self)
+        self.goal_msg: PoseStamped | None = None
+        self.planner, self.planning = None, False
+        planner = p("planner_action", "").value
+        if planner:
+            from nav2_msgs.action import ComputePathToPose
+            from rclpy.action import ActionClient
+
+            self.planner = ActionClient(self, ComputePathToPose, planner)
+            self.create_timer(float(p("replan_period", 1.0).value), self.replan)
         # depth cameras (RealSense D435i: realsense2_camera's aligned-to-depth image and its camera info)
         self.depth: dict[str, tuple[float, np.ndarray]] = {}
         self.intrinsics: dict[str, tuple[float, float, float, float]] = {}
@@ -158,9 +180,62 @@ class B2WNavNode(Node):
         if self.stopped and self.out is not None:
             self.out.stop()
 
+    def to_odom(self, frame: str, points: np.ndarray) -> np.ndarray | None:
+        """Points (k, 2) in ``frame`` -> the odometry frame (TF, frames level); None if the transform is missing."""
+        odom = self.odom.header.frame_id if self.odom is not None else ""
+        if not frame or not odom or frame == odom:
+            return points
+        try:
+            t = self.tf.lookup_transform(odom, frame, rclpy.time.Time())
+        except Exception as e:  # noqa: BLE001 (tf2's lookup, connectivity and extrapolation errors)
+            self.get_logger().warning(f"no transform {frame} -> {odom}: {e}")
+            return None
+        yaw = _quat_to_rpy(t.transform.rotation)[2]
+        c, s = math.cos(yaw), math.sin(yaw)
+        return points @ np.array([[c, s], [-s, c]]) + np.array([t.transform.translation.x, t.transform.translation.y])
+
     def on_goal(self, msg: PoseStamped):
-        self.nav.set_goal(msg.pose.position.x, msg.pose.position.y)
-        self.get_logger().info(f"goal ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
+        self.get_logger().info(f"goal ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f}) in {msg.header.frame_id}")
+        if self.planner is not None:  # stand until the planner's path arrives
+            self.goal_msg = msg
+            self.nav.clear()
+            self.replan()
+            return
+        goal = self.to_odom(msg.header.frame_id, np.array([[msg.pose.position.x, msg.pose.position.y]]))
+        if goal is not None:
+            self.nav.set_goal(*goal[0])
+
+    def on_path(self, msg: NavPath):
+        if not msg.poses:
+            return
+        points = self.to_odom(msg.header.frame_id, np.array([[q.pose.position.x, q.pose.position.y] for q in msg.poses]))
+        if points is not None:
+            self.nav.set_path(points)
+
+    def replan(self):
+        """Ask the planner for a path from where the robot is to the goal."""
+        if self.goal_msg is None or self.planning or not self.planner.server_is_ready():
+            return
+        from nav2_msgs.action import ComputePathToPose
+
+        request = ComputePathToPose.Goal()
+        request.goal = self.goal_msg
+        request.use_start = False  # from the robot's pose in the planner's frame (TF)
+        self.planning = True
+        self.planner.send_goal_async(request).add_done_callback(self.on_plan_accepted)
+
+    def on_plan_accepted(self, future):
+        handle = future.result()
+        if not handle.accepted:
+            self.planning = False
+            return
+        handle.get_result_async().add_done_callback(self.on_plan)
+
+    def on_plan(self, future):
+        self.planning = False
+        path = future.result().result.path
+        if self.goal_msg is not None and path.poses:
+            self.on_path(path)
 
     def pose(self) -> tuple[Pose, np.ndarray]:
         o = self.odom
@@ -179,6 +254,9 @@ class B2WNavNode(Node):
         now = time.monotonic()
         depth = {name: pts for name, (t, pts) in self.depth.items() if now - t < self.timeout}
         command, info = self.nav.step(points, pose, velocity, stamp, depth)
+        if info.get("state") == "reached" and self.goal_msg is not None:
+            self.get_logger().info("goal reached")
+            self.goal_msg = None  # no more replanning
         self.command_pub.publish(Float32MultiArray(data=[float(c) for c in command]))
         shield = info.get("shield", {})
         self.state_pub.publish(String(data=f"{info.get('state', '')} scale={shield.get('scale', 1.0):.2f} "
@@ -192,7 +270,9 @@ class B2WNavNode(Node):
             self.records.append({"stamp": stamp, "points": points.astype(np.float32),
                 "depth": {k: v.astype(np.float32) for k, v in depth.items()}, "pose": np.array(
                 [pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw]), "velocity": velocity, "command": command,
-                "goal": self.nav.goal if self.nav.goal is not None else np.full(2, np.nan)})
+                "goal": self.nav.goal if self.nav.goal is not None else np.full(2, np.nan),
+                "route": self.nav.route[0][0].numpy() if self.nav.route is not None else np.zeros((0, 2)),
+                "route_version": self.nav.route_version})
 
     def fresh(self) -> bool:
         now = time.monotonic()
@@ -240,7 +320,7 @@ class B2WNavNode(Node):
     def save(self):
         if self.record_path is not None and self.records:
             keys = self.records[0].keys()
-            np.savez_compressed(self.record_path, **{k: np.array([r[k] for r in self.records], dtype=object if k in ("points", "depth") else None) for k in keys})
+            np.savez_compressed(self.record_path, **{k: np.array([r[k] for r in self.records], dtype=object if k in ("points", "depth", "route") else None) for k in keys})
             self.get_logger().info(f"recorded {len(self.records)} scans -> {self.record_path}")
 
 

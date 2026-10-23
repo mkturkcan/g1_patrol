@@ -1,7 +1,7 @@
 """Export a B2-W student for the robot: ``policy.onnx``, ``deploy.json`` and ``samples.npz``.
 
 Loads a student checkpoint (``--task G1Patrol-B2W-Navigate-Fused``: lidar and depth cameras, the default;
-``G1Patrol-B2W-Navigate-Lidar``: lidar only), exports the deterministic policy to ONNX (inputs ``obs`` (1, 11) and the
+``G1Patrol-B2W-Navigate-Lidar``: lidar only), exports the deterministic policy to ONNX (inputs ``obs`` (1, 13) and the
 height map (1, 3, 80, 80), output ``actions`` (1, 3)), writes the settings the robot-side code needs
 (:func:`g1_patrol.b2w.deploy_config`) and rolls the policy out in simulation for ``--samples`` steps, saving its inputs
 and outputs. The

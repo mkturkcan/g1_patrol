@@ -44,9 +44,10 @@ Rewards.
 
 
 def nyc_goal_progress(env: ManagerBasedRLEnv, command_name: str, max_speed: float = 1.5) -> torch.Tensor:
-    """Reduction of the distance to the goal per second, clipped to +-``max_speed`` (no gain from walking faster)."""
+    """Reduction of the distance left to the goal (along the planned route with route waypoints) per second, clipped to
+    +-``max_speed`` (no gain from walking faster)."""
     s = _scenario(env, command_name)
-    return ((s.prev_goal_dist - s.goal_distance()) / env.step_dt).clamp(-max_speed, max_speed)
+    return ((s.prev_goal_dist - s.route_distance()) / env.step_dt).clamp(-max_speed, max_speed)
 
 
 def nyc_goal_reached(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:

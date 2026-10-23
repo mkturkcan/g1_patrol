@@ -1,12 +1,17 @@
-"""Robot-side navigation for the Unitree B2-W: observations from the sensors, odometry and goal, the policy, the shield.
+"""Robot-side navigation for the Unitree B2-W: observations from the sensors, odometry and route, the policy, the shield.
 
 Everything the robot computes before and after the policy lives here, without ROS, so that the ROS 2 node
 (:mod:`ros2_node`), the replay of recorded drives (``scripts/b2w/replay.py``) and the tests all run the same code. The
 height map is :class:`g1_patrol.heightmap.HeightMap`, the same implementation the policy was trained with; the
 settings (map size, crop box, mount, command ranges) come from ``deploy.json`` written by ``scripts/b2w/export.py``.
 
+The policy follows a route, as it did in training: a global planner's path (e.g. Nav2's ``/plan``), or a straight line
+to a goal in open space. It is given the points of the route 1 and 2.5 m (``deploy.json``) ahead of the robot's place
+along it (:mod:`g1_patrol.route`, the same code as in training).
+
 Frames: the odometry frame is the world (x, y, z; yaw about z), the base frame is base_link (x forward, y left, z up),
-a depth camera's optical frame has z along its axis, x right and y down.
+a depth camera's optical frame has z along its axis, x right and y down. Poses and routes must be in the same frame
+(odometry, or a map frame with localization).
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import numpy as np
 import torch
 
 from g1_patrol.heightmap import HeightMap, drop_returns
+from g1_patrol.route import path_project, polyline, waypoints
 from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
 
 
@@ -48,7 +54,7 @@ def _euler_rotation(rpy) -> np.ndarray:
 
 
 class OnnxPolicy:
-    """The exported student (``policy.onnx``: inputs ``obs`` (1, 11) and the map (1, 3, H, W); output ``actions``)."""
+    """The exported student (``policy.onnx``: inputs ``obs`` (1, 13) and the map (1, 3, H, W); output ``actions``)."""
 
     def __init__(self, path: str | Path, providers: list[str] | None = None, threads: int = 2):
         import onnxruntime as ort
@@ -66,11 +72,11 @@ class OnnxPolicy:
 
 
 class Navigator:
-    """Turns lidar scans, odometry and a goal into velocity commands for the B2-W's controller.
+    """Turns lidar scans, odometry and a route into velocity commands for the B2-W's controller.
 
-    Call :meth:`set_goal`, then for each lidar scan :meth:`step` with the scan and the current odometry; it returns
-    the command (forward, lateral, yaw rate) and a dict of diagnostics. One policy step per scan, as in training
-    (lidar and policy at 10 Hz).
+    Call :meth:`set_path` (a planner's path; again whenever it replans) or :meth:`set_goal` (a straight line), then for
+    each lidar scan :meth:`step` with the scan and the current pose; it returns the command (forward, lateral, yaw
+    rate) and a dict of diagnostics. One policy step per scan, as in training (lidar and policy at 10 Hz).
     """
 
     def __init__(self, config: dict | str | Path, policy=None, device: str = "cpu", max_speed: float | None = None,
@@ -91,6 +97,10 @@ class Navigator:
         self.guard = guard
         self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}))
         self.goal: np.ndarray | None = None
+        self.route: tuple[torch.Tensor, torch.Tensor] | None = None
+        self.route_s: torch.Tensor | None = None
+        self.route_version = 0
+        self.lookahead = torch.tensor(self.cfg["route_waypoints"], dtype=torch.float32)
         self.last_action = np.zeros(3)
         self.last_stamp: float | None = None
         self.last_scan_base: np.ndarray | None = None
@@ -102,8 +112,28 @@ class Navigator:
         self.last_stamp = None
 
     def set_goal(self, x: float, y: float):
-        """Goal in the odometry frame; the map and the last action are kept."""
+        """Goal reached in a straight line from where the robot is at the next step (open spaces; elsewhere a planner's
+        path, :meth:`set_path`). The map and the last action are kept."""
         self.goal = np.array([x, y], dtype=np.float64)
+        self.route = None
+
+    def clear(self):
+        """No goal: the robot stands (until :meth:`set_goal` or :meth:`set_path`)."""
+        self.goal, self.route = None, None
+
+    def set_path(self, points):
+        """Route (k, 2) to follow, e.g. a global planner's path (again whenever it replans); its last point is the goal.
+        The robot's place along a new route is the closest point of the whole route, then searched near the last."""
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        if len(pts) == 0:
+            raise ValueError("empty path")
+        pts = pts[np.r_[True, np.linalg.norm(np.diff(pts, axis=0), axis=1) > 1e-3]]  # without repeated points
+        if len(pts) == 1:
+            pts = np.repeat(pts, 2, axis=0)
+        self.goal = pts[-1].copy()
+        self.route = polyline(torch.as_tensor(pts, dtype=torch.float32)[None])
+        self.route_s = None
+        self.route_version += 1
 
     # -- observations -------------------------------------------------------------------------------------------------
 
@@ -146,15 +176,23 @@ class Navigator:
         out = self.map.update(points, root, yaw, ground, dt, m["memory_s"], tuple(m["z_range"]), m["unknown_value"])
         return out[0].cpu().numpy()
 
-    def proprio(self, pose: Pose, velocity_b: np.ndarray) -> np.ndarray:
-        """goal (heading frame), velocity (body frame: forward, lateral, yaw rate), projected gravity, last action."""
+    def follow(self, pose: Pose) -> np.ndarray:
+        """Update the robot's place along its route; the route's points ahead of it in the heading frame (2W,)."""
         if self.goal is None:
             raise RuntimeError("no goal")
-        dx, dy = self.goal[0] - pose.x, self.goal[1] - pose.y
-        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
-        goal_b = np.array([c * dx + s * dy, -s * dx + c * dy])
+        x = torch.tensor([[pose.x, pose.y]], dtype=torch.float32)
+        if self.route is None:  # straight to the goal
+            self.set_path([[pose.x, pose.y], self.goal])
+        pts, cum = self.route
+        self.route_s = path_project(pts, cum, x, self.route_s)
+        yaw = torch.tensor([pose.yaw], dtype=torch.float32)
+        return waypoints(pts, cum, self.route_s, x, yaw, self.lookahead)[0].flatten().numpy().astype(np.float64)
+
+    def proprio(self, pose: Pose, velocity_b: np.ndarray) -> np.ndarray:
+        """Route waypoints (heading frame), velocity (body frame: forward, lateral, yaw rate), projected gravity, last
+        action."""
         gravity_b = pose.rotation().T @ np.array([0.0, 0.0, -1.0])
-        return np.concatenate([goal_b, np.asarray(velocity_b, dtype=np.float64), gravity_b, self.last_action])
+        return np.concatenate([self.follow(pose), np.asarray(velocity_b, dtype=np.float64), gravity_b, self.last_action])
 
     # -- commands -----------------------------------------------------------------------------------------------------
 

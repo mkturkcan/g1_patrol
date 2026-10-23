@@ -52,6 +52,8 @@ class TileLayout:
     boxes: list = field(default_factory=list)  # (cx, cy, yaw, half_x, half_y, z0, z1)
     routes: list = field(default_factory=list)  # (start_x, start_y, goal_x, goal_y)
     route_headings: list = field(default_factory=list)  # start heading per route (rad); missing: towards the goal
+    route_paths: list = field(default_factory=list)  # planned way per route (points) for a robot of some width (.routing)
+    route_paths_coarse: list = field(default_factory=list)  # the same, planned without small structures
     paths: list = field(default_factory=list)  # (points, half_width, weight, free_length), walked first to last
     standing: list = field(default_factory=list)  # (x, y)
     forbidden: list = field(default_factory=list)  # (x0, x1, y0, y1) street areas

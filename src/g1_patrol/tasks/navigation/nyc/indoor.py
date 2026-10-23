@@ -294,20 +294,6 @@ def _routes(lay: TileLayout, plan: Planner, candidates: list, rng: np.random.Gen
         lay.route_headings.append(heading)
 
 
-def passable_routes(lay: TileLayout, half_width: float, overhead: float = 1.0, reach: float = 0.4) -> list[int]:
-    """Indices of the routes of ``lay`` that a robot of half width ``half_width`` can drive: there is a way from the
-    start to within ``reach`` of the goal that keeps ``half_width`` from structures lower than ``overhead``, drops and
-    forbidden areas."""
-    plan = Planner(lay, z_max=overhead)
-    ok = []
-    for k, (sx, sy, gx, gy) in enumerate(lay.routes):
-        dist = plan.distances((sx, sy), half_width)
-        px, py = np.meshgrid(plan.xs, plan.ys, indexing="ij")
-        if ((dist >= 0) & (np.hypot(px - gx, py - gy) < reach)).any():
-            ok.append(k)
-    return ok
-
-
 def _largest_gap(lo: float, hi: float, spans: list) -> float:
     """Widest stretch of [lo, hi] not covered by the intervals ``spans``."""
     best, a = 0.0, lo

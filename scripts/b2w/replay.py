@@ -1,6 +1,6 @@
 """Replay a recorded drive of the B2-W through the navigation stack, offline.
 
-The deployment node records every lidar scan with the odometry pose, the velocity, the goal and the command it gave
+The deployment node records every lidar scan with the odometry pose, the velocity, the route and the command it gave
 (``record:=drive.npz``). This script feeds the recording to the same :class:`b2w.navigator.Navigator` and
 
 * checks that it reproduces the recorded commands (the node and the offline code agree);
@@ -36,10 +36,14 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     maps, diffs, commands = [], [], []
+    version = None
     for k in range(len(rec["stamp"])):
-        goal = rec["goal"][k]
-        if np.isfinite(goal).all():
-            nav.set_goal(*goal)
+        if "route" in rec.files:  # the route the node followed, set again where the node got a new one
+            if len(rec["route"][k]) and rec["route_version"][k] != version:
+                nav.set_path(rec["route"][k])
+                version = rec["route_version"][k]
+        elif np.isfinite(rec["goal"][k]).all():
+            nav.set_goal(*rec["goal"][k])
         pose = Pose(*rec["pose"][k])
         depth = rec["depth"][k] if "depth" in rec.files else None
         command, info = nav.step(rec["points"][k], pose, rec["velocity"][k], float(rec["stamp"][k]), depth)

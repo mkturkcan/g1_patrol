@@ -1,0 +1,85 @@
+# Nav2 for the B2-W navigation policy: map, localization and the global planner only (a starting point, not tested
+# on the robot). The policy node (b2w.ros2_node with -p planner_action:=/compute_path_to_pose) takes the place of
+# Nav2's controller server and behavior tree: do not start those.
+#
+#   ros2 run nav2_map_server map_server --ros-args --params-file nav2_b2w.yaml -p yaml_filename:=lab_map.yaml
+#   ros2 run nav2_amcl amcl --ros-args --params-file nav2_b2w.yaml
+#   ros2 run nav2_planner planner_server --ros-args --params-file nav2_b2w.yaml
+#   ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args --params-file nav2_b2w.yaml
+#
+# The map: drive the robot through the lab once with slam_toolbox (online_async) on a laser scan made from the lidar's
+# point cloud (pointcloud_to_laserscan, a slice 0.3-1.0 m above the floor) and save it with nav2_map_server's
+# map_saver_cli. AMCL needs the same scan topic. Check the frames: the odometry's frame must be odom and the robot's
+# base_link, as in the policy node.
+
+lifecycle_manager:
+  ros__parameters:
+    autostart: true
+    node_names: ["map_server", "amcl", "planner_server"]
+
+map_server:
+  ros__parameters:
+    yaml_filename: "lab_map.yaml"
+
+amcl:
+  ros__parameters:
+    base_frame_id: base_link
+    odom_frame_id: odom
+    global_frame_id: map
+    scan_topic: scan
+    robot_model_type: "nav2_amcl::OmniMotionModel"  # the B2-W also moves sideways
+    laser_model_type: "likelihood_field"
+    laser_min_range: 0.4
+    laser_max_range: 30.0
+    max_beams: 120
+    min_particles: 500
+    max_particles: 3000
+    update_min_d: 0.1
+    update_min_a: 0.1
+    transform_tolerance: 0.3
+    tf_broadcast: true
+    set_initial_pose: false  # give it with RViz's "2D Pose Estimate"
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.3
+      allow_unknown: false
+      cost_travel_multiplier: 2.0  # keeps paths in the middle of aisles, as the training routes keep up to 0.6 m
+      use_final_approach_orientation: false
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      global_frame: map
+      robot_base_frame: base_link
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      resolution: 0.05
+      track_unknown_space: true
+      footprint: "[[0.56, 0.29], [0.56, -0.29], [-0.56, -0.29], [-0.56, 0.29]]"  # b2w.FOOTPRINT
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      obstacle_layer:  # what the lidar sees now (moved chairs, carts), so that the path goes around it
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: lidar
+        lidar:
+          topic: /rslidar_points
+          data_type: "PointCloud2"
+          # heights in the map frame: if its z = 0 is not the floor, shift them (the policy ignores returns more than
+          # 1 m above the floor, which the robot passes under)
+          min_obstacle_height: 0.08
+          max_obstacle_height: 1.0
+          marking: true
+          clearing: true
+          obstacle_max_range: 8.0
+          raytrace_max_range: 10.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.9
+        cost_scaling_factor: 3.0

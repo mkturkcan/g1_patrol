@@ -9,8 +9,10 @@ on the robot before the policy drives it. Nothing here has been tested on hardwa
 
 | Stage | Rate | Input | Output |
 |---|---|---|---|
+| Global planner (e.g. Nav2 `planner_server`) | per goal, then 1 Hz | map, localization, goal | path (`nav_msgs/Path`) |
+| Route following (`g1_patrol.route`) | per scan | path, odometry pose | 2 waypoints ahead on the path |
 | Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), latest depth frames (optical frames), odometry pose | 3 × 80 × 80 map |
-| Policy (`policy.onnx`) | per scan | `obs` (11), `height_map` (3 × 80 × 80) | 3 raw actions |
+| Policy (`policy.onnx`) | per scan | `obs` (13), `height_map` (3 × 80 × 80) | 3 raw actions |
 | Command shaping | per scan | raw actions | `(vx, vy, wz)` = `mid + half · tanh(a)` |
 | Safety shield (`g1_patrol.shield`) | per scan | returns, map, measured velocity | the command, scaled down if needed |
 | Sport-mode controller | Unitree | `Move(vx, vy, wz)` | legs and wheels |
@@ -18,11 +20,11 @@ on the robot before the policy drives it. Nothing here has been tested on hardwa
 Command ranges: `vx ∈ [−0.8, 1.5]` m/s, `vy ∈ [−0.3, 0.3]` m/s, `wz ∈ [−1.2, 1.2]` rad/s. The values used in training
 and on the robot come from one module, `src/g1_patrol/b2w.py`; `scripts/b2w/export.py` writes them to `deploy.json`.
 
-`obs` (11 values, in order):
+`obs` (13 values, in order):
 
 | Term | Size | Frame / units | Noise in training |
 |---|---|---|---|
-| goal | 2 | goal − position, rotated into the heading frame (x forward, y left), m | ±0.1 |
+| route waypoints | 4 | the points of the route 1 m and 2.5 m ahead of the robot's place on it (the goal where it ends) − position, in the heading frame (x forward, y left), m | ±0.05; bias ±0.1 per episode |
 | velocity | 3 | odometry, base frame: forward, lateral (m/s), yaw rate (rad/s) | ±0.05; bias ±0.03 per episode |
 | projected gravity | 3 | gravity unit vector in the base frame (IMU) | ±0.03 |
 | last action | 3 | the policy's previous raw output | – |
@@ -37,6 +39,14 @@ Channel 0 accumulates scans for 8 s with odometry (the simulation drifts it by 5
 and 2 are the current and the previous scan. Returns inside the crop box around the robot (its own body) and returns
 more than 1 m above the ground (what the robot passes under) are dropped; scans are thinned to the simulated lidar's
 density (32 × 360 rays).
+
+The robot's place on the route is the arc length of the closest point of the route, searched from 1 m behind to 3 m
+ahead of the previous place (so that it does not skip to a part of the route on the other side of a wall); a new path
+(the planner replanned) is searched whole once. In training the routes come from a planner on the tile's clearance map
+that keeps up to 0.6 m from structures where that costs little detour (`src/g1_patrol/tasks/navigation/nyc/routing.py`);
+in 30 % of the episodes the route is planned without small structures (chairs, carts, bins, posts), which the policy
+has to get around itself, as with a map that is out of date. A goal given without a planner is reached in a straight
+line, which is only right in open space. In a quarter of the episodes the robot starts facing a random way.
 
 Footprint used in training: 1.12 × 0.58 m with rounded corners. Structures whose bottom is higher than 1 m do not
 block the robot; drops (stairwells, a loading dock) end an episode.
@@ -87,7 +97,7 @@ A wrong base height or mount shows up as a floor that does not read 0 in the rep
    `scripts/b2w/evaluate.py --controller sysid:sysid.json` then evaluates the policy with the identified controller.
 3. **Shadow drive.** Drive the robot by hand with the node in `mode:=shadow` and `record:=drive.npz`: it computes and
    publishes the policy's commands on `~/command` without sending them. Watch them in RViz or a plot: they should
-   point towards the goal and slow down near people and in doorways.
+   point along the path and slow down near people and in doorways.
 4. **Map replay.** `scripts/b2w/replay.py --record drive.npz` rebuilds the maps offline, checks that it reproduces
    the node's commands and reports map statistics; `evaluate.py --map_stats` reports the same statistics in
    simulation. The floor should read about 0, and the share of known cells (overall, within 1.5 m) should be
@@ -112,11 +122,18 @@ scan of the actual hall turned into a twin (step 5) adds its exact layout to the
 ```bash
 PYTHONPATH=<repo>/src:<repo>/deploy python3 -m b2w.ros2_node --ros-args \
     -p config:=deploy.json -p policy:=policy.onnx -p mode:=shadow \
-    -p lidar_topic:=/rslidar_points -p odom_topic:=/odom -p goal_topic:=/goal_pose -p record:=drive.npz
+    -p lidar_topic:=/rslidar_points -p odom_topic:=/odom -p goal_topic:=/goal_pose \
+    -p planner_action:=/compute_path_to_pose -p record:=drive.npz
 ```
+
+With `planner_action`, the node asks a planner for the path to each goal and again every second; Nav2's
+`planner_server` with `map_server` and a localization (`amcl`, or slam_toolbox in localization mode) on a map of the
+lab made beforehand with the lidar is enough. Nav2's `controller_server` and `bt_navigator` must not run: this node
+takes their place. The path is brought into the odometry frame with TF (`map` -> `odom`) when it arrives. Without a
+planner the node follows any `nav_msgs/Path` published on `path_topic` (default `/plan`), or a goal in a straight line.
 
 Commands go to the sport-mode controller through `unitree_sdk2py` (`-p output:=sdk -p network_interface:=eth0`) or as
 `geometry_msgs/Twist` on `cmd_vel` for an existing bridge (`-p output:=twist`). If the robot provides its state
 estimate only as Unitree's `SportModeState`, `python3 -m b2w.sportstate_to_odom` republishes it as odometry (check
 once in which frame its velocity is expressed; see the module). The robot-side code needs Python 3,
-PyTorch, NumPy, ONNX Runtime and ROS 2 (rclpy, sensor_msgs_py), not Isaac Lab.
+PyTorch, NumPy, ONNX Runtime and ROS 2 (rclpy, sensor_msgs_py, tf2_ros; nav2_msgs with a planner), not Isaac Lab.

@@ -136,14 +136,14 @@ def test_example_twin_builds_and_is_drivable():
 
     import yaml
 
-    from g1_patrol.tasks.navigation.nyc.indoor import passable_routes
+    from g1_patrol.tasks.navigation.nyc.routing import plan_routes
     from g1_patrol.tasks.navigation.nyc.twin import build_twin
 
     spec = yaml.safe_load((Path(__file__).resolve().parents[1] / "deploy" / "b2w" / "lab_twin_example.yaml").read_text())
     for d in (0.0, 1.0):
         lay = build_twin(spec, d, np.random.default_rng(0))
         assert len(lay.paths) >= 2 and len(lay.routes) == len(spec["routes"]) == len(lay.route_headings)
-        assert passable_routes(lay, B2W_HALF[1]) == list(range(len(lay.routes)))
+        assert plan_routes(lay, B2W_HALF[1]) == list(range(len(lay.routes)))
         for points, *_ in lay.paths:
             for x, y in (points[0], points[-1]):
                 assert abs(x) > IN_L + 0.1 or abs(y) > 4.0, "people must enter and leave through the door"

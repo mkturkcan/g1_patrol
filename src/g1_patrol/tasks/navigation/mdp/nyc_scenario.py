@@ -32,6 +32,8 @@ from isaaclab.markers.config import SPHERE_MARKER_CFG
 from isaaclab.utils import configclass, replace
 from isaaclab.utils.math import quat_from_euler_xyz, yaw_quat
 
+from g1_patrol.route import path_at, path_project, polyline, remaining, waypoints
+
 from .nyc_assist import AssistMixin
 from .nyc_social import CANE, SocialMixin
 from .nyc_trash import TrashMixin
@@ -66,33 +68,6 @@ def _rotate(v: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
 def _left(u: torch.Tensor) -> torch.Tensor:
     """Unit vectors (..., 2) rotated by +90 degrees."""
     return torch.stack([-u[..., 1], u[..., 0]], dim=-1)
-
-
-def path_at(pts: torch.Tensor, cum: torch.Tensor, s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Point and unit direction at arc length ``s`` (...) of polylines with points ``pts`` (..., K, 2) and cumulative
-    lengths ``cum`` (..., K); padded points repeat the last point. ``s`` is clamped to the polyline."""
-    s = torch.minimum(s.clamp(min=0.0), cum[..., -1])
-    k = (cum[..., 1:] < s[..., None]).sum(-1).clamp(max=pts.shape[-2] - 2)  # segment containing s
-    a = torch.gather(pts, -2, k[..., None, None].expand(*k.shape, 1, 2)).squeeze(-2)
-    b = torch.gather(pts, -2, (k + 1)[..., None, None].expand(*k.shape, 1, 2)).squeeze(-2)
-    c0 = torch.gather(cum, -1, k[..., None]).squeeze(-1)
-    u = (b - a) / torch.linalg.norm(b - a, dim=-1, keepdim=True).clamp(min=1e-6)
-    return a + (s - c0)[..., None] * u, u
-
-
-def path_project(pts: torch.Tensor, cum: torch.Tensor, x: torch.Tensor, s_prev: torch.Tensor | None = None) -> torch.Tensor:
-    """Arc length of the point of the polylines closest to ``x`` (..., 2). With ``s_prev``, parts of the polyline more
-    than 1 m behind or 3 m ahead of ``s_prev`` are penalized, so that a walker does not skip to a distant part."""
-    a, b = pts[..., :-1, :], pts[..., 1:, :]
-    seg_len = cum[..., 1:] - cum[..., :-1]
-    u = (b - a) / seg_len[..., None].clamp(min=1e-6)
-    t = torch.minimum(((x[..., None, :] - a) * u).sum(-1).clamp(min=0.0), seg_len)
-    d = torch.linalg.norm(x[..., None, :] - (a + t[..., None] * u), dim=-1)
-    s_k = cum[..., :-1] + t
-    d = torch.where(seg_len > 1e-6, d, torch.full_like(d, 1e6))  # padding
-    if s_prev is not None:
-        d = d + 2.0 * ((s_prev[..., None] - 1.0 - s_k).clamp(min=0.0) + (s_k - s_prev[..., None] - 3.0).clamp(min=0.0))
-    return torch.gather(s_k, -1, d.argmin(-1, keepdim=True)).squeeze(-1)
 
 
 def box_distance(points: torch.Tensor, boxes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -197,6 +172,17 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         self.goal = torch.zeros(n, 2, device=dev)
         self.goal_b = torch.zeros(n, 2, device=dev)
         self.prev_goal_dist = torch.zeros(n, device=dev)
+        # route waypoints: the robot's planned route, its place along it and the look-ahead of the waypoints
+        self.route_pts = torch.zeros(n, 2, 2, device=dev)
+        self.route_cum = torch.zeros(n, 2, device=dev)
+        self.route_s = torch.zeros(n, device=dev)
+        if cfg.route_waypoints is not None:
+            assert cfg.fallen_name is None, "route waypoints do not go with the fallen-person task (it moves the goal)"
+            k = (self.layout.route_paths.shape[-1] - 1) // 2
+            self.route_pts = torch.zeros(n, k, 2, device=dev)
+            self.route_cum = torch.zeros(n, k, device=dev)
+            self.lookahead = torch.tensor(cfg.route_waypoints, device=dev)
+            self.goal_b = torch.zeros(n, 2 * len(cfg.route_waypoints), device=dev)
         # pedestrians
         p = self.num_peds
         self.ped_pos = torch.zeros(n, p, 2, device=dev)
@@ -277,6 +263,17 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
 
     def goal_distance(self) -> torch.Tensor:
         return torch.linalg.norm(self.goal - self.robot_pos(), dim=1)
+
+    def route_place(self) -> torch.Tensor:
+        """Arc length (n,) of the robot's place along its planned route (route waypoints)."""
+        return path_project(self.route_pts, self.route_cum, self.robot_pos(), self.route_s)
+
+    def route_distance(self) -> torch.Tensor:
+        """Distance (n,) left to the goal, by which progress is measured: with route waypoints along the planned route
+        plus how far the robot is off it, else in a straight line."""
+        if self.cfg.route_waypoints is None:
+            return self.goal_distance()
+        return remaining(self.route_pts, self.route_cum, self.robot_pos(), self.route_place())
 
     def visible_peds(self) -> torch.Tensor:
         return self.ped_mode != PARKED
@@ -587,10 +584,23 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         start = route[:, :2] + (torch.rand(n, 2, device=dev) - 0.5) * 0.6
         heading = torch.atan2(route[:, 3] - route[:, 1], route[:, 2] - route[:, 0])
         given = lay.route_headings[r, c, k, 0]
-        heading = torch.where(torch.isnan(given), heading, given) + (torch.rand(n, device=dev) - 0.5) * self.cfg.spawn_heading_noise
+        heading = torch.where(torch.isnan(given), heading, given)
+        if self.cfg.route_waypoints is not None:  # the planned route (or the coarse plan), facing along its first leg
+            coarse = torch.rand(n, device=dev) < self.cfg.coarse_route_ratio
+            rows = torch.where(coarse[:, None], lay.route_paths_coarse[r, c, k], lay.route_paths[r, c, k])
+            self.route_pts[env_ids], self.route_cum[env_ids] = polyline(rows[:, :-1].reshape(n, -1, 2))
+            leg = self.route_pts[env_ids, 1] - self.route_pts[env_ids, 0]
+            heading = torch.atan2(leg[:, 1], leg[:, 0])
+        heading = heading + (torch.rand(n, device=dev) - 0.5) * self.cfg.spawn_heading_noise
+        along = heading
+        if self.cfg.spawn_turned_ratio > 0:
+            turned = torch.rand(n, device=dev) < self.cfg.spawn_turned_ratio
+            heading = torch.where(turned, (torch.rand(n, device=dev) * 2 - 1) * math.pi, heading)
         # the jitter must not put the robot against a structure (the route ends themselves are clear)
         crowded = self.footprint_clearance(start, heading, env_ids) < 0.15
         start = torch.where(crowded[:, None], route[:, :2], start)
+        if self.cfg.spawn_turned_ratio > 0:  # facing elsewhere only where the footprint fits
+            heading = torch.where(crowded & (self.footprint_clearance(start, heading, env_ids) < 0.15), along, heading)
         self.start[env_ids], self.goal[env_ids] = start, route[:, 2:]
         pose = torch.zeros(n, 7, device=dev)
         pose[:, :2] = start + self.tile_center[env_ids]
@@ -599,7 +609,12 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         pose[:, 3:] = quat_from_euler_xyz(zeros, zeros, heading)
         self.robot.write_root_pose_to_sim_index(root_pose=pose, env_ids=env_ids)
         self.robot.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n, 6, device=dev), env_ids=env_ids)
-        self.prev_goal_dist[env_ids] = torch.linalg.norm(self.goal[env_ids] - start, dim=1)
+        if self.cfg.route_waypoints is None:
+            self.prev_goal_dist[env_ids] = torch.linalg.norm(self.goal[env_ids] - start, dim=1)
+        else:
+            pts, cum = self.route_pts[env_ids], self.route_cum[env_ids]
+            self.route_s[env_ids] = path_project(pts, cum, start, torch.zeros(n, device=dev))
+            self.prev_goal_dist[env_ids] = remaining(pts, cum, start, self.route_s[env_ids])
 
         self._spawn_pedestrians(env_ids, route)
         self._spawn_social(env_ids, route)
@@ -613,10 +628,15 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
         weight = self.path_weight[env_ids] * self.path_valid[env_ids]
         if route is not None:
             pts, cum = self.path_pts[env_ids], self.path_cum[env_ids]
-            middle = ((route[:, :2] + route[:, 2:]) / 2)[:, None].expand(-1, MAX_PATHS, 2)
+            if self.cfg.route_waypoints is None:
+                middle = ((route[:, :2] + route[:, 2:]) / 2)[:, None].expand(-1, MAX_PATHS, 2)
+                rdir = route[:, 2:] - route[:, :2]
+                rdir = rdir / torch.linalg.norm(rdir, dim=-1, keepdim=True).clamp(min=1e-3)
+            else:  # the middle of the planned route
+                rcum = self.route_cum[env_ids]
+                middle, rdir = path_at(self.route_pts[env_ids], rcum, rcum[:, -1] / 2)
+                middle = middle[:, None].expand(-1, MAX_PATHS, 2)
             _, u = path_at(pts, cum, path_project(pts, cum, middle))
-            rdir = route[:, 2:] - route[:, :2]
-            rdir = rdir / torch.linalg.norm(rdir, dim=-1, keepdim=True).clamp(min=1e-3)
             weight = weight * (1.0 + 1.5 * ((u * rdir[:, None]).sum(-1) < 0.5))
         weight = weight + 1e-6 * self.path_valid[env_ids]
         return torch.multinomial(weight.clamp(min=1e-9), count, replacement=True)
@@ -671,9 +691,15 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
 
         # walkers: most are timed to meet the robot on its route, the rest are spread over the on-tile part of their path
         meet_frac = 0.2 + 0.6 * torch.rand(n, p, device=dev)
-        meet = route[:, None, :2] + meet_frac[..., None] * (route[:, None, 2:] - route[:, None, :2])
+        if cfg.route_waypoints is None:
+            meet = route[:, None, :2] + meet_frac[..., None] * (route[:, None, 2:] - route[:, None, :2])
+            robot_eta = torch.linalg.norm(meet - route[:, None, :2], dim=-1) / cfg.robot_nominal_speed
+        else:  # along the planned route
+            rpts, rcum = self.route_pts[env_ids][:, None], self.route_cum[env_ids][:, None]
+            s_route = meet_frac * rcum[..., -1]
+            meet, _ = path_at(rpts.expand(-1, p, -1, -1), rcum.expand(-1, p, -1), s_route)
+            robot_eta = s_route / cfg.robot_nominal_speed
         s_meet = path_project(pts, cum, meet)
-        robot_eta = torch.linalg.norm(meet - route[:, None, :2], dim=-1) / cfg.robot_nominal_speed
         s0 = s_meet - self.ped_speed[env_ids] * robot_eta
         spread = torch.rand(n, p, device=dev) > cfg.encounter_ratio
         s_lo, s_hi = self._on_tile_range(pts, cum)
@@ -721,10 +747,15 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
     def _update_command(self):
         dt = self._env.step_dt
         p_robot, yaw = self.robot_pos(), self.robot_yaw()
-        rel = torch.zeros(self.num_envs, 2, device=self.device)
-        rel[:] = self.goal - p_robot
-        self.goal_b[:] = _rotate(rel, yaw)
-        self.prev_goal_dist[:] = self.goal_distance()
+        if self.cfg.route_waypoints is None:
+            rel = torch.zeros(self.num_envs, 2, device=self.device)
+            rel[:] = self.goal - p_robot
+            self.goal_b[:] = _rotate(rel, yaw)
+            self.prev_goal_dist[:] = self.goal_distance()
+        else:
+            self.route_s[:] = self.route_place()
+            self.goal_b[:] = waypoints(self.route_pts, self.route_cum, self.route_s, p_robot, yaw, self.lookahead).flatten(1)
+            self.prev_goal_dist[:] = remaining(self.route_pts, self.route_cum, p_robot, self.route_s)
         self._plan_pedestrians(dt)
         self.update_trash(dt)
         self.update_signals(dt)
@@ -939,6 +970,15 @@ class NycScenarioCommandCfg(CommandTermCfg):
     robot_spawn_height: float = 0.8
     spawn_heading_noise: float = 1.2
     """Width (rad) of the uniform noise on the robot's start heading (towards the goal, or the route's own heading)."""
+    spawn_turned_ratio: float = 0.0
+    """Share of episodes in which the robot starts facing a random direction (where its footprint fits there)."""
+    route_waypoints: tuple[float, ...] | None = None
+    """Distances (m) ahead of the robot's place along its planned route (:mod:`..nyc.routing`; the terrain must plan
+    routes) of the points the command gives, in the robot's heading frame (x, y per point; the goal where the route
+    ends), and progress is measured along the route: the robot follows a global planner's path. None: the command is
+    the goal and progress is the straight-line distance."""
+    coarse_route_ratio: float = 0.3
+    """Share of episodes (route waypoints) that follow the coarse plan, made without small structures."""
     robot_nominal_speed: float = 0.8
     """Speed (m/s) used to time pedestrian encounters with the robot."""
 

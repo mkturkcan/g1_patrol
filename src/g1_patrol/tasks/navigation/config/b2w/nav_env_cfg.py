@@ -11,8 +11,13 @@ the same pedestrian traffic and difficulty curriculum. The robot's footprint is 
 corners; structures whose bottom is higher than 1 m do not block it (it is 0.76 m tall with its lidar); driving over a
 drop (stairwell, loading dock) ends the episode.
 
+The robot follows a planned route, as it would follow a global planner's path on the real robot (e.g. Nav2's): the
+goal it is given is the points of the route 1 and 2.5 m ahead of its place along it, and its progress is measured along
+the route (:mod:`g1_patrol.route`). In 30% of the episodes the route is planned without the small structures (chairs,
+carts, bins, posts), which the robot then has to get around by itself; in a quarter it starts facing a random way.
+
 The teacher sees privileged state: the nearest pedestrians, distances to structures per direction, the street edge or
-drop and a terrain scan. The students see what the robot has, odometry and the goal, and a height map from its RoboSense
+drop and a terrain scan. The students see what the robot has, odometry and the route, and a height map from its RoboSense
 RS-Helios-5515 lidar (:class:`B2WNavLidarStudentEnvCfg`) or from the lidar and the front and rear RealSense D435i depth
 cameras, which see the ground close around the robot that the lidar cannot (:class:`B2WNavFusedStudentEnvCfg`).
 """
@@ -50,6 +55,7 @@ from g1_patrol.b2w import (
     LIDAR_MOUNT,
     LIDARS,
     MAP,
+    ROUTE_WAYPOINTS,
     depth_camera_quat,
 )
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
@@ -76,6 +82,8 @@ SCENARIO = mdp.NycScenarioCommandCfg(
     robot_spawn_height=BASE_HEIGHT,
     robot_nominal_speed=1.0,
     spawn_heading_noise=0.3,
+    spawn_turned_ratio=0.25,
+    route_waypoints=ROUTE_WAYPOINTS,
     standing_spread=0.2,
     standing_nearest_path=True,
 )
@@ -342,10 +350,17 @@ class B2WFusedStudentSceneCfg(B2WStudentSceneCfg):
 
 @configclass
 class StudentProprioCfg(ObsGroup):
-    """What the robot knows without exteroception: the goal (from localization, with 10 cm error), its velocity (from
-    the controller's odometry: noise plus a bias that stays for the episode), its tilt and the last command."""
+    """What the robot knows without exteroception: its route (waypoints from localization: an error of up to 10 cm
+    that stays for the episode plus 5 cm noise), its velocity (from the controller's odometry: noise plus a bias that
+    stays for the episode), its tilt and the last command."""
 
-    goal = ObsTerm(func=mdp.generated_commands, params={"command_name": "nyc"}, noise=Unoise(n_min=-0.1, n_max=0.1))
+    goal = ObsTerm(
+        func=mdp.generated_commands,
+        params={"command_name": "nyc"},
+        noise=PerEpisodeAdditiveBiasCfg(
+            noise_cfg=Unoise(n_min=-0.05, n_max=0.05), bias_noise_cfg=Unoise(n_min=-0.1, n_max=0.1)
+        ),
+    )
     velocity = ObsTerm(
         func=mdp.base_velocity,
         params={"action_name": "base"},
