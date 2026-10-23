@@ -132,6 +132,13 @@ lab made beforehand with the lidar is enough. Nav2's `controller_server` and `bt
 takes their place. The path is brought into the odometry frame with TF (`map` -> `odom`) when it arrives. Without a
 planner the node follows any `nav_msgs/Path` published on `path_topic` (default `/plan`), or a goal in a straight line.
 
+The TF tree Nav2 needs: `map` -> `odom` from the localization, `odom` -> `base_link` from `b2w.sportstate_to_odom`
+(or the robot's own odometry node), and the lidar's mount,
+`ros2 run tf2_ros static_transform_publisher --x 0.342 --z 0.179 --frame-id base_link --child-frame-id rslidar`
+(the frame of the Helios's point cloud; the policy node takes the mount from `deploy.json` instead). AMCL and
+slam_toolbox take a laser scan: `pointcloud_to_laserscan` on `/rslidar_points`, target frame `base_link`, heights
+−0.25 to 0.45 m (0.3 to 1.0 m above the floor).
+
 Commands go to the sport-mode controller through `unitree_sdk2py` (`-p output:=sdk -p network_interface:=eth0`) or as
 `geometry_msgs/Twist` on `cmd_vel` for an existing bridge (`-p output:=twist`). If the robot provides its state
 estimate only as Unitree's `SportModeState`, `python3 -m b2w.sportstate_to_odom` republishes it as odometry (check

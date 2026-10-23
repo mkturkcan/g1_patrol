@@ -5,7 +5,8 @@ The sport-mode controller publishes its state estimate (leg and wheel odometry f
 ``velocity`` (vx, vy, vz) and ``yaw_speed``. The navigation node expects the pose of base_link in the odometry frame
 and the twist in base_link. Whether ``velocity`` is expressed in the odometry or the body frame differs between
 firmware versions: check it once (drive straight ahead after turning by 90 degrees; in the body frame vx stays
-positive) and set ``velocity_frame`` accordingly.
+positive) and set ``velocity_frame`` accordingly. The pose is also broadcast as the TF odom -> base_link
+(``publish_tf``), which a localization (AMCL) and Nav2's planner need.
 
 Usage:
     python3 -m b2w.sportstate_to_odom --ros-args -p state_topic:=/sportmodestate -p velocity_frame:=world
@@ -14,8 +15,10 @@ Usage:
 import math
 
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from tf2_ros import TransformBroadcaster
 from unitree_go.msg import SportModeState
 
 
@@ -25,6 +28,7 @@ class SportStateToOdom(Node):
         self.velocity_frame = self.declare_parameter("velocity_frame", "world").value
         self.frame = self.declare_parameter("odom_frame", "odom").value
         self.pub = self.create_publisher(Odometry, self.declare_parameter("odom_topic", "/odom").value, 20)
+        self.tf = TransformBroadcaster(self) if self.declare_parameter("publish_tf", True).value else None
         self.create_subscription(SportModeState, self.declare_parameter("state_topic", "/sportmodestate").value, self.on_state, 20)
 
     def on_state(self, s: SportModeState):
@@ -43,6 +47,14 @@ class SportStateToOdom(Node):
         msg.twist.twist.linear.x, msg.twist.twist.linear.y = vx, vy
         msg.twist.twist.angular.z = float(s.yaw_speed)
         self.pub.publish(msg)
+        if self.tf is not None:
+            t = TransformStamped()
+            t.header = msg.header
+            t.child_frame_id = msg.child_frame_id
+            p = msg.pose.pose.position
+            t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = p.x, p.y, p.z
+            t.transform.rotation = msg.pose.pose.orientation
+            self.tf.sendTransform(t)
 
 
 def main():

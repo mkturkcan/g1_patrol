@@ -49,6 +49,7 @@ from nav_msgs.msg import Odometry
 from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool, Float32MultiArray, String
@@ -186,7 +187,7 @@ class B2WNavNode(Node):
         if not frame or not odom or frame == odom:
             return points
         try:
-            t = self.tf.lookup_transform(odom, frame, rclpy.time.Time())
+            t = self.tf.lookup_transform(odom, frame, Time())
         except Exception as e:  # noqa: BLE001 (tf2's lookup, connectivity and extrapolation errors)
             self.get_logger().warning(f"no transform {frame} -> {odom}: {e}")
             return None
@@ -219,7 +220,8 @@ class B2WNavNode(Node):
         from nav2_msgs.action import ComputePathToPose
 
         request = ComputePathToPose.Goal()
-        request.goal = self.goal_msg
+        request.goal = PoseStamped(pose=self.goal_msg.pose)
+        request.goal.header.frame_id = self.goal_msg.header.frame_id  # stamp 0: the latest transforms
         request.use_start = False  # from the robot's pose in the planner's frame (TF)
         self.planning = True
         self.planner.send_goal_async(request).add_done_callback(self.on_plan_accepted)
