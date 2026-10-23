@@ -146,6 +146,7 @@ def main(argv: list[str]) -> None:
         goal_time = torch.zeros(len(cells), device=dev)
         steps_in_episode = torch.zeros(base_env.num_envs, device=dev)
         motion = {"speed": 0.0, "backward": 0.0, "lateral": 0.0, "command_change": 0.0, "near_people": 0.0, "steps": 0}
+        contacts = {"robot_moving": 0, "pedestrian_walked_in": 0, "robot_speed": 0.0, "pedestrian_speed": 0.0}
         shield_stats = {"interventions": 0.0, "scale": 0.0, "emergencies": 0.0, "steps": 0}
         if use_shield:
             from g1_patrol.b2w import MAP, shield_settings
@@ -191,6 +192,13 @@ def main(argv: list[str]) -> None:
                     ended = tm.get_term(name) & ~assigned
                     assigned |= ended
                     counts[name] += torch.bincount(cell[ended], minlength=len(cells))
+                hit = tm.get_term("pedestrian_collision")
+                if hit.any():  # who closed the gap (recorded by the termination term)
+                    robot_v, ped_v = scenario.contact_robot_approach_speed[hit], scenario.contact_ped_approach_speed[hit]
+                    contacts["robot_moving"] += int((robot_v > 0.1).sum())
+                    contacts["pedestrian_walked_in"] += int((robot_v <= 0.1).sum())
+                    contacts["robot_speed"] += float(robot_v.clamp(min=0.0).sum())
+                    contacts["pedestrian_speed"] += float(ped_v.clamp(min=0.0).sum())
                 reached = tm.get_term("goal_reached")
                 goal_time += torch.bincount(cell[reached], weights=steps_in_episode[reached], minlength=len(cells))
                 steps_in_episode[dones.bool()] = 0
@@ -223,6 +231,12 @@ def main(argv: list[str]) -> None:
                 "mean_command_change": motion["command_change"] / max(motion["steps"], 1),
                 "time_within_0.5m_of_pedestrian": motion["near_people"] / max(motion["steps"], 1),
             },
+            "pedestrian_contacts": {
+                "robot_moving_rate": contacts["robot_moving"] / max(episodes, 1),
+                "pedestrian_walked_in_rate": contacts["pedestrian_walked_in"] / max(episodes, 1),
+                "mean_robot_approach_mps": contacts["robot_speed"] / max(contacts["robot_moving"] + contacts["pedestrian_walked_in"], 1),
+                "mean_pedestrian_approach_mps": contacts["pedestrian_speed"] / max(contacts["robot_moving"] + contacts["pedestrian_walked_in"], 1),
+            },
             "per_scenario": {
                 f"{k}/{b}": {
                     "episodes": int(sum(float(counts[o][i]) for o in outcomes)),
@@ -248,6 +262,9 @@ def main(argv: list[str]) -> None:
         with open(out, "w") as f:
             json.dump(metrics, f, indent=2)
         print(f"[INFO] {episodes} episodes: " + ", ".join(f"{o} {metrics[o + '_rate']:.3f}" for o in outcomes))
+        pc = metrics["pedestrian_contacts"]
+        print(f"[INFO] pedestrian contacts per episode: robot moving into them {pc['robot_moving_rate']:.3f}, "
+              f"walked into a (nearly) stopped robot {pc['pedestrian_walked_in_rate']:.3f}")
         print(f"[INFO] metrics -> {out}")
 
 
