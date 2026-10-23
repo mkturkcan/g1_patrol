@@ -238,6 +238,24 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
             return self.robot.data.root_lin_vel_w.torch[:, :2]
         return self._env.action_manager.get_term(self.cfg.velocity_action).velocity_w[:, :2]
 
+    def robot_yaw_rate(self) -> torch.Tensor:
+        """Yaw rate (n,) of the robot (rad/s): the simulated root's, or that of the action term that moves a kinematic
+        robot."""
+        if self.cfg.velocity_action is None:
+            return self.robot.data.root_ang_vel_w.torch[:, 2]
+        return self._env.action_manager.get_term(self.cfg.velocity_action).velocity_w[:, 2]
+
+    def footprint_speed(self) -> torch.Tensor:
+        """Speed (n,) of the fastest point of the footprint: the center's, and for a rectangular footprint what turning
+        adds at its corners."""
+        v = self.robot_vel()
+        if not self.fp_rect:
+            return torch.linalg.norm(v, dim=1)
+        v_b, w = _rotate(v, self.robot_yaw()), self.robot_yaw_rate()
+        corners = torch.tensor(_CORNERS, device=self.device) * torch.tensor(self.cfg.footprint, device=self.device)
+        swing = torch.stack([-corners[:, 1], corners[:, 0]], dim=-1)  # velocity of each corner per rad/s
+        return torch.linalg.norm(v_b[:, None] + w[:, None, None] * swing[None], dim=-1).amax(dim=-1)
+
     def robot_nearest(self, points: torch.Tensor) -> torch.Tensor:
         """Points (n, m, 2) of the footprint's core nearest to ``points`` (n, m, 2): the root, or for a rectangular
         footprint the nearest point of its inner rectangle. Gaps to the footprint are distances to these points minus
@@ -267,6 +285,13 @@ class NycScenarioCommand(TrashMixin, SocialMixin, AssistMixin, CommandTerm):
     def route_place(self) -> torch.Tensor:
         """Arc length (n,) of the robot's place along its planned route (route waypoints)."""
         return path_project(self.route_pts, self.route_cum, self.robot_pos(), self.route_s)
+
+    def route_offset(self) -> torch.Tensor:
+        """Distance (n,) of the robot from its planned route (route waypoints; else 0)."""
+        if self.cfg.route_waypoints is None:
+            return torch.zeros(self.num_envs, device=self.device)
+        on, _ = path_at(self.route_pts, self.route_cum, self.route_place())
+        return torch.linalg.norm(self.robot_pos() - on, dim=-1)
 
     def route_distance(self) -> torch.Tensor:
         """Distance (n,) left to the goal, by which progress is measured: with route waypoints along the planned route

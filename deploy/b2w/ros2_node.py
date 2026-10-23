@@ -20,7 +20,8 @@ Modes (parameter ``mode``):
 
 * ``shadow`` (default): compute and publish the commands the policy would give on ``~/command`` (and log them), but
   do not move the robot -- drive it by hand and watch what the policy would do;
-* ``drive``: send the commands, capped at ``max_speed`` (default 0.5 m/s) and filtered by the safety shield
+* ``drive``: send the commands, capped at ``max_speed`` (default 0.5 m/s; the policy was trained with caps of 0.4 to
+  1.5 m/s and is told the cap) and filtered by the safety shield
   (:mod:`g1_patrol.shield`); the robot stops if lidar or odometry are older than ``timeout`` s, and while
   ``~/stop`` (``std_msgs/Bool``) is true;
 * ``sysid``: play the command profile ``profile`` (CSV from ``scripts/b2w/sysid.py profile``) and log commands and
@@ -274,7 +275,7 @@ class B2WNavNode(Node):
                 [pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw]), "velocity": velocity, "command": command,
                 "goal": self.nav.goal if self.nav.goal is not None else np.full(2, np.nan),
                 "route": self.nav.route[0][0].numpy() if self.nav.route is not None else np.zeros((0, 2)),
-                "route_version": self.nav.route_version})
+                "route_version": self.nav.route_version, "max_speed": self.nav.max_speed})
 
     def fresh(self) -> bool:
         now = time.monotonic()

@@ -15,6 +15,8 @@ The robot follows a planned route, as it would follow a global planner's path on
 goal it is given is the points of the route 1 and 2.5 m ahead of its place along it, and its progress is measured along
 the route (:mod:`g1_patrol.route`). In 30% of the episodes the route is planned without the small structures (chairs,
 carts, bins, posts), which the robot then has to get around by itself; in a quarter it starts facing a random way.
+Each episode caps the robot's planar speed somewhere between 0.4 and 1.5 m/s, and the policy is told the cap, so that
+the speed set on the robot is one it was trained with.
 
 The teacher sees privileged state: the nearest pedestrians, distances to structures per direction, the street edge or
 drop and a terrain scan. The students see what the robot has, odometry and the route, and a height map from its RoboSense
@@ -56,6 +58,7 @@ from g1_patrol.b2w import (
     LIDARS,
     MAP,
     ROUTE_WAYPOINTS,
+    SPEED_LIMIT_RANGE,
     depth_camera_quat,
 )
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
@@ -161,8 +164,9 @@ class B2WSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    # velocity commands to the built-in controller (forward -0.8..1.5 m/s, lateral +-0.3 m/s, yaw rate +-1.2 rad/s)
-    base = mdp.BaseVelocityActionCfg(asset_name="robot", scenario_name="nyc")
+    # velocity commands to the built-in controller (forward -0.8..1.5 m/s, lateral +-0.3 m/s, yaw rate +-1.2 rad/s),
+    # planar speed capped per episode at 0.4..1.5 m/s (observed; the robot's max_speed)
+    base = mdp.BaseVelocityActionCfg(asset_name="robot", scenario_name="nyc", speed_limit_range=SPEED_LIMIT_RANGE)
     # moves the pedestrians at every physics step; takes no policy inputs
     pedestrians = mdp.PedestrianMotionActionCfg(asset_name="pedestrians", scenario_name="nyc")
 
@@ -180,6 +184,7 @@ class ObservationsCfg:
 
         goal = ObsTerm(func=mdp.generated_commands, params={"command_name": "nyc"})
         velocity = ObsTerm(func=mdp.base_velocity, params={"action_name": "base"})
+        speed_limit = ObsTerm(func=mdp.speed_limit, params={"action_name": "base"})
         pedestrians = ObsTerm(func=mdp.nearby_pedestrians, params={"command_name": "nyc", "count": 10})
         obstacles = ObsTerm(func=mdp.obstacle_sectors, params={"command_name": "nyc", "num_sectors": 72})
         street = ObsTerm(func=mdp.street_state, params={"command_name": "nyc"})
@@ -201,8 +206,8 @@ class RewardsCfg:
     # one-step events pay +-10
     progress = RewTerm(func=mdp.nyc_goal_progress, weight=2.0, params={"command_name": "nyc", "max_speed": 1.5})
     success = RewTerm(func=mdp.nyc_goal_reached, weight=100.0, params={"command_name": "nyc"})
-    pedestrian_contact = RewTerm(func=mdp.is_terminated_term, weight=-200.0, params={"term_keys": "pedestrian_collision"})
-    obstacle_contact = RewTerm(func=mdp.is_terminated_term, weight=-150.0, params={"term_keys": "obstacle_collision"})
+    pedestrian_contact = RewTerm(func=mdp.is_terminated_term, weight=-300.0, params={"term_keys": "pedestrian_collision"})
+    obstacle_contact = RewTerm(func=mdp.is_terminated_term, weight=-300.0, params={"term_keys": "obstacle_collision"})
     fall = RewTerm(func=mdp.is_terminated_term, weight=-200.0, params={"term_keys": "fall"})
     roadway = RewTerm(func=mdp.is_terminated_term, weight=-150.0, params={"term_keys": "roadway"})
     # people: keep 0.8 m between bodies, slow down near them (0.3 m/s within 0.3 m, 1.5 m/s from 2 m), avoid close
@@ -217,11 +222,16 @@ class RewardsCfg:
         func=mdp.collision_risk, weight=-4.0, params={"command_name": "nyc", "horizon": 2.0, "margin": 0.3}
     )
     pedestrian_delay = RewTerm(func=mdp.pedestrian_delay, weight=-1.0, params={"command_name": "nyc"})
-    # structures: keep 0.2 m away (doors are only 0.3 m wider than the robot) and slow down where it is tight
-    obstacle_margin = RewTerm(func=mdp.obstacle_margin, weight=-10.0, params={"command_name": "nyc", "margin": 0.2})
+    # structures: keep 0.2 m away (doors are only 0.3 m wider than the robot) and slow down where it is tight: the
+    # footprint's fastest point (turning swings the corners) at most 0.3 m/s within 0.1 m, 1.5 m/s from 1 m
+    obstacle_margin = RewTerm(func=mdp.obstacle_margin, weight=-20.0, params={"command_name": "nyc", "margin": 0.2})
     obstacle_speed = RewTerm(
-        func=mdp.obstacle_speed, weight=-2.0, params={"command_name": "nyc", "far": 0.5, "free_speed": 1.5}
+        func=mdp.obstacle_speed,
+        weight=-5.0,
+        params={"command_name": "nyc", "slow_speed": 0.3, "near": 0.1, "far": 1.0, "free_speed": 1.5, "turning": True},
     )
+    # follow the planned route (it keeps clear of structures) within 0.2 m, unless something is in the way
+    route_deviation = RewTerm(func=mdp.route_deviation, weight=-3.0, params={"command_name": "nyc", "free": 0.2})
     # streets and drops: stay away from the curb of the roadway and from the edges of stairwells and docks
     street_margin = RewTerm(func=mdp.street_margin, weight=-10.0, params={"command_name": "nyc", "margin": 0.3})
     # smooth commands; mostly forward (the lidar sees all around, but people expect the robot to face its way)
@@ -263,7 +273,7 @@ class B2WNavEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.02
         self.decimation = 5
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 40.0
+        self.episode_length_s = 60.0
         # thousands of kinematic robots and pedestrians over the tile meshes need many broad-phase pairs
         self.sim.physics.default = self.sim.physics.isaacsim_physx
         self.sim.physics.isaacsim_physx.gpu_found_lost_pairs_capacity = 2**23
@@ -352,7 +362,7 @@ class B2WFusedStudentSceneCfg(B2WStudentSceneCfg):
 class StudentProprioCfg(ObsGroup):
     """What the robot knows without exteroception: its route (waypoints from localization: an error of up to 10 cm
     that stays for the episode plus 5 cm noise), its velocity (from the controller's odometry: noise plus a bias that
-    stays for the episode), its tilt and the last command."""
+    stays for the episode), its tilt, the last command and its speed limit."""
 
     goal = ObsTerm(
         func=mdp.generated_commands,
@@ -370,6 +380,7 @@ class StudentProprioCfg(ObsGroup):
     )
     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.03, n_max=0.03))
     actions = ObsTerm(func=mdp.last_action, params={"action_name": "base"})
+    speed_limit = ObsTerm(func=mdp.speed_limit, params={"action_name": "base"})
 
     def __post_init__(self):
         self.enable_corruption = True

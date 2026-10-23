@@ -32,7 +32,8 @@ def main():
     parser.add_argument("--every", type=int, default=20)
     args = parser.parse_args()
     rec = np.load(args.record, allow_pickle=True)
-    nav = Navigator(args.config, OnnxPolicy(args.policy), guard=True)
+    max_speed = float(rec["max_speed"][0]) if "max_speed" in rec.files else None  # the node's cap, also a policy input
+    nav = Navigator(args.config, OnnxPolicy(args.policy), max_speed=max_speed, guard=True)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     maps, diffs, commands = [], [], []

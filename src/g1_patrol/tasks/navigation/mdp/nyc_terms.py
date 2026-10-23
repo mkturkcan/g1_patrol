@@ -102,13 +102,20 @@ def obstacle_speed(
     near: float = 0.1,
     far: float = 0.4,
     free_speed: float = 1.0,
+    turning: bool = False,
 ) -> torch.Tensor:
     """How much (m/s) the robot walks faster than people do in tight spaces: at most ``slow_speed`` within ``near`` of
-    a structure, rising linearly to ``free_speed`` at ``far``."""
+    a structure, rising linearly to ``free_speed`` at ``far``. With ``turning``, the speed is that of the footprint's
+    fastest point (a turning rectangle sweeps its corners)."""
     s = _scenario(env, command_name)
     allowed = slow_speed + (free_speed - slow_speed) * ((s.obstacle_clearance() - near) / (far - near)).clamp(0.0, 1.0)
-    speed = torch.linalg.norm(s.robot_vel(), dim=1)
+    speed = s.footprint_speed() if turning else torch.linalg.norm(s.robot_vel(), dim=1)
     return (speed - allowed).clamp(min=0.0)
+
+
+def route_deviation(env: ManagerBasedRLEnv, command_name: str, free: float = 0.2) -> torch.Tensor:
+    """How far (m) beyond ``free`` the robot is off its planned route (route waypoints)."""
+    return (_scenario(env, command_name).route_offset() - free).clamp(min=0.0)
 
 
 def street_margin(env: ManagerBasedRLEnv, command_name: str, margin: float = 0.3) -> torch.Tensor:

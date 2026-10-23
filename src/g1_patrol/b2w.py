@@ -60,6 +60,9 @@ POLICY_DT = 0.1
 """Navigation step (s): one lidar scan per step."""
 SUCCESS_THRESHOLD = 0.5
 """Distance (m) to the goal at which it counts as reached."""
+SPEED_LIMIT_RANGE = (0.4, 1.5)
+"""Caps (m/s) on the planar speed the policy is trained with, one per episode, which it observes: the robot's
+``max_speed`` must lie in this interval."""
 ROUTE_WAYPOINTS = (1.0, 2.5)
 """The policy steers by the points of its planned route (a global planner's path) this far (m) ahead of its place
 along it (:mod:`g1_patrol.route`)."""
@@ -90,11 +93,12 @@ def deploy_config(lidar: str = LIDAR, depth: bool = True) -> dict:
         "policy_dt": POLICY_DT,
         "success_threshold": SUCCESS_THRESHOLD,
         "route_waypoints": list(ROUTE_WAYPOINTS),
+        "speed_limit_range": list(SPEED_LIMIT_RANGE),
         "command": {"ranges": [list(r) for r in COMMAND_RANGES], "squash": "tanh"},
         "observation": {
             "obs": [f"waypoint{i}_{c}" for i in range(len(ROUTE_WAYPOINTS)) for c in "xy"]
             + ["vx", "vy", "wz", "gravity_x", "gravity_y", "gravity_z", "last_action_vx", "last_action_vy",
-               "last_action_wz"],
+               "last_action_wz", "speed_limit"],
             "map": "lidar_map (3, H, W): accumulated, current scan, previous scan",
         },
         "map": {**{k: list(v) if isinstance(v, tuple) else v for k, v in MAP.items()}, "base_height": BASE_HEIGHT,

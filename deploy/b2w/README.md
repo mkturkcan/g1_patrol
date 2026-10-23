@@ -12,15 +12,18 @@ on the robot before the policy drives it. Nothing here has been tested on hardwa
 | Global planner (e.g. Nav2 `planner_server`) | per goal, then 1 Hz | map, localization, goal | path (`nav_msgs/Path`) |
 | Route following (`g1_patrol.route`) | per scan | path, odometry pose | 2 waypoints ahead on the path |
 | Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), latest depth frames (optical frames), odometry pose | 3 × 80 × 80 map |
-| Policy (`policy.onnx`) | per scan | `obs` (13), `height_map` (3 × 80 × 80) | 3 raw actions |
-| Command shaping | per scan | raw actions | `(vx, vy, wz)` = `mid + half · tanh(a)` |
+| Policy (`policy.onnx`) | per scan | `obs` (14), `height_map` (3 × 80 × 80) | 3 raw actions |
+| Command shaping | per scan | raw actions | `(vx, vy, wz)` = `mid + half · tanh(a)`, planar speed capped at `max_speed` |
 | Safety shield (`g1_patrol.shield`) | per scan | returns, map, measured velocity | the command, scaled down if needed |
 | Sport-mode controller | Unitree | `Move(vx, vy, wz)` | legs and wheels |
 
-Command ranges: `vx ∈ [−0.8, 1.5]` m/s, `vy ∈ [−0.3, 0.3]` m/s, `wz ∈ [−1.2, 1.2]` rad/s. The values used in training
+Command ranges: `vx ∈ [−0.8, 1.5]` m/s, `vy ∈ [−0.3, 0.3]` m/s, `wz ∈ [−1.2, 1.2]` rad/s. In training every episode
+caps the planar speed at a value between 0.4 and 1.5 m/s that the policy is given as an input; on the robot that cap is
+the node's `max_speed` (keep it in that interval), so a slow first trial is a setting the policy knows, not a cut
+applied behind its back. The values used in training
 and on the robot come from one module, `src/g1_patrol/b2w.py`; `scripts/b2w/export.py` writes them to `deploy.json`.
 
-`obs` (13 values, in order):
+`obs` (14 values, in order):
 
 | Term | Size | Frame / units | Noise in training |
 |---|---|---|---|
@@ -28,6 +31,7 @@ and on the robot come from one module, `src/g1_patrol/b2w.py`; `scripts/b2w/expo
 | velocity | 3 | odometry, base frame: forward, lateral (m/s), yaw rate (rad/s) | ±0.05; bias ±0.03 per episode |
 | projected gravity | 3 | gravity unit vector in the base frame (IMU) | ±0.03 |
 | last action | 3 | the policy's previous raw output | – |
+| speed limit | 1 | the cap on the planar speed, `max_speed` (m/s) | – |
 
 `height_map` (3 × 80 × 80, 0.1 m cells, 8 × 8 m centred on the robot; rows: forward, columns: left): the highest return
 of the lidar and the depth cameras per cell relative to the ground under the robot (base height − 0.55 m), clipped to

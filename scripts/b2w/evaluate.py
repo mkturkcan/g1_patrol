@@ -13,7 +13,9 @@ Stress tests of the sim-to-real assumptions:
 * ``--shield``: the policy's commands pass through the safety shield (:mod:`g1_patrol.shield`) as on the robot, fed
   by the simulated lidar and depth cameras and the height map; reports how often it intervenes;
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
-  (``scripts/b2w/replay.py``).
+  (``scripts/b2w/replay.py``);
+* ``--speed_limit <m/s>``: the robot's speed cap (``max_speed`` on the robot) fixed at this value instead of drawn
+  per episode.
 
 Usage:
     python scripts/b2w/evaluate.py --task G1Patrol-B2W-Navigate-Lidar --checkpoint <model.pt> --num_envs 1024 \\
@@ -93,6 +95,7 @@ def main(argv: list[str]) -> None:
     want_map_stats = _extra(argv, "map_stats", flag=True)
     camera_failure = _extra(argv, "camera_failure", flag=True)
     use_shield = _extra(argv, "shield", flag=True)
+    speed_limit = _extra(argv, "speed_limit")
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
@@ -107,6 +110,8 @@ def main(argv: list[str]) -> None:
             num_rows=6, variants_per_kind=4, kinds=["twin"], route_half_width=FOOTPRINT[1], twin=os.path.abspath(twin))
     if controller != "nominal":
         _apply_controller(env_cfg.actions.base, controller)
+    if speed_limit is not None:
+        env_cfg.actions.base.speed_limit_range = (float(speed_limit), float(speed_limit))
     group = next((g for g in ("lidar_map", "height_map") if hasattr(env_cfg.observations, g)), None)
     if group is not None:
         params = getattr(getattr(env_cfg.observations, group), group).params
@@ -222,6 +227,7 @@ def main(argv: list[str]) -> None:
             "camera_failure": camera_failure,
             "shield": use_shield,
             "odometry_drift": odometry_drift,
+            "speed_limit": speed_limit,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
             "mean_time_to_goal_s": float(goal_time.sum() / counts["goal_reached"].sum().clamp(min=1)) * base_env.step_dt,
@@ -258,7 +264,8 @@ def main(argv: list[str]) -> None:
             metrics["map_stats"] = map_statistics(torch.cat(maps).numpy(), MAP["unknown_value"], MAP["resolution"])
         out = args_cli.out or os.path.join(os.path.dirname(resume_path), "eval",
                                            f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}"
-                                           f"{'_no_cameras' if camera_failure else ''}{'_shield' if use_shield else ''}.json")
+                                           f"{'_no_cameras' if camera_failure else ''}{'_shield' if use_shield else ''}"
+                                           f"{f'_limit{speed_limit}' if speed_limit is not None else ''}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w") as f:
             json.dump(metrics, f, indent=2)

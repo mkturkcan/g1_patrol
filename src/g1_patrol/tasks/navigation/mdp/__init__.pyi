@@ -8,6 +8,7 @@ __all__ = [
     "base_command",
     "base_fall",
     "base_velocity",
+    "speed_limit",
     "detected_litter",
     "known_places",
     "tracked_people",
@@ -62,6 +63,7 @@ __all__ = [
     "obstacle_margin",
     "obstacle_speed",
     "obstacle_sectors",
+    "route_deviation",
     "pedestrian_delay",
     "collision_risk",
     "personal_space",
@@ -84,7 +86,7 @@ __all__ = [
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .actions import WalkerPolicyActionCfg
-from .base_velocity import BaseVelocityActionCfg, base_command, base_fall, base_velocity
+from .base_velocity import BaseVelocityActionCfg, base_command, base_fall, base_velocity, speed_limit
 from .civic_perception import detected_litter, known_places, tracked_people
 from .civic_terms import (
     approach_threat,
@@ -139,6 +141,7 @@ from .nyc_terms import (
     obstacle_speed,
     obstacle_sectors,
     pedestrian_delay,
+    route_deviation,
     collision_risk,
     personal_space,
     social_speed,

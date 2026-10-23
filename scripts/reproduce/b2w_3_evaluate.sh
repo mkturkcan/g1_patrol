@@ -1,8 +1,9 @@
 #!/bin/bash
 # B2-W stage 3: evaluations on the lab mixture -- the lab teacher; the fused student with the nominal controller, with
-# controller stress tests, with the safety shield in the loop, with failed depth cameras and a degraded map; the lidar
-# student -- and the export of both students for the robot (deploy/b2w/release: policy.onnx, deploy.json, samples.npz;
-# deploy/b2w/release_lidar). One GPU (B2W_DEVICE, default cuda:0).
+# controller stress tests, with the safety shield in the loop (also at the robot's first speed caps, 0.5 and 1 m/s),
+# with failed depth cameras and a degraded map; the lidar student -- and the export of both students for the robot
+# (deploy/b2w/release: policy.onnx, deploy.json, samples.npz; deploy/b2w/release_lidar). One GPU (B2W_DEVICE, default
+# cuda:0).
 source scripts/reproduce/env.sh
 DEVICE=${B2W_DEVICE:-cuda:0}
 STEPS=${STEPS:-3000}
@@ -18,6 +19,10 @@ done
 for controller in nominal laggy; do
     "${EVAL[@]}" --task G1Patrol-B2W-Navigate-Lab-Fused --checkpoint "$FUSED" --controller "$controller" --shield \
         > "$OUT/b2w_3_eval_fused_${controller}_shield.log" 2>&1
+done
+for limit in 0.5 1.0; do  # the speed caps of the first trials on the robot (max_speed)
+    "${EVAL[@]}" --task G1Patrol-B2W-Navigate-Lab-Fused --checkpoint "$FUSED" --speed_limit "$limit" --shield \
+        > "$OUT/b2w_3_eval_fused_limit${limit}_shield.log" 2>&1
 done
 "${EVAL[@]}" --task G1Patrol-B2W-Navigate-Lab-Fused --checkpoint "$FUSED" --camera_failure > "$OUT/b2w_3_eval_fused_no_cameras.log" 2>&1
 "${EVAL[@]}" --task G1Patrol-B2W-Navigate-Lab-Fused --checkpoint "$FUSED" --lidar_dropout 0.2 --odometry_drift 0.01 \

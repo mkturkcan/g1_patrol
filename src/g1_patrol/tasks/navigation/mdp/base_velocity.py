@@ -216,6 +216,8 @@ class BaseVelocityAction(ActionTerm):
         self.accel[ids] = _uniform([a[0] for a in cfg.accel_range], [a[1] for a in cfg.accel_range], (m, 3), dev)
         self.drift[ids] = _uniform(-cfg.drift_max, cfg.drift_max, (m,), dev)
         self.noise_std[ids] = _uniform([0.0] * 3, cfg.noise_max, (m, 3), dev)
+        if cfg.speed_limit_range is not None:
+            self.speed_limit[ids] = _uniform(*cfg.speed_limit_range, (m,), dev)
 
     def _ground(self, ids: torch.Tensor | slice = slice(None)) -> torch.Tensor:
         """Ground height (m, 4) under the wheels."""
@@ -269,6 +271,10 @@ class BaseVelocityActionCfg(ActionTermCfg):
     """Velocity noise (m/s, m/s, rad/s; standard deviation) drawn up to these values, per axis."""
     noise_time: float = CONTROLLER["noise_time"]
     """Correlation time (s) of the velocity noise."""
+    speed_limit_range: tuple[float, float] | None = None
+    """Cap (m/s) on the commanded planar speed, drawn per episode from this interval and observed by the policy
+    (:func:`speed_limit`), so that a cap set on the robot (slow first trials) is one it was trained with. None: no cap
+    (:attr:`BaseVelocityAction.speed_limit` can still be set by hand)."""
 
 
 """
@@ -284,6 +290,11 @@ def base_velocity(env: ManagerBasedRLEnv, action_name: str = "base") -> torch.Te
 def base_command(env: ManagerBasedRLEnv, action_name: str = "base") -> torch.Tensor:
     """Velocity command of the current step."""
     return env.action_manager.get_term(action_name).command
+
+
+def speed_limit(env: ManagerBasedRLEnv, action_name: str = "base", max_value: float = 1.5) -> torch.Tensor:
+    """The cap (m/s) on the commanded planar speed, (n, 1); no cap reads as ``max_value``."""
+    return env.action_manager.get_term(action_name).speed_limit.clamp(max=max_value)[:, None]
 
 
 def base_fall(env: ManagerBasedRLEnv, action_name: str = "base") -> torch.Tensor:

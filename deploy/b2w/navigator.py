@@ -54,7 +54,7 @@ def _euler_rotation(rpy) -> np.ndarray:
 
 
 class OnnxPolicy:
-    """The exported student (``policy.onnx``: inputs ``obs`` (1, 13) and the map (1, 3, H, W); output ``actions``)."""
+    """The exported student (``policy.onnx``: inputs ``obs`` (1, 14) and the map (1, 3, H, W); output ``actions``)."""
 
     def __init__(self, path: str | Path, providers: list[str] | None = None, threads: int = 2):
         import onnxruntime as ort
@@ -94,6 +94,9 @@ class Navigator:
         self.cameras = {name: (np.asarray(c["pos"], dtype=np.float64), _euler_rotation(c["rpy"]), c)
                         for name, c in self.cfg.get("depth_cameras", {}).items()}
         self.max_speed = max_speed
+        # the cap is also an input of the policy, trained with caps in speed_limit_range (none: the highest)
+        lo, hi = self.cfg["speed_limit_range"]
+        self.speed_limit = float(np.clip(hi if max_speed is None else max_speed, lo, hi))
         self.guard = guard
         self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}))
         self.goal: np.ndarray | None = None
@@ -190,9 +193,10 @@ class Navigator:
 
     def proprio(self, pose: Pose, velocity_b: np.ndarray) -> np.ndarray:
         """Route waypoints (heading frame), velocity (body frame: forward, lateral, yaw rate), projected gravity, last
-        action."""
+        action, speed limit."""
         gravity_b = pose.rotation().T @ np.array([0.0, 0.0, -1.0])
-        return np.concatenate([self.follow(pose), np.asarray(velocity_b, dtype=np.float64), gravity_b, self.last_action])
+        return np.concatenate([self.follow(pose), np.asarray(velocity_b, dtype=np.float64), gravity_b, self.last_action,
+                               [self.speed_limit]])
 
     # -- commands -----------------------------------------------------------------------------------------------------
 
