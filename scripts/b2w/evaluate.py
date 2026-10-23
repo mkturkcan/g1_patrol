@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from isaaclab.app import launch_simulation
 
-from isaaclab_rl.entrypoints.common import close_env, create_isaaclab_env
+from isaaclab_rl.entrypoints.common import apply_env_overrides, close_env, create_isaaclab_env
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, check_rsl_rl_version, create_rsl_rl_runner, handle_deprecated_rsl_rl_cfg
 
 from isaaclab_tasks.utils import resolve_task_config
@@ -120,6 +120,7 @@ def main(argv: list[str]) -> None:
         from g1_patrol.tasks.navigation.nyc.kinds import ALL_KINDS
 
         agent_cfg = handle_deprecated_rsl_rl_cfg(cli_args.update_rsl_rl_cfg(agent_cfg, args_cli), check_rsl_rl_version())
+        apply_env_overrides(args_cli, env_cfg)  # --num_envs, --device
         env_cfg.seed = agent_cfg.seed
         log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
         resume_path = resolve_checkpoint(args_cli, agent_cfg, log_root_path)
