@@ -1,0 +1,142 @@
+{
+  "robot": "unitree_b2w",
+  "policy_dt": 0.1,
+  "success_threshold": 0.5,
+  "route_waypoints": [
+    1.0,
+    2.5
+  ],
+  "speed_limit_range": [
+    0.4,
+    1.5
+  ],
+  "command": {
+    "ranges": [
+      [
+        -0.8,
+        1.5
+      ],
+      [
+        -0.3,
+        0.3
+      ],
+      [
+        -1.2,
+        1.2
+      ]
+    ],
+    "squash": "tanh"
+  },
+  "observation": {
+    "obs": [
+      "waypoint0_x",
+      "waypoint0_y",
+      "waypoint1_x",
+      "waypoint1_y",
+      "vx",
+      "vy",
+      "wz",
+      "gravity_x",
+      "gravity_y",
+      "gravity_z",
+      "last_action_vx",
+      "last_action_vy",
+      "last_action_wz",
+      "speed_limit"
+    ],
+    "map": "lidar_map (3, H, W): accumulated, current scan, previous scan"
+  },
+  "map": {
+    "size": 8.0,
+    "resolution": 0.1,
+    "memory_s": 8.0,
+    "max_range": 20.0,
+    "z_range": [
+      -0.6,
+      1.0
+    ],
+    "unknown_value": -1.0,
+    "drop_above": 1.0,
+    "base_height": 0.55,
+    "crop_box": [
+      [
+        0.0,
+        0.0,
+        -0.15
+      ],
+      [
+        0.6,
+        0.33,
+        0.45
+      ]
+    ]
+  },
+  "lidar": {
+    "model": "helios_5515",
+    "channels": 32,
+    "vertical_fov": [
+      -55.0,
+      15.0
+    ],
+    "max_range": 30.0,
+    "mount": {
+      "pos": [
+        0.34218,
+        0.0,
+        0.17851
+      ],
+      "rpy": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "max_points": 11520
+  },
+  "shield": {
+    "half_length": 0.56,
+    "half_width": 0.29,
+    "corner_radius": 0.12,
+    "ground_z": -0.55
+  },
+  "depth_cameras": {
+    "front": {
+      "pos": [
+        0.42161,
+        0.025,
+        0.061851
+      ],
+      "rpy": [
+        -2.3562,
+        0.0,
+        -1.5708
+      ],
+      "hfov": 87.0,
+      "vfov": 58.0,
+      "width": 64,
+      "height": 40,
+      "min_range": 0.3,
+      "max_range": 4.0
+    },
+    "rear": {
+      "pos": [
+        -0.42244,
+        -0.025,
+        0.038026
+      ],
+      "rpy": [
+        -2.3562,
+        0.0,
+        1.5708
+      ],
+      "hfov": 87.0,
+      "vfov": 58.0,
+      "width": 64,
+      "height": 40,
+      "min_range": 0.3,
+      "max_range": 4.0
+    }
+  },
+  "task": "G1Patrol-B2W-Navigate-Lab-Fused",
+  "checkpoint": "/mnt/nvme/mkt2126/isaacsimtests/g1_patrol_b2w/logs/rsl_rl/b2w_nav_lab_fused_student/release/model_1499.pt"
+}

@@ -5,6 +5,10 @@ randomized model of that controller, a simulated RoboSense RS-Helios-5515 lidar 
 cameras. This note specifies the interface and a sequence of inexpensive checks that test the simulation's assumptions
 on the robot before the policy drives it. Nothing here has been tested on hardware yet.
 
+The released policies: `deploy/b2w/release` (lidar and depth cameras) and `deploy/b2w/release_lidar` (lidar only),
+each with `policy.onnx` and its weights `policy.onnx.data`, `deploy.json` (the settings of the robot-side code) and
+`samples.npz` (inputs and outputs from simulation, for `scripts/b2w/benchmark.py --check`); copy the whole directory.
+
 ## Interface
 
 | Stage | Rate | Input | Output |
@@ -63,18 +67,58 @@ sees comes within a margin: it keeps the commanded arc for 0.35 s (sensing, poli
 0.8 m/s² (allowing 12 % more speed than commanded and 8 cm of drift per meter); the footprint is swept along this
 stopping path and the command is scaled down until it comes to rest in time. Margins: 0.10 m to obstacles, 0.25 m to
 drops; to tall things (people, but also machines and walls) from 0.10 m below 0.25 m/s to 0.45 m above 0.75 m/s, so
-doors are passed slowly and people with room; returns that moved since the previous scan are assumed to walk at the
-robot at 1.4 m/s while it closes in on them. The closing speed towards a tall thing is held to 0.25 m/s within 0.8 m.
-Moving away is never limited; if the robot's own momentum already breaches, the command is zero. A person detector on
-the cameras' color images can mark people (`person`), who then keep 0.45 m at any speed.
+doors are passed slowly and people with room. Returns where the current scan sees something tall and the previous one
+saw floor, in a cell that held nothing tall for the last second, are taken to be people walking at the robot at
+1.4 m/s while it closes in on them (the second excludes the edges of furniture, which flicker between floor and tall
+from scan to scan as the lidar's rays fall differently). The closing speed towards a tall thing is held to 0.25 m/s
+within 0.8 m. Moving away is never limited; if the robot's own momentum already breaches, the command is zero. A
+person detector on the cameras' color images can mark people (`person`), who then keep 0.45 m at any speed.
 
-In simulation (`scripts/b2w/evaluate.py --shield`, fed by the simulated lidar, depth cameras and map), driving at full
-speed into everything for 30 s in 128 environments, the robot hit no structure and was still moving (more than
-0.1 m/s) at one of 21 pedestrian contacts; the other 20 were pedestrians walking into the stopped robot. Tests
+The shield's deceleration and latency must be at least as pessimistic as the identified controller (`sysid.py fit`;
+`scripts/b2w/evaluate.py --shield --shield_set latency=...,brake=...` evaluates other values). It does not see low
+objects beside the robot that neither the lidar nor the cameras cover, except as remembered by the map. Tests
 (`tests/test_shield.py`) cover doors, walls, drops, a person walking at the robot and closed loops through the slowest
-controller of the training ranges. Its deceleration and latency must be at least as pessimistic as the identified
-controller (`sysid.py fit`); the shield does not see low objects beside the robot that neither the lidar nor the cameras
-cover, except as remembered by the map. It does not replace the remote's stop: keep it in hand.
+controller of the training ranges. It does not replace the remote's stop: keep it in hand.
+
+## Results in simulation
+
+Evaluations of the release (`scripts/reproduce/b2w_3_evaluate.sh`; `scripts/b2w/results_table.py` prints the tables)
+on the lab mixture: half the tiles are sections of the lab hall, half street and indoor tiles, robots spread over all
+ten difficulty levels with up to 20 pedestrians, 1,024 robots for 300 s. Speed caps are drawn per episode from
+0.4–1.5 m/s unless fixed; with the shield, the speed cap is applied before the shield, as on the robot. A pedestrian
+contact counts as the robot's if it was moving towards the person at more than 0.1 m/s.
+
+<!-- table:b2w -->
+| Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| Lab teacher (privileged) | 19,239 | 68.6 | 78.7 | 14.3 | 11.5 | 3.9 | 1.3 | 0.54 | – |
+| Fused student (lidar + 2 depth cameras) | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
+| Lidar-only student | 19,442 | 69.5 | 81.1 | 8.9 | 12.3 | 7.7 | 1.5 | 0.52 | – |
+| Fused, shield | 13,322 | 73.7 | 83.2 | 2.7 | 1.5 | 14.5 | 7.5 | 0.37 | 11.5 |
+| Fused, shield, cap 0.5 m/s | 11,685 | 70.2 | 81.7 | 2.4 | 2.2 | 17.4 | 7.8 | 0.31 | 9.5 |
+| Fused, shield, cap 1.0 m/s | 14,502 | 74.8 | 83.8 | 2.5 | 1.3 | 14.5 | 6.8 | 0.40 | 12.8 |
+<!-- /table:b2w -->
+
+<!-- table:b2w_stress -->
+| Fused student | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| Nominal controller | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
+| Laggy controller (0.16-0.25 s latency) | 19,679 | 69.3 | 79.4 | 9.8 | 12.0 | 7.8 | 1.2 | 0.52 | – |
+| Sluggish controller (2x response time, 1/2 acceleration) | 19,531 | 69.0 | 79.0 | 9.5 | 12.9 | 7.3 | 1.2 | 0.51 | – |
+| Weak controller (70-80 % of the command) | 16,256 | 69.0 | 79.7 | 9.1 | 10.8 | 9.4 | 1.7 | 0.43 | – |
+| Drifting controller (2x yaw drift) | 19,741 | 69.8 | 79.7 | 9.5 | 11.4 | 7.9 | 1.3 | 0.52 | – |
+| Depth cameras failed | 19,168 | 70.1 | 80.2 | 9.7 | 10.8 | 7.9 | 1.5 | 0.51 | – |
+| Degraded lidar map (20 % dropout, odometry drift) | 19,741 | 69.4 | 79.6 | 10.0 | 11.9 | 7.5 | 1.2 | 0.52 | – |
+| Laggy controller, shield | 13,553 | 73.0 | 82.7 | 3.0 | 2.1 | 15.1 | 6.8 | 0.37 | 11.9 |
+<!-- /table:b2w_stress -->
+
+Most of the remaining pedestrian contacts with the shield are simulated pedestrians walking into a robot that has
+stopped (on average the robot approached at 0.03 m/s, the pedestrian at 0.75 m/s); a quarter of the simulated
+pedestrians (10 % at the easiest level, 40 % at the hardest) are distracted and give way only at the last moment.
+With a perfect person detector (`evaluate.py --person_oracle`: people keep 0.45 m), contacts in which the robot was
+moving fall from about 2 % to 0.55 % of the episodes at 0.5 m/s. The lidar-only student is as good as the fused one
+in simulation; the cameras see the ground close around the robot that the lidar misses (low obstacles beside it),
+which the simulated tiles rarely test.
 
 ## Values to check on the robot
 

@@ -8,7 +8,8 @@ York City street scenarios (sidewalks, sidewalk sheds, crosswalks, construction 
 plazas, each at ten difficulty levels) is populated by pedestrians that follow a social-force model. Control is
 hierarchical: a locomotion policy tracks velocity commands at 50 Hz, and a navigation policy issues these commands at
 10 Hz. A navigation teacher with privileged state is trained with PPO and distilled into student policies that
-observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). All
+observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). The same
+pipeline trains navigation for a Unitree B2-W wheeled quadruped in an indoor lab ([Unitree B2-W](#unitree-b2-w)). All
 experiments are in simulation, using Isaac Lab 3.0 and Isaac Sim 6.1.
 
 The project is part of work toward a civic robot system for the applications of the
@@ -291,6 +292,69 @@ and the camera student 3.2 points of success. Faster pedestrians, fewer of whom 
 contacts from 8–16% to 19–33%. The degraded robot (payload, weak motors, latency, friction 0.3) costs 3–5 points of
 success, and falls rise to 1–2%.
 
+## Unitree B2-W
+
+The tiles, pedestrians and training pipeline also train navigation for a second robot, Unitree's B2-W wheeled
+quadruped, for an indoor lab. The policies have not been tested on the robot yet; `deploy/b2w/README.md` describes
+the robot-side code and a sequence of checks before the policy drives it.
+
+**Robot model.** The B2-W is driven through Unitree's sport-mode controller, which takes body velocity commands
+(forward −0.8 to 1.5 m/s, lateral ±0.3 m/s, yaw rate ±1.2 rad/s). It is simulated as a kinematic body with a
+1.12 × 0.58 m footprint that follows the commands through a model of the controller drawn per episode: latency
+40–160 ms, a first-order response, acceleration bounds, gain errors, deadband, yaw drift and velocity noise
+(`g1_patrol.controller_model`; `scripts/b2w/sysid.py` fits the same model to logs of the robot). Each episode caps
+the planar speed at a value between 0.4 and 1.5 m/s that the policy observes; on the robot it is the operator's speed
+setting. A cap the policy was not trained with changes its turns, since it keeps the yaw rate: in lab, lobby and
+corridor tiles without pedestrians, a route-following teacher trained without caps touched structures in 42% of the
+episodes at a 0.6 m/s cap and in 29% without one.
+
+**Tiles and routes.** Besides the street tiles, the robot trains on six procedural indoor tile types (labs,
+corridors, doorways between rooms, offices, warehouses with a loading dock, lobbies with a stairwell) and on
+sections of the lab hall it is deployed in, modeled on photographs (`nyc/makerlab.py`). Every route is planned on
+the tile's clearance map for the robot's width, keeping up to 0.6 m from structures where this costs little detour
+(`nyc/routing.py`); in 30% of the episodes the plan ignores small structures (chairs, carts, bins), which the robot
+then avoids by itself. The policy observes the points of the route 1.0 and 2.5 m ahead of its position on it and is
+rewarded for progress along the route, as it would follow the path of a global planner (Nav2) on the robot. With the
+goal as its only target and progress measured in a straight line, the teacher reached 59% of the goals and failed
+where the route detours through doors; with route waypoints it reached 63%, with gains on every indoor tile type
+(doorways 48% → 64%, lobbies 31% → 44%).
+
+**Policies.** A privileged teacher (pedestrian states, distances to structures in 72 directions, a terrain scan) is
+trained with PPO for 3,000 iterations on the street and indoor tiles and fine-tuned for 1,000 iterations on a
+mixture in which half the tiles are sections of the lab hall. Two students are distilled from it with DAgger: one
+observes a height map built from a RoboSense RS-Helios-5515 lidar and the front and rear RealSense D435i depth
+cameras, the other the lidar alone. Besides the height map (3 × 80 × 80 cells of 0.1 m: accumulated over 8 s,
+current scan, previous scan), they observe the route waypoints, odometry, gravity, the previous command and the
+speed cap. Rewards slow the robot near structures (the fastest point of the footprint, which turning swings, at most
+0.3 m/s within 0.1 m and 1.5 m/s from 1 m) and keep it within 0.2 m of its route.
+
+**Safety shield.** On the robot, every command passes a shield that is independent of the policy
+(`g1_patrol.shield`): it is scaled down until the robot, executing it for 0.35 s and then braking at 0.8 m/s², stops
+before any sensor return comes within a margin (0.1 m, growing to 0.45 m around tall things at speed); returns that
+appear in open floor are assumed to be people approaching at 1.4 m/s.
+
+*Table B1. B2-W policies on the lab mixture (half lab-hall tiles), all difficulty levels, 1,024 robots for 300 s.
+Speed caps are drawn per episode unless fixed. A pedestrian contact counts as the robot's if it was moving towards
+the person at more than 0.1 m/s. Shield stops: steps at which the shield set the command to zero.*
+
+<!-- table:b2w -->
+| Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| Lab teacher (privileged) | 19,239 | 68.6 | 78.7 | 14.3 | 11.5 | 3.9 | 1.3 | 0.54 | – |
+| Fused student (lidar + 2 depth cameras) | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
+| Lidar-only student | 19,442 | 69.5 | 81.1 | 8.9 | 12.3 | 7.7 | 1.5 | 0.52 | – |
+| Fused, shield | 13,322 | 73.7 | 83.2 | 2.7 | 1.5 | 14.5 | 7.5 | 0.37 | 11.5 |
+| Fused, shield, cap 0.5 m/s | 11,685 | 70.2 | 81.7 | 2.4 | 2.2 | 17.4 | 7.8 | 0.31 | 9.5 |
+| Fused, shield, cap 1.0 m/s | 14,502 | 74.8 | 83.8 | 2.5 | 1.3 | 14.5 | 6.8 | 0.40 | 12.8 |
+<!-- /table:b2w -->
+
+With the shield, structure contacts fall from 9.5% to 2.4–2.7% of the episodes and contacts in which the robot moves
+into a pedestrian from 11.2% to 1.3–2.2%; most remaining pedestrian contacts are simulated pedestrians, a quarter of
+whom are distracted, walking into the stopped robot. Controller latency, slower response, weaker tracking and drift,
+failed depth cameras and a degraded lidar map each change the goal rate by at most 1.1 points
+(`deploy/b2w/README.md`). The release is reproduced by `bash scripts/reproduce/b2w.sh` (about 17 h on one GPU,
+the lidar-only student on a second).
+
 ## Installation
 
 Requirements: Linux, an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0`).
@@ -321,7 +385,9 @@ bash scripts/reproduce/2_teacher.sh            # teacher, from scratch (PhysX)
 bash scripts/reproduce/3_students.sh           # lidar and camera students, distilled from the teacher
 bash scripts/reproduce/4_evaluate.sh           # evaluations, logs/reproduce/eval/*.json
 bash scripts/reproduce/5_ablations.sh          # optional: locomotion ablations (Tables 7 and 8)
+bash scripts/reproduce/b2w.sh                  # B2-W: teacher, lab teacher, students, evaluations, export (Table B1)
 python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
+python scripts/b2w/results_table.py --write    # writes the B2-W tables into README.md and deploy/b2w/README.md
 ```
 
 Every stage starts from scratch (the students from the stage-2 teacher), with all settings in the task
@@ -377,6 +443,10 @@ python scripts/demo/nyc_demo.py --task G1Patrol-Navigate-NYC --checkpoint <model
 | `G1Patrol-Navigate-NYC` | Privileged navigation teacher (Stage 2) |
 | `G1Patrol-Navigate-NYC-Lidar` | MID-360 lidar student (Stage 3) |
 | `G1Patrol-Navigate-NYC-Camera` | D435i depth-camera student (Stage 3) |
+| `G1Patrol-B2W-Navigate` | B2-W privileged teacher on street and indoor tiles |
+| `G1Patrol-B2W-Navigate-Lab` | B2-W teacher fine-tuned on the lab mixture |
+| `G1Patrol-B2W-Navigate-Lab-Fused` | B2-W student: RS-Helios-5515 lidar and two D435i depth cameras (released) |
+| `G1Patrol-B2W-Navigate-Lab-Lidar` | B2-W student: lidar only |
 | `G1Patrol-Walk-Flat` | Flat-ground velocity tracking |
 | `G1Patrol-Walk-Street` | Earlier street-terrain walker without actuator limits and gait rewards |
 | `G1Patrol-Navigate-Crowd` | Earlier flat-arena crowd navigation task with a single-plane lidar |
@@ -389,9 +459,14 @@ src/g1_patrol/
 └── tasks/
     ├── locomotion/              walking tasks: terrains, gait and posture rewards, configurations
     └── navigation/
-        ├── nyc/                 street tiles (tiles.py), terrain generator and importer
+        ├── nyc/                 street tiles (tiles.py), indoor and lab tiles (indoor.py, makerlab.py), route
+        │                        planning (routing.py), terrain generator and importer
         ├── mdp/                 scenario command, observations, rewards, terminations, sensor processing
-        └── config/g1/           NYC teacher and student configurations, PPO and distillation settings
+        ├── config/g1/           NYC teacher and student configurations, PPO and distillation settings
+        └── config/b2w/          B2-W teacher and student configurations
+src/g1_patrol/b2w.py             B2-W geometry, sensors, command ranges, controller ranges (shared with the robot)
+src/g1_patrol/{route,heightmap,shield,controller_model}.py
+                                 route following, height map, safety shield, controller model (run on the robot too)
 scripts/
 ├── evaluate.py                  locomotion evaluation (tracking, posture, falls, pushes)
 ├── evaluate_drift.py            drift of the locomotion policy under constant straight commands
@@ -402,10 +477,12 @@ scripts/
 ├── stress_walker.py             locomotion evaluation at or beyond the edges of the training randomization
 ├── stress_nav.py                navigation evaluation with degraded sensors, pedestrians or robot
 ├── reproduce/                   training and evaluation of the released policies (seeds, schedules, overrides)
+├── b2w/                         B2-W evaluation, export, controller identification, replay, benchmark
 ├── demo/                        RTX rendering with animated pedestrians
 └── figures/                     result tables (build_results.py), diagrams and overview video
 docs/                            project page (GitHub Pages)
 DEPLOYMENT.md                    policy interfaces, rates, frames and the assumptions of the simulation
+deploy/b2w/                      B2-W robot-side code (ROS 2 node, navigator), released policies, Nav2 settings
 tests/                           registration, tile capacity, passability and walkable-area tests
 ```
 
