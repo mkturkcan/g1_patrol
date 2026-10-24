@@ -15,7 +15,9 @@ Stress tests of the sim-to-real assumptions:
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
   (``scripts/b2w/replay.py``);
 * ``--speed_limit <m/s>``: the robot's speed cap (``max_speed`` on the robot) fixed at this value instead of drawn
-  per episode.
+  per episode;
+* ``--shield_set key=value,...``: shield settings other than the defaults (:class:`g1_patrol.shield.ShieldCfg`), e.g.
+  ``latency=0.25,brake=1.2`` for a controller identified on the robot.
 
 Usage:
     python scripts/b2w/evaluate.py --task G1Patrol-B2W-Navigate-Lidar --checkpoint <model.pt> --num_envs 1024 \\
@@ -96,6 +98,8 @@ def main(argv: list[str]) -> None:
     camera_failure = _extra(argv, "camera_failure", flag=True)
     use_shield = _extra(argv, "shield", flag=True)
     speed_limit = _extra(argv, "speed_limit")
+    shield_set = _extra(argv, "shield_set")
+    person_oracle = _extra(argv, "person_oracle", flag=True)
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
@@ -159,7 +163,11 @@ def main(argv: list[str]) -> None:
             from g1_patrol.heightmap import rotate_inverse
             from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
 
-            shield_cfg = ShieldCfg(**shield_settings())
+            overrides = dict(kv.split("=") for kv in shield_set.split(",")) if shield_set else {}
+            shield_cfg = ShieldCfg(**shield_settings(), **{k: type(getattr(ShieldCfg, k))(v) for k, v in overrides.items()})
+            if group is not None:  # the student's height map (its history tells what moved)
+                om = base_env.observation_manager
+                height_map_term = om._group_obs_term_cfgs[group][om.active_terms[group].index(group)].func
             sensors = [base_env.scene.sensors[name] for name in ("lidar", "front_depth", "rear_depth") if name in base_env.scene.sensors]
 
             def shielded(actions):
@@ -171,12 +179,25 @@ def main(argv: list[str]) -> None:
                 local = torch.where((hits.abs() > 1e6).any(dim=-1, keepdim=True), torch.full_like(local, float("inf")), local)
                 moving = None
                 if group is not None:
-                    moving = moving_returns(local, obs[group], MAP["resolution"], shield_cfg.ground_z)
+                    moving = moving_returns(local, obs[group], MAP["resolution"], shield_cfg.ground_z,
+                                            tall_age=height_map_term.map.tall_age_out, recent=shield_cfg.still_for,
+                                            min_cells=shield_cfg.moving_cells)
                     cells = map_points(obs[group][:, 0], MAP["resolution"], shield_cfg.ground_z)
                     local = torch.cat([local, cells], dim=1)
                     moving = torch.cat([moving, torch.zeros(cells.shape[:2], dtype=torch.bool, device=cells.device)], dim=1)
                 command = base._mid + base._half * torch.tanh(actions)
-                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving)
+                speed = torch.linalg.norm(command[:, :2], dim=1, keepdim=True)  # the speed cap first, as on the robot
+                command[:, :2] *= (base.speed_limit[:, None] / speed.clamp(min=1e-6)).clamp(max=1.0)
+                person = None
+                if person_oracle:  # a perfect person detector: the returns from pedestrians (an upper bound)
+                    ped = scenario.ped_pos + scenario.tile_center[:, None]
+                    d = torch.linalg.norm(hits[:, :, None, :2] - ped[:, None], dim=-1)
+                    d = torch.where(scenario.visible_peds()[:, None], d, torch.full_like(d, 1e3)).amin(dim=-1)
+                    person = d < scenario.cfg.pedestrian_radius + 0.1
+                    if moving is not None:
+                        person = torch.cat([person, torch.zeros(person.shape[0], local.shape[1] - person.shape[1],
+                                                                dtype=torch.bool, device=person.device)], dim=1)
+                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving, person)
                 shield_stats["interventions"] += float((info["scale"] < 0.999).sum())
                 shield_stats["scale"] += float(info["scale"].sum())
                 shield_stats["emergencies"] += float(info["emergency"].sum())
@@ -228,6 +249,8 @@ def main(argv: list[str]) -> None:
             "shield": use_shield,
             "odometry_drift": odometry_drift,
             "speed_limit": speed_limit,
+            "shield_set": shield_set,
+            "person_oracle": person_oracle,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
             "mean_time_to_goal_s": float(goal_time.sum() / counts["goal_reached"].sum().clamp(min=1)) * base_env.step_dt,

@@ -216,7 +216,9 @@ class Navigator:
         if height_map is not None:
             res = self.cfg["map"]["resolution"]
             hm = torch.as_tensor(height_map, dtype=torch.float32)[None]
-            moving = moving_returns(pts, hm, res, self.shield_cfg.ground_z)  # what moved since the previous scan
+            tall_age = None if self.map.tall_age_out is None else self.map.tall_age_out[:1].cpu()
+            moving = moving_returns(pts, hm, res, self.shield_cfg.ground_z, tall_age=tall_age,
+                                    recent=self.shield_cfg.still_for, min_cells=self.shield_cfg.moving_cells)
             cells = map_points(hm[:, 0], res, self.shield_cfg.ground_z)  # obstacles that left the sensors' view
             pts = torch.cat([pts, cells], dim=1)
             moving = torch.cat([moving, torch.zeros(1, cells.shape[1], dtype=torch.bool)], dim=1)

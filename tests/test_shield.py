@@ -107,6 +107,37 @@ def test_moving_returns_are_where_the_floor_was():
     assert moving_returns(pts, m, 0.1, FLOOR).tolist() == [[True, False]]
 
 
+def test_flickering_edges_and_stray_cells_are_not_moving():
+    """A cell at the edge of something static that held something tall a moment ago does not count as moving, nor
+    does a lone cell; several cells of open floor filled at once (a person walking in) do."""
+    m = torch.full((1, 3, 80, 80), 0.0)
+    m[0, 1, 60, 38:41] = 1.6  # three cells in a row appeared in front of the robot (a person's front)
+    m[0, 1, 50, 30] = 1.6  # a lone cell appeared
+    m[0, 1, 30, 40] = 1.6  # the edge of a shelf, tall half a second ago
+    person = [[2.05, y, FLOOR + 1.5] for y in (-0.15, -0.05, 0.05)]
+    pts = torch.tensor([person + [[1.05, -0.95, FLOOR + 1.5], [-0.95, 0.05, FLOOR + 1.5]]])
+    tall_age = torch.full((1, 80, 80), 1e3)
+    tall_age[0, 30, 40] = 0.5
+    assert moving_returns(pts, m, 0.1, FLOOR).tolist() == [[True] * 5]
+    assert moving_returns(pts, m, 0.1, FLOOR, tall_age=tall_age, recent=1.0).tolist() == [[True] * 4 + [False]]
+    assert moving_returns(pts, m, 0.1, FLOOR, tall_age=tall_age, recent=1.0, min_cells=2).tolist() == [[True] * 3 + [False] * 2]
+
+
+def test_height_map_remembers_when_cells_were_tall():
+    from g1_patrol.heightmap import HeightMap
+
+    hm = HeightMap(1, 8.0, 0.1)
+    root, yaw, ground = torch.tensor([[0.0, 0.0, 0.55]]), torch.zeros(1), torch.zeros(1)
+    post = torch.tensor([[[1.05, 0.05, 1.0]]])  # something 1 m tall, 1 m ahead
+    floor = torch.tensor([[[1.05, 0.05, 0.0]]])
+    hm.update(post, root, yaw, ground, 0.1)
+    for _ in range(3):
+        hm.update(floor, root, yaw, ground, 0.1)
+    # before the latest scan, the cell last held something tall 0.2 s earlier
+    assert float(hm.tall_age_out[0, 50, 40]) == pytest.approx(0.2, abs=1e-5)
+    assert float(hm.tall_age_out[0, 10, 10]) > 100.0  # never
+
+
 def _controller():
     dt = 0.02
     worst = {"delay": int(round(CONTROLLER["delay_range"][1] / dt)),

@@ -67,6 +67,13 @@ class ShieldCfg:
     """The gap kept to tall things grows from ``margin`` at ``slow_speed`` (m/s) to ``person_margin`` at ``fast_speed``."""
     human_speed: float = 1.4
     """Speed (m/s) at which moving things are assumed to approach while the robot moves towards them (a fast walk)."""
+    still_for: float = 1.0
+    moving_cells: int = 1
+    """Filters of the moving returns (see :func:`moving_returns`): a return counts as moving only where nothing tall
+    was for ``still_for`` seconds before (the edges of static things flicker between floor and tall from scan to scan),
+    and with at least ``moving_cells`` such cells within 0.2 m. In simulation (lab mixture, 0.5 m/s) the first removes
+    about four fifths of the moving returns at furniture and a quarter of the stops, without more pedestrian contacts;
+    requiring 2 cells also misses people who stand and then walk off."""
     approach_speed: float = 0.25
     approach_gap: float = 0.8
     """Closing speed (m/s) towards a tall thing allowed within ``approach_gap`` (m); more only as far as the robot
@@ -99,10 +106,15 @@ def map_points(height_map: torch.Tensor, resolution: float, ground_z: float, min
 
 
 def moving_returns(points: torch.Tensor, height_map: torch.Tensor, resolution: float, ground_z: float,
-                   appeared: float = 0.5, floor: float = 0.25) -> torch.Tensor:
+                   appeared: float = 0.5, floor: float = 0.25, tall_age: torch.Tensor | None = None,
+                   recent: float = 1.0, min_cells: int = 1) -> torch.Tensor:
     """Which returns (n, k, 3; base frame) lie in cells of the height map (n, 3, H, W: accumulated, current scan,
     previous scan; motion-compensated) that the previous scan saw as floor and the current scan as something taller
-    than ``appeared``: the leading edges of things that move."""
+    than ``appeared``: the leading edges of things that move. With ``tall_age`` (n, H, W; seconds since each cell last
+    held something tall, :attr:`g1_patrol.heightmap.HeightMap.tall_age_out`), only cells that held nothing tall for
+    ``recent`` seconds count: the edges of static things flicker between floor and tall from scan to scan. With
+    ``min_cells`` > 1, a return counts only if that many such cells lie within 0.2 m: a person walking into open floor
+    fills several, a stray cell at the edge of something static one."""
     n, _, h, w = height_map.shape
     i = ((points[..., 0] + h * resolution / 2) / resolution).floor().long()
     j = ((points[..., 1] + w * resolution / 2) / resolution).floor().long()
@@ -111,7 +123,16 @@ def moving_returns(points: torch.Tensor, height_map: torch.Tensor, resolution: f
     current = torch.gather(height_map[:, 1].reshape(n, -1), 1, flat)
     previous = torch.gather(height_map[:, 2].reshape(n, -1), 1, flat)
     was_floor = (previous > -0.99) & (previous < floor)
-    return inside & (current > appeared) & was_floor & (points[..., 2] - ground_z > appeared)
+    moving = inside & (current > appeared) & was_floor & (points[..., 2] - ground_z > appeared)
+    if tall_age is not None:
+        moving &= torch.gather(tall_age.reshape(n, -1), 1, flat) > recent
+    if min_cells > 1:
+        cells = torch.zeros(n, h * w, device=points.device).scatter_add(1, flat, moving.float()) > 0
+        k = int(round(0.2 / resolution)) * 2 + 1
+        around = torch.nn.functional.avg_pool2d(cells.float().view(n, 1, h, w), k, stride=1, padding=k // 2,
+                                                count_include_pad=True) * (k * k)
+        moving &= torch.gather(around.view(n, -1), 1, flat) > min_cells - 0.5
+    return moving
 
 
 def _gap(xy: torch.Tensor, core: torch.Tensor, radius: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

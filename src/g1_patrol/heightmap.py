@@ -10,6 +10,11 @@ of the latest scan and is forgotten ``memory_s`` seconds after it was last obser
 robot's heading frame (rows: forward, columns: left, centred on the robot) with three channels: the accumulated map,
 the current scan and the previous scan (motion-compensated, so that moving people stand out). Heights are relative to
 the ground under the robot and clipped to ``z_range``; unknown cells read ``unknown_value``.
+
+For telling what moved (:func:`g1_patrol.shield.moving_returns`), the map also keeps how long ago each cell last held
+something taller than ``TALL`` (:attr:`HeightMap.tall_age_out`, heading frame, before the latest scan): the edges of
+static things flicker between floor and tall from scan to scan as the sensors' rays fall differently, whereas a
+person walking into open floor enters cells that were floor for a while.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ class HeightMap:
     """Accumulated height maps of ``num`` robots, ``size`` x ``size`` m at ``resolution`` (see the module)."""
 
     UNKNOWN = -1.0e3
+    TALL = 0.5
+    """A return this high (m) above the ground makes its cell tall (for :attr:`tall_age_out`)."""
 
     def __init__(self, num: int, size: float = 8.0, resolution: float = 0.2, device: str | torch.device = "cpu"):
         self.res = resolution
@@ -55,6 +62,9 @@ class HeightMap:
         self.height = torch.full((n, m, m), self.UNKNOWN, device=device)
         self.age = torch.full((n, m, m), 1.0e3, device=device)
         self.prev_scan = torch.full((n, m, m), self.UNKNOWN, device=device)
+        self.tall_age = torch.full((n, m, m), 1.0e3, device=device)
+        self.tall_age_out: torch.Tensor | None = None
+        """Seconds (n, cells, cells; heading frame) since each cell last held something tall, before the latest scan."""
         self.origin = torch.zeros(n, 2, dtype=torch.long, device=device)  # world cell index of map cell (0, 0)
         self.fresh = torch.ones(n, dtype=torch.bool, device=device)
         # output cell centres in the robot frame
@@ -101,6 +111,7 @@ class HeightMap:
         if self.fresh.any():
             f = self.fresh
             self.height[f], self.age[f], self.prev_scan[f] = self.UNKNOWN, 1.0e3, self.UNKNOWN
+            self.tall_age[f] = 1.0e3
             self.origin[f] = origin[f]
             self.fresh[:] = False
         d = origin - self.origin
@@ -108,6 +119,7 @@ class HeightMap:
             self.height = self._shift(self.height, d, self.UNKNOWN)
             self.age = self._shift(self.age, d, 1.0e3)
             self.prev_scan = self._shift(self.prev_scan, d, self.UNKNOWN)
+            self.tall_age = self._shift(self.tall_age, d, 1.0e3)
             self.origin = origin
 
         # bin the scan into the grid: highest return per cell
@@ -119,6 +131,11 @@ class HeightMap:
         scan = torch.full((n, m * m), self.UNKNOWN, device=root.device).scatter_reduce(1, flat, z, reduce="amax")
         scan = scan.view(n, m, m)
         seen = scan > self.UNKNOWN / 2
+
+        # when each cell last held something tall (the time before this scan is kept for the output)
+        tall_before = self.tall_age
+        tall = seen & (scan - ground[:, None, None] > self.TALL)
+        self.tall_age = torch.where(tall, torch.zeros_like(tall_before), tall_before + dt)
 
         # latest observation wins; unobserved cells age and are forgotten after memory_s
         self.height = torch.where(seen, scan, self.height)
@@ -139,6 +156,7 @@ class HeightMap:
             known = v > self.UNKNOWN / 2
             v = torch.where(known, (v - ground[:, None]).clamp(*z_range), torch.full_like(v, unknown_value))
             out.append(v.view(n, self.cells, self.cells))
+        self.tall_age_out = tall_before.view(n, -1).gather(1, idx).view(n, self.cells, self.cells)
         self.prev_scan = scan
         return torch.stack(out, dim=1)
 
