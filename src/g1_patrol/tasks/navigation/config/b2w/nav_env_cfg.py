@@ -9,7 +9,9 @@ Episodes take place on the street tiles of the G1 task and on indoor tiles (labs
 offices, warehouses with a loading dock, lobbies with a stairwell; :mod:`g1_patrol.tasks.navigation.nyc.indoor`), with
 the same pedestrian traffic and difficulty curriculum. The robot's footprint is a 1.12 x 0.58 m rectangle with rounded
 corners; structures whose bottom is higher than 1 m do not block it (it is 0.76 m tall with its lidar); driving over a
-drop (stairwell, loading dock) ends the episode.
+drop (stairwell, loading dock) ends the episode. The body stands 0.55-0.72 m above the ground (drawn per episode; the
+controller's body height is adjustable), and the students' maps take their heights from the floor as the robot
+measures it (with a few centimeters of error), not from a known standing height.
 
 The robot follows a planned route, as it would follow a global planner's path on the real robot (e.g. Nav2's): the
 goal it is given is the points of the route 1 and 2.5 m ahead of its place along it, and its progress is measured along
@@ -47,12 +49,14 @@ from isaaclab_tasks.core.velocity.velocity_env_cfg import RoughPhysicsCfg
 
 from g1_patrol.b2w import (
     BASE_HEIGHT,
+    BASE_HEIGHT_RANGE,
     BODY,
     CORNER_RADIUS,
     CROP_BOX,
     D435I,
     DEPTH_CAMERAS,
     FOOTPRINT,
+    GROUND_ERROR,
     LIDAR,
     LIDAR_MOUNT,
     LIDARS,
@@ -166,7 +170,9 @@ class B2WSceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     # velocity commands to the built-in controller (forward -0.8..1.5 m/s, lateral +-0.3 m/s, yaw rate +-1.2 rad/s),
     # planar speed capped per episode at 0.4..1.5 m/s (observed; the robot's max_speed)
-    base = mdp.BaseVelocityActionCfg(asset_name="robot", scenario_name="nyc", speed_limit_range=SPEED_LIMIT_RANGE)
+    base = mdp.BaseVelocityActionCfg(
+        asset_name="robot", scenario_name="nyc", speed_limit_range=SPEED_LIMIT_RANGE, base_height_range=BASE_HEIGHT_RANGE
+    )
     # moves the pedestrians at every physics step; takes no policy inputs
     pedestrians = mdp.PedestrianMotionActionCfg(asset_name="pedestrians", scenario_name="nyc")
 
@@ -405,7 +411,8 @@ class LidarMapCfg(ObsGroup):
             "dropout": 0.02,
             "z_range": MAP["z_range"],
             "unknown_value": MAP["unknown_value"],
-            "robot_ground_offset": BASE_HEIGHT,
+            "base_action": "base",
+            "ground_error": GROUND_ERROR,
             "drift_pos": 0.005,
             "drift_yaw": 0.002,
             "crop_box": CROP_BOX,

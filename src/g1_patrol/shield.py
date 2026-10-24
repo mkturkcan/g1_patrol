@@ -94,10 +94,17 @@ class ShieldCfg:
     """Returns considered per robot: the closest ones."""
 
 
-def map_points(height_map: torch.Tensor, resolution: float, ground_z: float, min_height: float = 0.1) -> torch.Tensor:
+def _per_robot(ground_z, n: int, device) -> torch.Tensor:
+    """The floor's height in the base frame per robot (n, 1), from a number or a tensor (n,)."""
+    return torch.as_tensor(ground_z, dtype=torch.float32, device=device).reshape(-1, 1).expand(n, 1)
+
+
+def map_points(height_map: torch.Tensor, resolution: float, ground_z, min_height: float = 0.1) -> torch.Tensor:
     """Obstacle cells of accumulated height maps (n, H, W) (heading frame, robot-centred, heights above the floor,
-    unknown < -0.99) as points (n, H * W, 3) in the base frame (+inf for other cells)."""
+    unknown < -0.99) as points (n, H * W, 3) in the base frame (+inf for other cells); ``ground_z``: the floor's height
+    in the base frame (a number, or per robot)."""
     n, h, w = height_map.shape
+    ground_z = _per_robot(ground_z, n, height_map.device)[..., None]
     c = (torch.arange(h, device=height_map.device, dtype=torch.float) + 0.5) * resolution - h * resolution / 2
     x, y = torch.meshgrid(c, c, indexing="ij")
     occupied = height_map > min_height
@@ -105,7 +112,7 @@ def map_points(height_map: torch.Tensor, resolution: float, ground_z: float, min
     return torch.where(occupied.view(n, -1, 1), pts, torch.full_like(pts, float("inf")))
 
 
-def moving_returns(points: torch.Tensor, height_map: torch.Tensor, resolution: float, ground_z: float,
+def moving_returns(points: torch.Tensor, height_map: torch.Tensor, resolution: float, ground_z,
                    appeared: float = 0.5, floor: float = 0.25, tall_age: torch.Tensor | None = None,
                    recent: float = 1.0, min_cells: int = 1) -> torch.Tensor:
     """Which returns (n, k, 3; base frame) lie in cells of the height map (n, 3, H, W: accumulated, current scan,
@@ -116,6 +123,7 @@ def moving_returns(points: torch.Tensor, height_map: torch.Tensor, resolution: f
     ``min_cells`` > 1, a return counts only if that many such cells lie within 0.2 m: a person walking into open floor
     fills several, a stray cell at the edge of something static one."""
     n, _, h, w = height_map.shape
+    ground_z = _per_robot(ground_z, n, points.device)
     i = ((points[..., 0] + h * resolution / 2) / resolution).floor().long()
     j = ((points[..., 1] + w * resolution / 2) / resolution).floor().long()
     inside = (i >= 0) & (i < h) & (j >= 0) & (j < w) & torch.isfinite(points).all(dim=-1)
@@ -159,16 +167,17 @@ def _poses(twist: torch.Tensor, progress: torch.Tensor) -> tuple[torch.Tensor, t
 
 def shield(points: torch.Tensor, command: torch.Tensor, cfg: ShieldCfg = ShieldCfg(),
            velocity: torch.Tensor | None = None, moving: torch.Tensor | None = None,
-           person: torch.Tensor | None = None) -> tuple[torch.Tensor, dict]:
+           person: torch.Tensor | None = None, ground_z: torch.Tensor | float | None = None) -> tuple[torch.Tensor, dict]:
     """Scale commands (n, 3) to admissible ones, given the latest returns (n, k, 3; base frame; +inf/NaN where there
-    is none), the measured velocity (n, 3; body frame), and which returns move or are people (n, k; optional).
+    is none), the measured velocity (n, 3; body frame), and which returns move or are people (n, k; optional);
+    ``ground_z``: the floor's height in the base frame as measured (a number or per robot; default ``cfg.ground_z``).
     Returns the commands and diagnostics: the scale, whether the measured motion alone was already too fast
     (``emergency``), the smallest gap to an obstacle, to a tall thing and to a moving thing or person."""
     n, dev = command.shape[0], command.device
     pts = torch.nan_to_num(points.float(), nan=float("inf"))
     finite = torch.isfinite(pts).all(dim=-1)
     pts = torch.where(finite[..., None], pts, torch.zeros_like(pts))
-    h = pts[..., 2] - cfg.ground_z
+    h = pts[..., 2] - _per_robot(cfg.ground_z if ground_z is None else ground_z, n, dev)
     drop = finite & (h < cfg.drop_z)
     obstacle = finite & (((h > cfg.z_min) & (h < cfg.z_max)) | drop)
     r = cfg.corner_radius

@@ -7,8 +7,15 @@ computes its observations exactly as in training. Values marked "measure" should
 
 import math
 
-BASE_HEIGHT = 0.55
-"""Height (m) of base_link above the ground when the B2-W stands (measure)."""
+BASE_HEIGHT = 0.65
+"""Height (m) of base_link above the ground when the B2-W stands: Unitree's standing pose (thigh 0.67 rad, calf
+-1.3 rad; 0.35 m thigh and calf, 0.1125 m wheels) puts it at 0.67 m, the body's top at the 0.758 m of the spec."""
+BASE_HEIGHT_RANGE = (0.55, 0.72)
+"""Training draws the standing height per episode from this interval (the controller's body height is adjustable and
+not known exactly); on the robot the floor is measured in every scan (``deploy/b2w/floor.py``), not assumed."""
+GROUND_ERROR = (0.03, 0.01)
+"""Error (m) of the floor height the robot measures: a bias that stays for the episode (up to the first value) and
+noise per scan (standard deviation, the second); the map's heights are taken from it in training."""
 FOOTPRINT = (0.56, 0.29)
 """Half length and half width (m) of the footprint (Unitree: 1098 x 550 mm standing, plus a little margin)."""
 CORNER_RADIUS = 0.12
@@ -16,8 +23,9 @@ CORNER_RADIUS = 0.12
 BODY = (0.86, 0.3, 0.15)
 """Box (m) standing in for the body (head to tail, URDF): it shades the lidar as the real body does; the lidar sits
 0.1 m above its top, so the ground is hidden within about 0.7 m ahead, 1 m to the sides and 5 m behind."""
-CROP_BOX = ((0.0, 0.0, -0.15), (0.6, 0.33, 0.45))
-"""Center and half sizes (m, base frame) of the box in which lidar returns are the robot itself and are dropped."""
+CROP_BOX = ((0.0, 0.0, -0.25), (0.62, 0.34, 0.55))
+"""Center and half sizes (m, base frame) of the box in which returns are the robot itself and are dropped: the body,
+head and tail, and the legs and wheels down to the floor (the lidar sees the rear wheels)."""
 LIDAR_MOUNT = (0.34218, 0.0, 0.17851)
 """lidar_link in base_link (Unitree's b2w_description URDF), mounted upright (measure)."""
 LIDARS = {

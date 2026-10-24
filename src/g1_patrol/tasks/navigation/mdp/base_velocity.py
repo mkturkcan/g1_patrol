@@ -72,6 +72,8 @@ class BaseVelocityAction(ActionTerm):
         self.drive = torch.zeros(n, 3, device=dev)
         self.speed_limit = torch.full((n,), float("inf"), device=dev)
         """Cap (m/s) on the commanded planar speed, e.g. for first trials on the robot."""
+        self.base_height = torch.full((n,), cfg.base_height, device=dev)
+        """Height (m) of the root above the ground, drawn per episode with ``base_height_range``."""
         # robot state (world frame)
         self.velocity_b = torch.zeros(n, 3, device=dev)
         self.velocity_w = torch.zeros(n, 3, device=dev)
@@ -176,7 +178,7 @@ class BaseVelocityAction(ActionTerm):
 
         pose = torch.zeros(self.num_envs, 7, device=self.device)
         pose[:, :2] = self._xy
-        pose[:, 2] = self._z + cfg.base_height
+        pose[:, 2] = self._z + self.base_height
         pose[:, 3:] = quat_from_euler_xyz(self._tilt[:, 0], self._tilt[:, 1], self._yaw)
         self._asset.write_root_pose_to_sim_index(root_pose=pose)
         twist = torch.zeros(self.num_envs, 6, device=self.device)
@@ -218,6 +220,8 @@ class BaseVelocityAction(ActionTerm):
         self.noise_std[ids] = _uniform([0.0] * 3, cfg.noise_max, (m, 3), dev)
         if cfg.speed_limit_range is not None:
             self.speed_limit[ids] = _uniform(*cfg.speed_limit_range, (m,), dev)
+        if cfg.base_height_range is not None:
+            self.base_height[ids] = _uniform(*cfg.base_height_range, (m,), dev)
 
     def _ground(self, ids: torch.Tensor | slice = slice(None)) -> torch.Tensor:
         """Ground height (m, 4) under the wheels."""
@@ -249,6 +253,8 @@ class BaseVelocityActionCfg(ActionTermCfg):
     """(min, max) of the forward, lateral and yaw-rate commands (m/s, m/s, rad/s)."""
     base_height: float = BASE_HEIGHT
     """Height (m) of the root (base_link) above the ground."""
+    base_height_range: tuple[float, float] | None = None
+    """If set, the height of the root above the ground is drawn per episode from this interval."""
     wheel_base: tuple[float, float] = (0.33, 0.24)
     """Half distances (m) between the wheels' contact points along and across the body."""
     max_step: float = 0.3

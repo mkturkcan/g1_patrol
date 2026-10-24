@@ -178,11 +178,13 @@ def main(argv: list[str]) -> None:
                 local = rotate_inverse(quat[:, None].expand(-1, hits.shape[1], -1), torch.nan_to_num(hits - root[:, None], posinf=1e4))
                 local = torch.where((hits.abs() > 1e6).any(dim=-1, keepdim=True), torch.full_like(local, float("inf")), local)
                 moving = None
+                # the floor below the base as the robot measures it (the student's map), else the true one
+                ground_z = -(height_map_term.ground_offset if group is not None else base.base_height)
                 if group is not None:
-                    moving = moving_returns(local, obs[group], MAP["resolution"], shield_cfg.ground_z,
+                    moving = moving_returns(local, obs[group], MAP["resolution"], ground_z,
                                             tall_age=height_map_term.map.tall_age_out, recent=shield_cfg.still_for,
                                             min_cells=shield_cfg.moving_cells)
-                    cells = map_points(obs[group][:, 0], MAP["resolution"], shield_cfg.ground_z)
+                    cells = map_points(obs[group][:, 0], MAP["resolution"], ground_z)
                     local = torch.cat([local, cells], dim=1)
                     moving = torch.cat([moving, torch.zeros(cells.shape[:2], dtype=torch.bool, device=cells.device)], dim=1)
                 command = base._mid + base._half * torch.tanh(actions)
@@ -197,7 +199,7 @@ def main(argv: list[str]) -> None:
                     if moving is not None:
                         person = torch.cat([person, torch.zeros(person.shape[0], local.shape[1] - person.shape[1],
                                                                 dtype=torch.bool, device=person.device)], dim=1)
-                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving, person)
+                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving, person, ground_z)
                 shield_stats["interventions"] += float((info["scale"] < 0.999).sum())
                 shield_stats["scale"] += float(info["scale"].sum())
                 shield_stats["emergencies"] += float(info["emergency"].sum())

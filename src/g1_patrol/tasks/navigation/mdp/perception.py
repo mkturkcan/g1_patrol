@@ -180,6 +180,8 @@ class accumulated_height_map(ManagerTermBase):
         self.pose_error = torch.zeros(env.num_envs, 3, device=env.device)  # odometry drift: x, y, yaw
         self.sensor_off = torch.zeros(env.num_envs, len(p.get("extra_sensors", ())), dtype=torch.bool, device=env.device)
         self.floor_loss = torch.zeros(env.num_envs, device=env.device)
+        self.ground_bias = torch.zeros(env.num_envs, device=env.device)
+        self.ground_offset = torch.zeros(env.num_envs, device=env.device)
 
     def reset(self, env_ids=None):
         self.map.reset(env_ids)
@@ -222,6 +224,8 @@ class accumulated_height_map(ManagerTermBase):
         extra_sensors: tuple[dict, ...] = (),
         floor_dropout: tuple[float, float] = (0.0, 0.0),
         floor_dropout_from: float = 2.0,
+        base_action: str | None = None,
+        ground_error: tuple[float, float] = (0.0, 0.0),
     ) -> torch.Tensor:
         robot = env.scene["robot"]
         true_root = robot.data.root_pos_w.torch
@@ -230,6 +234,18 @@ class accumulated_height_map(ManagerTermBase):
         n = true_root.shape[0]
         # estimated pose: the true pose plus a drifting odometry error (zero at the start of an episode)
         fresh = self.map.fresh
+        # the ground under the robot: its height below the root (per robot with ``base_action``, whose height is drawn
+        # per episode), and as the robot measures it (``ground_error``: a bias per episode and noise per scan)
+        offset = env.action_manager.get_term(base_action).base_height if base_action is not None else robot_ground_offset
+        true_ground = true_root[:, 2] - offset
+        if ground_error[0] > 0 or ground_error[1] > 0:
+            if fresh.any():
+                self.ground_bias[fresh] = (torch.rand(int(fresh.sum()), device=true_root.device) * 2 - 1) * ground_error[0]
+            measured_ground = true_ground + self.ground_bias + torch.randn_like(true_ground) * ground_error[1]
+        else:
+            measured_ground = true_ground
+        self.ground_offset = true_root[:, 2] - measured_ground
+        """Height (n,) of the root above the floor as measured, for the shield's evaluation."""
         self.pose_error[fresh] = 0.0
         if drift_pos > 0 or drift_yaw > 0:
             step = torch.randn(n, 3, device=true_root.device) * torch.tensor([drift_pos, drift_pos, drift_yaw], device=true_root.device)
@@ -254,17 +270,17 @@ class accumulated_height_map(ManagerTermBase):
             if fresh.any():
                 lo, hi = floor_dropout
                 self.floor_loss[fresh] = lo + (hi - lo) * torch.rand(int(fresh.sum()), device=pts.device)
-            ground_z = true_root[:, None, 2] - robot_ground_offset
+            ground_z = true_ground[:, None]
             far = torch.linalg.norm(torch.nan_to_num(pts[..., :2] - true_root[:, None, :2], posinf=1e3), dim=-1) > floor_dropout_from
             floor = (pts[..., 2] - ground_z).abs() < 0.05
             lost = floor & far & (torch.rand_like(pts[..., 0]) < self.floor_loss[:, None])
             pts = torch.where(lost[..., None], torch.full_like(pts, float("inf")), pts)
         if crop_box is not None or drop_above is not None:
             local = rotate_inverse(q[:, None].expand(-1, pts.shape[1], -1), pts - true_root[:, None]) if crop_box is not None else None
-            pts = drop_returns(pts, local, true_root[:, 2] - robot_ground_offset, crop_box, drop_above)
+            pts = drop_returns(pts, local, measured_ground, crop_box, drop_above)
         rel = pts - true_root[:, None]
         c, s = torch.cos(self.pose_error[:, 2])[:, None], torch.sin(self.pose_error[:, 2])[:, None]
         pts = torch.stack([root[:, None, 0] + c * rel[..., 0] - s * rel[..., 1],
                            root[:, None, 1] + s * rel[..., 0] + c * rel[..., 1], pts[..., 2]], dim=-1)
-        ground = root[:, 2] - robot_ground_offset
+        ground = measured_ground  # (the estimated pose has the true height)
         return self.map.update(pts, root, yaw, ground, env.step_dt, memory_s, z_range, unknown_value)
