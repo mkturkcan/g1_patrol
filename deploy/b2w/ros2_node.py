@@ -160,7 +160,7 @@ class B2WNavNode(Node):
         output = p("output", "ros")
         record = p("record", "")
         self.nav = Navigator(config, OnnxPolicy(policy), device=p("device", "cpu"), max_speed=max_speed,
-                             guard=bool(p("guard", True)))
+                             guard=bool(p("guard", True)), crawl=bool(p("crawl", True)))
         lo, hi = self.nav.cfg["speed_limit_range"]
         if not lo <= max_speed <= hi:
             self.get_logger().warning(f"max_speed {max_speed} m/s is outside the caps the policy was trained with "

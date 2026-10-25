@@ -205,3 +205,42 @@ def test_guard_alternatives_see_a_person_among_many_floor_returns():
     guard = ShieldGuard(1, CFG)
     safe, info = guard(pts, torch.tensor([[0.6, 0.0, 0.3]]), 0.1, torch.zeros(1, 3), moving)
     assert float(safe[0, 0]) <= 0.02  # no step towards the person, whichever alternative
+
+
+def test_guard_alternatives_only_from_rest():
+    """Turning into a wall 5 cm alongside is blocked; from rest the guard drives on, stepping away from the wall; at
+    speed it does not send the robot another way (the shield's check assumes the robot follows a new command at
+    once)."""
+    from g1_patrol.shield import ShieldGuard
+
+    wall = np.c_[np.linspace(-1.5, 1.5, 600), np.full(600, -CFG.half_width - 0.05), FLOOR + np.linspace(0.1, 2.0, 600)]
+    pts = torch.tensor(wall, dtype=torch.float32)[None]
+    command = torch.tensor([[0.5, 0.0, -0.8]])
+    at_rest, info = ShieldGuard(1, CFG)(pts, command, 0.1, torch.zeros(1, 3))
+    assert int(info["alternative"][0]) >= 0 and float(at_rest[0, 0]) > 0.1 and float(at_rest[0, 1]) >= 0.0
+    _, info = ShieldGuard(1, CFG)(pts, command, 0.1, torch.tensor([[0.5, 0.0, 0.0]]))
+    assert int(info["alternative"][0]) == -1
+
+
+def test_guard_remembers_a_person_until_the_robot_has_moved_away():
+    """With crawling on: a person who moved 1 m ahead and then left the scan's view (no returns) still makes the robot
+    crawl; once it has backed off out of their reach, or after ``crawl_hold`` s, it no longer does."""
+    from g1_patrol.shield import ShieldGuard
+
+    crawl = ShieldCfg(near_moving_gap=1.2)
+    person = torch.tensor(_column(FRONT + 1.0, 0.0, 1.7), dtype=torch.float32)[None]
+    nothing = torch.full((1, 1, 3), float("inf"))
+    forward = torch.tensor([[0.6, 0.0, 0.0]])
+    guard = ShieldGuard(1, crawl)
+    _, info = guard(person, forward, 0.1, torch.zeros(1, 3), torch.ones(person.shape[:2], dtype=torch.bool))
+    assert bool(info["crawling"][0])
+    safe, info = guard(nothing, forward, 0.1, torch.zeros(1, 3))  # out of view, still there
+    assert bool(info["crawling"][0]) and float(safe[0, 0]) <= CFG.near_moving_speed + 1e-6
+    for _ in range(10):  # backing off at 0.5 m/s for 1 s
+        _, info = guard(nothing, torch.tensor([[-0.5, 0.0, 0.0]]), 0.1, torch.tensor([[-0.5, 0.0, 0.0]]))
+    assert not bool(info["crawling"][0])
+    guard = ShieldGuard(1, crawl, crawl_hold=1.0)
+    guard(person, forward, 0.1, torch.zeros(1, 3), torch.ones(person.shape[:2], dtype=torch.bool))
+    for _ in range(11):  # standing still, 1.1 s later
+        _, info = guard(nothing, forward, 0.1, torch.zeros(1, 3))
+    assert not bool(info["crawling"][0])

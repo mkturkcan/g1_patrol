@@ -17,7 +17,13 @@ Stress tests of the sim-to-real assumptions:
 * ``--speed_limit <m/s>``: the robot's speed cap (``max_speed`` on the robot) fixed at this value instead of drawn
   per episode;
 * ``--shield_set key=value,...``: shield settings other than the defaults (:class:`g1_patrol.shield.ShieldCfg`), e.g.
-  ``latency=0.25,brake=1.2`` for a controller identified on the robot.
+  ``latency=0.25,brake=1.2`` for a controller identified on the robot;
+* ``--guard_set key=value,...``: settings of what the robot does around the shield
+  (:class:`g1_patrol.shield.ShieldGuard`): ``alternatives_below``, ``alternatives_at`` (``m/s:rad/s``), ``crawl_hold``,
+  ``recovery`` (``after:for:speed``).
+
+With the shield, structure contacts are attributed to what the shield did in the step before (free, limited, stopped,
+an alternative command, backing off, crawling), and crawling to whether a pedestrian was actually near.
 
 Usage:
     python scripts/b2w/evaluate.py --task G1Patrol-B2W-Navigate-Lidar --checkpoint <model.pt> --num_envs 1024 \\
@@ -99,6 +105,7 @@ def main(argv: list[str]) -> None:
     use_shield = _extra(argv, "shield", flag=True)
     speed_limit = _extra(argv, "speed_limit")
     shield_set = _extra(argv, "shield_set")
+    guard_set = _extra(argv, "guard_set")
     person_oracle = _extra(argv, "person_oracle", flag=True)
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
@@ -158,58 +165,32 @@ def main(argv: list[str]) -> None:
         motion = {"speed": 0.0, "backward": 0.0, "lateral": 0.0, "command_change": 0.0, "near_people": 0.0, "steps": 0}
         contacts = {"robot_moving": 0, "pedestrian_walked_in": 0, "robot_speed": 0.0, "pedestrian_speed": 0.0}
         shield_stats = {"interventions": 0.0, "scale": 0.0, "emergencies": 0.0, "backing_off": 0.0, "crawling": 0.0,
-                        "steps": 0}
+                        "crawling_no_pedestrian": 0.0, "steps": 0}
+        STATES = ("free", "limited", "stopped", "alternative", "backing_off", "crawling")
+        contact_states = torch.zeros(len(STATES), device=dev)
+        last_state = torch.zeros(base_env.num_envs, dtype=torch.long, device=dev)
         if use_shield:
-            from g1_patrol.b2w import MAP, shield_settings
-            from g1_patrol.heightmap import rotate_inverse
-            from g1_patrol.shield import ShieldCfg, ShieldGuard, map_points, moving_returns
+            from shielded import ShieldInLoop
 
-            overrides = dict(kv.split("=") for kv in shield_set.split(",")) if shield_set else {}
-            shield_cfg = ShieldCfg(**shield_settings(), **{k: type(getattr(ShieldCfg, k))(v) for k, v in overrides.items()})
-            # the shield with what the robot does around it (alternatives, backing off, crawling near people)
-            guard = ShieldGuard(base_env.num_envs, shield_cfg, dev)
-            if group is not None:  # the student's height map (its history tells what moved)
-                om = base_env.observation_manager
-                height_map_term = om._group_obs_term_cfgs[group][om.active_terms[group].index(group)].func
-            sensors = [base_env.scene.sensors[name] for name in ("lidar", "front_depth", "rear_depth") if name in base_env.scene.sensors]
+            shield_in_loop = ShieldInLoop(base_env, shield_set, guard_set, person_oracle)
+            shield_cfg = shield_in_loop.cfg
 
             def shielded(actions):
-                robot = base_env.scene["robot"]
-                root, quat = robot.data.root_pos_w.torch, robot.data.root_quat_w.torch
-                hits = torch.cat([(sn.data.ray_hits_w if hasattr(sn.data, "ray_hits_w") else sn.ray_hits_w).torch for sn in sensors], dim=1)
-                hits = torch.nan_to_num(hits, nan=float("inf"), posinf=float("inf"))
-                local = rotate_inverse(quat[:, None].expand(-1, hits.shape[1], -1), torch.nan_to_num(hits - root[:, None], posinf=1e4))
-                local = torch.where((hits.abs() > 1e6).any(dim=-1, keepdim=True), torch.full_like(local, float("inf")), local)
-                moving = None
-                # the floor below the base as the robot measures it (the student's map), else the true one
-                ground_z = -(height_map_term.ground_offset if group is not None else base.base_height)
-                if group is not None:
-                    moving = moving_returns(local, obs[group], MAP["resolution"], ground_z,
-                                            tall_age=height_map_term.map.tall_age_out, recent=shield_cfg.still_for,
-                                            min_cells=shield_cfg.moving_cells)
-                    cells = map_points(obs[group][:, 0], MAP["resolution"], ground_z)
-                    local = torch.cat([local, cells], dim=1)
-                    moving = torch.cat([moving, torch.zeros(cells.shape[:2], dtype=torch.bool, device=cells.device)], dim=1)
-                command = base._mid + base._half * torch.tanh(actions)
-                speed = torch.linalg.norm(command[:, :2], dim=1, keepdim=True)  # the speed cap first, as on the robot
-                command[:, :2] *= (base.speed_limit[:, None] / speed.clamp(min=1e-6)).clamp(max=1.0)
-                person = None
-                if person_oracle:  # a perfect person detector: the returns from pedestrians (an upper bound)
-                    ped = scenario.ped_pos + scenario.tile_center[:, None]
-                    d = torch.linalg.norm(hits[:, :, None, :2] - ped[:, None], dim=-1)
-                    d = torch.where(scenario.visible_peds()[:, None], d, torch.full_like(d, 1e3)).amin(dim=-1)
-                    person = d < scenario.cfg.pedestrian_radius + 0.1
-                    if moving is not None:
-                        person = torch.cat([person, torch.zeros(person.shape[0], local.shape[1] - person.shape[1],
-                                                                dtype=torch.bool, device=person.device)], dim=1)
-                safe, info = guard(local, command, base_env.step_dt, base.velocity_b, moving, person, ground_z)
+                actions, info = shield_in_loop(actions, obs)
                 shield_stats["interventions"] += float((info["scale"] < 0.999).sum())
                 shield_stats["backing_off"] += float(info["backing_off"].sum())
                 shield_stats["crawling"] += float(info["crawling"].sum())
                 shield_stats["scale"] += float(info["scale"].sum())
                 shield_stats["emergencies"] += float(info["emergency"].sum())
+                no_pedestrian = scenario.pedestrian_clearance() > shield_cfg.near_moving_gap + 0.5
+                shield_stats["crawling_no_pedestrian"] += float((info["crawling"] & no_pedestrian).sum())
                 shield_stats["steps"] += base_env.num_envs
-                return torch.atanh(((safe - base._mid) / base._half).clamp(-0.999, 0.999))
+                state = torch.where(info["scale"] < 0.999, 1, 0)
+                for i, flag in ((2, info["emergency"]), (5, info["crawling"]), (3, info["alternative"] >= 0),
+                                (4, info["backing_off"])):  # later ones take precedence
+                    state = torch.where(flag, i, state)
+                last_state.copy_(state)
+                return actions
         maps = []
         obs = env.get_observations()
         with torch.inference_mode():
@@ -221,13 +202,15 @@ def main(argv: list[str]) -> None:
                 obs, _, dones, _ = env.step(actions)
                 policy.reset(dones)
                 if use_shield:
-                    guard.reset(dones.bool())
+                    shield_in_loop.reset(dones)
                 steps_in_episode += 1
                 assigned = torch.zeros(base_env.num_envs, dtype=torch.bool, device=dev)
                 for name in outcomes:
                     ended = tm.get_term(name) & ~assigned
                     assigned |= ended
                     counts[name] += torch.bincount(cell[ended], minlength=len(cells))
+                    if name == "obstacle_collision" and use_shield:
+                        contact_states += torch.bincount(last_state[ended], minlength=len(STATES)).float()
                 hit = tm.get_term("pedestrian_collision")
                 if hit.any():  # who closed the gap (recorded by the termination term)
                     robot_v, ped_v = scenario.contact_robot_approach_speed[hit], scenario.contact_ped_approach_speed[hit]
@@ -290,7 +273,11 @@ def main(argv: list[str]) -> None:
                                        "mean_scale": shield_stats["scale"] / steps,
                                        "emergency_rate": shield_stats["emergencies"] / steps,
                                        "backing_off_rate": shield_stats["backing_off"] / steps,
-                                       "crawling_rate": shield_stats["crawling"] / steps}
+                                       "crawling_rate": shield_stats["crawling"] / steps,
+                                       "crawling_no_pedestrian_rate": shield_stats["crawling_no_pedestrian"] / steps,
+                                       "structure_contacts_by_state": {
+                                           s: float(contact_states[i]) / max(episodes, 1) for i, s in enumerate(STATES)}}
+            metrics["guard_set"] = guard_set
         if maps:
             from g1_patrol.b2w import MAP
             from g1_patrol.heightmap import map_statistics

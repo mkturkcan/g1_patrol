@@ -49,6 +49,7 @@ ARGS = {
     "rviz": ("false", "start RViz here"),
     "record": ("", "file (.npz) to record every scan, pose and command to (for scripts/b2w/replay.py)"),
     "device": ("cpu", "torch device for the map and the shield (cpu or cuda)"),
+    "crawl": ("true", "crawl at 0.1 m/s within 1.2 m of anything that moves or moved in the last 2 s (false: faster)"),
 }
 
 
@@ -140,7 +141,7 @@ def _setup(context):
     params = {"config": str(release / "deploy.json"), "policy": str(release / "policy.onnx"), "mode": get["mode"],
               "max_speed": get["max_speed"], "deadman": get["deadman"], "output": get["output"],
               "network_interface": get["network_interface"], "lidar_topic": get["lidar_topic"], "device": get["device"],
-              **nav_params}
+              "crawl": get["crawl"], **nav_params}
     if get["slam"] != "true":
         params["goal_topic"] = "/goal_pose"  # straight-line goals in the odometry frame
     if get["record"]:

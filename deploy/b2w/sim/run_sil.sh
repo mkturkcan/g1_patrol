@@ -6,7 +6,8 @@
 #   bash deploy/b2w/sim/run_sil.sh [goal_x goal_y] [start_x start_y start_yaw] [people_json]
 #
 # Prints "SIL RESULT {...}" and exits with 0 if the robot reached the goal and never moved into anything. FAKE_ARGS adds
-# parameters of the simulated robot (e.g. "-p deadman_held:=false"), SIL_TIMEOUT sets the time allowed (s).
+# parameters of the simulated robot (e.g. "-p deadman_held:=false"), STACK_ARGS launch arguments of the stack (e.g.
+# "crawl:=true"), SIL_TIMEOUT sets the time allowed (s).
 set -u
 GX=${1:-4.0}; GY=${2:--3.5}
 SX=${3:--6.5}; SY=${4:-0.0}; SYAW=${5:-0.0}
@@ -22,7 +23,7 @@ setsid python3 -m b2w.sim.fake_b2w --ros-args -p world:="$ROOT/deploy/b2w/sim/la
     -p start:="[$SX, $SY, $SYAW]" "${PEOPLE_ARG[@]}" ${FAKE_ARGS:-} > "$LOG/fake_b2w.log" 2>&1 &
 FAKE=$!
 setsid ros2 launch "$ROOT/deploy/b2w/launch/b2w_navigation.launch.py" mode:=drive lidar_driver:=false cameras:=false \
-    max_speed:=0.6 > "$LOG/stack.log" 2>&1 &
+    max_speed:=0.6 ${STACK_ARGS:-} > "$LOG/stack.log" 2>&1 &
 STACK=$!
 python3 -m b2w.sim.sil_check --ros-args -p goal:="[$GX, $GY]" -p trace:="$LOG/trace.json" -p timeout:=${SIL_TIMEOUT:-150.0} 2>&1 | tee "$LOG/check.log"
 CODE=${PIPESTATUS[0]}

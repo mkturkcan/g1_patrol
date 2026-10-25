@@ -78,8 +78,13 @@ class ShieldCfg:
     requiring 2 cells also misses people who stand and then walk off."""
     near_moving_speed: float = 0.1
     near_moving_gap: float = 1.2
-    """Within ``near_moving_gap`` (m) of anything that moves, the footprint's fastest point (turning swings the corners)
-    crawls at most at ``near_moving_speed`` (m/s), in any direction: a person crossing the robot's way is not pushed."""
+    """Within ``near_moving_gap`` (m) of anything tall that moves or was seen moving in the last ``crawl_hold`` s
+    (:class:`ShieldGuard`), the footprint's fastest point (turning swings the corners) crawls at most at
+    ``near_moving_speed`` (m/s), in any direction: people close by are not pushed. 0 turns crawling off (``crawl:=false``
+    on the robot). It costs time: the returns that appear where the previous scan saw floor also come from static
+    things coming into view as the robot moves, so in simulation the robot crawled in about half of all steps, in almost
+    half of them with no pedestrian within 1.7 m; on the lab mixture it reached 57% of its goals instead of 77%, and
+    contacts in which it moved into a pedestrian fell from 0.9% to 0.6% of the episodes."""
     approach_speed: float = 0.25
     approach_gap: float = 0.8
     """Closing speed (m/s) towards a tall thing allowed within ``approach_gap`` (m); more only as far as the robot
@@ -269,8 +274,8 @@ def shield(points: torch.Tensor, command: torch.Tensor, cfg: ShieldCfg = ShieldC
     u_cap = torch.where(gap0 > cfg.approach_gap, u_cap.clamp(min=cfg.approach_speed), torch.full_like(u_cap, cfg.approach_speed))
     ratio = torch.where((tall | people) & (u > 1e-6), u_cap / u.clamp(min=1e-6), torch.full_like(u, float("inf")))
     scale = torch.minimum(scale, ratio.amin(dim=1).clamp(max=1.0))
-    # near anything that moves: crawl
-    near_moving = (approaching & (gap0 < cfg.near_moving_gap)).any(dim=1)
+    # near anything tall that moves (people; not the low furniture that comes into view as the robot moves): crawl
+    near_moving = (approaching & (tall | people) & (gap0 < cfg.near_moving_gap)).any(dim=1)
     corner = math.hypot(cfg.half_length, cfg.half_width)
     fastest = v_lin + w_abs * corner
     crawl = (cfg.near_moving_speed / fastest.clamp(min=1e-6)).clamp(max=1.0)
@@ -293,31 +298,41 @@ class ShieldGuard:
     """The shield with what the robot does around it, batched over ``n`` robots (the robot runs one, the evaluation
     many):
 
-    * a (nearly) blocked command -- less than ``alternatives_below`` of it gets through -- is replaced by the safe
-      command near it that goes furthest the way it wanted (:meth:`alternatives`: the translation or the turn alone,
-      a nudge sideways, a step back): in a tight spot, turning while half through a door say, one of them may be safe
-      where the combination is not;
+    * a (nearly) blocked command -- less than ``alternatives_below`` of it gets through -- is replaced, while the robot
+      is (nearly) at rest (below ``alternatives_at``: m/s, rad/s), by the safe command near it that goes furthest the
+      way it wanted (:meth:`alternatives`: the translation or the turn alone, a nudge sideways, a step back): in a
+      tight spot, turning while half through a door say, one of them may be safe where the combination is not. Only
+      at rest: the shield checks a command as if the robot followed it at once, which holds from rest but not when
+      the robot is sent another way at speed. The alternatives are checked against the same returns as the command
+      (those closest to the footprint); checked against those closest to the robot's centre, a wall alongside crowded
+      out what lay ahead, and contacts with structures tripled in simulation;
     * a robot that stays blocked for ``recovery[0]`` s backs off for ``recovery[1]`` s at ``recovery[2]`` m/s (checked
       by the shield), then the policy tries again;
-    * for ``crawl_hold`` s after anything moving was within ``cfg.near_moving_gap``, the footprint's fastest point
-      crawls at ``cfg.near_moving_speed``: a person close by can leave the scan's view of what moves (the floor around
-      them is hidden) while still there.
+    * returns that moved are remembered where they were for ``crawl_hold`` s (the ``memory`` closest to the footprint,
+      carried along with the robot's own motion) and count as moving returns, at a person's height: a person close by
+      can leave the scan's view of what moves (the floor around them is hidden) while still there. The robot crawls
+      within ``cfg.near_moving_gap`` of them (:func:`shield`) -- and no longer once it has moved away. Only when
+      crawling is on (``cfg.near_moving_gap`` > 0).
     """
 
     def __init__(self, n: int, cfg: ShieldCfg = ShieldCfg(), device="cpu", alternatives_below: float = 0.3,
-                 recovery: tuple[float, float, float] = (1.5, 1.0, 0.15), crawl_hold: float = 2.0,
-                 alternative_points: int = 1024):
+                 alternatives_at: tuple[float, float] = (0.1, 0.2), recovery: tuple[float, float, float] = (1.5, 1.0, 0.15),
+                 crawl_hold: float = 2.0, alternative_points: int | None = None, memory: int = 16,
+                 alternatives_chunk: int = 64):
         self.cfg, self.alternatives_below, self.recovery, self.crawl_hold = cfg, alternatives_below, recovery, crawl_hold
-        self.alternative_points = alternative_points
+        self.alternatives_at, self.alternatives_chunk = alternatives_at, alternatives_chunk
+        self.alternative_points = cfg.max_points if alternative_points is None else alternative_points
         self.blocked_for = torch.zeros(n, device=device)
         self.recovery_left = torch.zeros(n, device=device)
-        self.crawl_left = torch.zeros(n, device=device)
+        self.memory = torch.full((n, memory, 2), float("inf"), device=device)  # base frame (m)
+        self.memory_age = torch.full((n, memory), float("inf"), device=device)  # s
 
     def reset(self, ids=None):
         ids = slice(None) if ids is None else ids
         self.blocked_for[ids] = 0.0
         self.recovery_left[ids] = 0.0
-        self.crawl_left[ids] = 0.0
+        self.memory[ids] = float("inf")
+        self.memory_age[ids] = float("inf")
 
     @staticmethod
     def alternatives(c: torch.Tensor) -> torch.Tensor:
@@ -329,40 +344,87 @@ class ShieldGuard:
                 (z - 0.15, z, z), (z - 0.15, z, 0.5 * wz)]
         return torch.stack([torch.stack(r, dim=-1) for r in rows], dim=1)
 
+    def _remember(self, points: torch.Tensor, moving: torch.Tensor | None, dt: float, velocity: torch.Tensor | None):
+        """Carry the remembered returns along with the robot's motion over ``dt``, forget the old ones, and keep the
+        ``memory`` closest to the footprint of them and of the returns that moved now."""
+        cfg = self.cfg
+        if velocity is not None:  # a point fixed in the world, in the base frame after the robot moved
+            th = -velocity[:, 2, None] * dt
+            c, s = torch.cos(th), torch.sin(th)
+            p = self.memory - velocity[:, None, :2] * dt
+            self.memory = torch.stack([c * p[..., 0] - s * p[..., 1], s * p[..., 0] + c * p[..., 1]], dim=-1)
+        self.memory_age = self.memory_age + dt
+        if moving is None:
+            new_xy = torch.full_like(self.memory, float("inf"))
+            new_age = torch.full_like(self.memory_age, float("inf"))
+        else:
+            xy = torch.nan_to_num(points[..., :2].float(), nan=float("inf"))
+            xy = torch.where(moving[..., None] & torch.isfinite(xy).all(-1, keepdim=True), xy, torch.full_like(xy, float("inf")))
+            seen = torch.isfinite(xy[..., 0])
+            new_xy, new_age = xy, torch.where(seen, torch.zeros_like(xy[..., 0]), torch.full_like(xy[..., 0], float("inf")))
+        xy = torch.cat([self.memory, new_xy], dim=1)
+        age = torch.cat([self.memory_age, new_age], dim=1)
+        r = cfg.corner_radius
+        core = torch.tensor([cfg.half_length - r, cfg.half_width - r], device=xy.device)
+        gap, _, _ = _gap(torch.where(torch.isfinite(xy), xy, torch.full_like(xy, 1e3)), core, r)
+        keep = (age <= self.crawl_hold) & torch.isfinite(xy).all(-1)
+        k = self.memory.shape[1]
+        top = torch.where(keep, gap, torch.full_like(gap, float("inf"))).topk(k, dim=1, largest=False)
+        valid = torch.isfinite(top.values)
+        self.memory = torch.where(valid[..., None], torch.gather(xy, 1, top.indices[..., None].expand(-1, -1, 2)),
+                                  torch.full_like(self.memory, float("inf")))
+        self.memory_age = torch.where(valid, torch.gather(age, 1, top.indices), torch.full_like(self.memory_age, float("inf")))
+
     def __call__(self, points: torch.Tensor, command: torch.Tensor, dt: float, velocity: torch.Tensor | None = None,
                  moving: torch.Tensor | None = None, person: torch.Tensor | None = None,
                  ground_z=None) -> tuple[torch.Tensor, dict]:
         cfg, n, dev = self.cfg, command.shape[0], command.device
+        if self.crawl_hold > 0.0 and cfg.near_moving_gap > 0.0:  # (only for crawling)
+            self._remember(points, moving, dt, velocity)
+        # the remembered returns, at a person's height, as further moving returns
+        gz = _per_robot(cfg.ground_z if ground_z is None else ground_z, n, dev)
+        remembered = torch.isfinite(self.memory).all(-1)
+        mem = torch.cat([self.memory, (gz + 1.5).expand(-1, self.memory.shape[1])[..., None]], dim=-1)
+        mem = torch.where(remembered[..., None], mem, torch.full_like(mem, float("inf")))
+        points = torch.cat([points.float(), mem], dim=1)
+        moving = torch.cat([torch.zeros(points.shape[0], points.shape[1] - mem.shape[1], dtype=torch.bool, device=dev)
+                            if moving is None else moving, remembered], dim=1)
+        if person is not None:
+            person = torch.cat([person, torch.zeros_like(remembered)], dim=1)
         safe, info = shield(points, command, cfg, velocity, moving, person, ground_z)
         weight = torch.tensor([1.0, 1.0, 0.5], device=dev)  # a yaw rate counts as the speed of a point 0.5 m out
         intent = command * weight
         intent = intent / torch.linalg.norm(intent, dim=1, keepdim=True).clamp(min=1e-6)
         alternative = torch.full((n,), -1, dtype=torch.long, device=dev)
         stuck = (info["scale"] < self.alternatives_below) & ~info["emergency"]
-        if stuck.any():
-            ids = stuck.nonzero(as_tuple=True)[0]
+        if velocity is not None:  # only from (nearly) at rest
+            stuck &= (torch.linalg.norm(velocity[:, :2], dim=1) < self.alternatives_at[0]) & (
+                velocity[:, 2].abs() < self.alternatives_at[1])
+        for ids in stuck.nonzero(as_tuple=True)[0].split(self.alternatives_chunk):  # (bounded memory when batched)
             cands = self.alternatives(command[ids])  # (m, K, 3)
             m, k = cands.shape[:2]
             pts = points[ids]
-            mv = None if moving is None else moving[ids]
+            mv = moving[ids]
             ps = None if person is None else person[ids]
-            if pts.shape[1] > self.alternative_points:  # the closest of the returns the shield counts (not the floor)
+            if pts.shape[1] > self.alternative_points:
+                # the returns the shield itself checks: those it counts (not the floor) closest to the footprint (by
+                # their distance to the centre, a wall alongside could crowd out a post at a front corner)
                 p = torch.nan_to_num(pts.float(), nan=1e3, posinf=1e3, neginf=-1e3)
-                gz_all = _per_robot(cfg.ground_z if ground_z is None else ground_z, n, dev)[ids]
-                h = p[..., 2] - gz_all
+                h = p[..., 2] - gz[ids]
                 counted = ((h > cfg.z_min) & (h < cfg.z_max)) | (h < cfg.drop_z)
-                d = torch.where(counted, torch.linalg.norm(p[..., :2], dim=-1), torch.full_like(h, 1e6))
+                r = cfg.corner_radius
+                gap, _, _ = _gap(p[..., :2], torch.tensor([cfg.half_length - r, cfg.half_width - r], device=dev), r)
+                d = torch.where(counted & (gap > 0.0), gap, torch.full_like(h, 1e6))
                 top = d.topk(self.alternative_points, dim=1, largest=False).indices
                 pts = torch.gather(pts, 1, top[..., None].expand(-1, -1, 3))
-                mv = None if mv is None else torch.gather(mv, 1, top)
+                mv = torch.gather(mv, 1, top)
                 ps = None if ps is None else torch.gather(ps, 1, top)
 
             def rep(t):  # (m, ...) -> (m * K, ...)
                 return None if t is None else t[:, None].expand(m, k, *t.shape[1:]).reshape(m * k, *t.shape[1:])
 
-            gz = None if ground_z is None else torch.as_tensor(ground_z, dtype=torch.float32, device=dev).reshape(-1).expand(n)[ids]
             alt, _ = shield(rep(pts), cands.reshape(m * k, 3), cfg, rep(None if velocity is None else velocity[ids]),
-                            rep(mv), rep(ps), rep(gz))
+                            rep(mv), rep(ps), rep(gz[ids, 0]))
             alt = alt.view(m, k, 3)
             progress = ((alt * weight) * intent[ids, None]).sum(-1)
             best = progress.argmax(dim=1)
@@ -384,13 +446,12 @@ class ShieldGuard:
             back_safe, _ = shield(points, back, cfg, velocity, moving, person, ground_z)
             safe = torch.where(backing[:, None], back_safe, safe)
             self.recovery_left = torch.where(backing, self.recovery_left - dt, self.recovery_left)
-        # near something that moved: keep crawling for a while
-        self.crawl_left = torch.where(info["near_moving"], torch.full_like(self.crawl_left, self.crawl_hold),
-                                      (self.crawl_left - dt).clamp(min=0.0))
-        crawling = self.crawl_left > 0.0
+        # near something that moves or moved: crawl, whatever command was chosen
+        crawling = info["near_moving"]
         corner = math.hypot(cfg.half_length, cfg.half_width)
         fastest = torch.linalg.norm(safe[:, :2], dim=1) + safe[:, 2].abs() * corner
         slow = (cfg.near_moving_speed / fastest.clamp(min=1e-6)).clamp(max=1.0)
         safe = torch.where(crawling[:, None], safe * slow[:, None], safe)
-        info = {**info, "alternative": alternative, "backing_off": backing, "crawling": crawling, "state": state}
+        info = {**info, "alternative": alternative, "backing_off": backing, "crawling": crawling, "state": state,
+                "remembered": remembered.sum(dim=1).float()}
         return safe, info

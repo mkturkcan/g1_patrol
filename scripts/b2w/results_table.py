@@ -1,13 +1,15 @@
-"""Markdown tables of the B2-W release evaluations (``scripts/reproduce/b2w_3_evaluate.sh``), for the READMEs.
+"""Tables of the B2-W release evaluations (``scripts/reproduce/b2w_3_evaluate.sh``), for the READMEs and the project page.
 
-Prints the tables; with ``--write``, replaces them between ``<!-- table:b2w -->`` / ``<!-- table:b2w_stress -->``
-markers in ``README.md`` and ``deploy/b2w/README.md``.
+Prints the tables; with ``--write``, replaces them between ``<!-- table:NAME -->`` / ``<!-- /table:NAME -->``
+markers in ``README.md`` and ``deploy/b2w/README.md`` and in the ``<table id="NAMETable">`` elements of
+``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``).
 
 Usage:
     python scripts/b2w/results_table.py [--logs logs/rsl_rl] [--write]
 """
 
 import argparse
+import html
 import json
 import re
 from pathlib import Path
@@ -32,6 +34,14 @@ STRESS = [
     ("Degraded lidar map (20 % dropout, odometry drift)", "b2w_degraded_map.json"),
     ("Laggy controller, shield", "b2w_laggy_shield.json"),
 ]
+SHIELD = [
+    ("No shield", "b2w_nominal.json"),
+    ("Shield alone: commands scaled down", "b2w_nominal_shield_plain.json"),
+    ("+ alternatives from rest, backing off (crawl:=false)", "b2w_nominal_shield_nocrawl.json"),
+    ("+ crawling near what moved (released default)", "b2w_nominal_shield.json"),
+]
+COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Structure contact (%)", "Pedestrian contact, robot moving (%)",
+           "Pedestrian walked into stopped robot (%)", "Time-out (%)", "Speed (m/s)", "Shield stops (% of steps)"]
 
 
 def _lab(d: dict, key: str) -> float:
@@ -40,18 +50,36 @@ def _lab(d: dict, key: str) -> float:
     return sum(c[key] * c["episodes"] for c in cells) / max(n, 1)
 
 
-def _row(name: str, d: dict) -> str:
+def _cells(d: dict) -> list[str]:
     pc = d["pedestrian_contacts"]
     shield = d.get("shield_stats")
-    stops = f"{100 * shield['emergency_rate']:.1f}" if shield else "–"
-    return (f"| {name} | {d['episodes']:,} | {100 * d['goal_reached_rate']:.1f} | {100 * _lab(d, 'goal_reached_rate'):.1f} | "
-            f"{100 * d['obstacle_collision_rate']:.1f} | {100 * pc['robot_moving_rate']:.1f} | "
-            f"{100 * pc['pedestrian_walked_in_rate']:.1f} | {100 * d['time_out_rate']:.1f} | {d['motion']['mean_speed_mps']:.2f} | {stops} |")
+    return [f"{d['episodes']:,}", f"{100 * d['goal_reached_rate']:.1f}", f"{100 * _lab(d, 'goal_reached_rate'):.1f}",
+            f"{100 * d['obstacle_collision_rate']:.1f}", f"{100 * pc['robot_moving_rate']:.1f}",
+            f"{100 * pc['pedestrian_walked_in_rate']:.1f}", f"{100 * d['time_out_rate']:.1f}",
+            f"{d['motion']['mean_speed_mps']:.2f}", f"{100 * shield['emergency_rate']:.1f}" if shield else "–"]
 
 
-HEADER = ("| Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot "
-          "moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |\n"
-          "|---|---|---|---|---|---|---|---|---|---|")
+def _markdown(first: str, rows: list) -> str:
+    lines = ["| " + " | ".join([first, *COLUMNS]) + " |", "|" + "---|" * (len(COLUMNS) + 1)]
+    return "\n".join(lines + ["| " + " | ".join([name, *cells]) + " |" for name, cells in rows])
+
+
+def _html(first: str, rows: list, caption: str) -> str:
+    head = "".join(f'<th class="num">{html.escape(c)}</th>' for c in COLUMNS)
+    body = "".join("<tr><td>" + html.escape(name) + "</td>" + "".join(f'<td class="num">{c}</td>' for c in cells) + "</tr>"
+                   for name, cells in rows)
+    return f"<caption>{caption}</caption><thead><tr><th>{first}</th>{head}</tr></thead><tbody>{body}</tbody>"
+
+
+CAPTIONS = {
+    "b2w": "<b>Table 1.</b> Policies on the lab mixture (half lab-hall tiles), all difficulty levels, 1,024 robots for "
+           "300 s. Speed caps are drawn per episode from 0.4–1.5 m/s unless fixed. A pedestrian contact counts as the "
+           "robot's if it was moving towards the person at more than 0.1 m/s. Shield stops: steps at which the shield "
+           "set the command to zero because the robot's own momentum already breached.",
+    "b2w_stress": "<b>Table 2.</b> The fused student with a built-in controller worse than in training and with "
+                  "degraded sensing (setup of Table 1).",
+    "b2w_shield": "<b>Table 3.</b> What the shield and the guard around it do (fused student, setup of Table 1).",
+}
 
 
 def main():
@@ -62,20 +90,30 @@ def main():
     root = Path(args.logs)
     dirs = {"teacher": root / "b2w_nav_lab_teacher/release/eval", "fused": root / "b2w_nav_lab_fused_student/release/eval",
             "lidar": root / "b2w_nav_lab_lidar_student/release/eval"}
-    main_rows = [_row(name, json.loads((dirs[who] / f).read_text())) for name, who, f in ROWS if (dirs[who] / f).exists()]
-    stress_rows = [_row(name, json.loads((dirs["fused"] / f).read_text())) for name, f in STRESS
-                   if (dirs["fused"] / f).exists()]
-    tables = {"b2w": "\n".join([HEADER, *main_rows]),
-              "b2w_stress": "\n".join([HEADER.replace("| Policy |", "| Fused student |"), *stress_rows])}
-    print(tables["b2w"] + "\n\n" + tables["b2w_stress"])
+    load = lambda who, f: json.loads((dirs[who] / f).read_text()) if (dirs[who] / f).exists() else None  # noqa: E731
+    rows = {
+        "b2w": ("Policy", [(name, _cells(d)) for name, who, f in ROWS if (d := load(who, f))]),
+        "b2w_stress": ("Fused student", [(name, _cells(d)) for name, f in STRESS if (d := load("fused", f))]),
+        "b2w_shield": ("Fused student", [(name, _cells(d)) for name, f in SHIELD if (d := load("fused", f))]),
+    }
+    for name, (first, r) in rows.items():
+        print(_markdown(first, r) + "\n")
     if args.write:
         for path in (ROOT / "README.md", ROOT / "deploy" / "b2w" / "README.md"):
             text = path.read_text()
-            for name, table in tables.items():
+            for name, (first, r) in rows.items():
                 text = re.sub(rf"(<!-- table:{name} -->\n).*?(\n<!-- /table:{name} -->)",
-                              lambda m: m.group(1) + table + m.group(2), text, flags=re.S)
+                              lambda m: m.group(1) + _markdown(first, r) + m.group(2), text, flags=re.S)
             path.write_text(text)
             print("wrote", path)
+        page = ROOT / "docs" / "b2w" / "index.html"
+        if page.exists():
+            text = page.read_text()
+            for name, (first, r) in rows.items():
+                text = re.sub(rf'<table id="{name}Table">.*?</table>',
+                              lambda m: f'<table id="{name}Table">{_html(first, r, CAPTIONS[name])}</table>', text, flags=re.S)
+            page.write_text(text)
+            print("wrote", page)
 
 
 if __name__ == "__main__":

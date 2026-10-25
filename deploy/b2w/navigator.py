@@ -81,7 +81,7 @@ class Navigator:
     """
 
     def __init__(self, config: dict | str | Path, policy=None, device: str = "cpu", max_speed: float | None = None,
-                 guard: bool = True, shield_cfg: ShieldCfg | None = None, threads: int = 2):
+                 guard: bool = True, shield_cfg: ShieldCfg | None = None, threads: int = 2, crawl: bool = True):
         # the tensors are small: more threads only cost (with one thread per core on a large machine, 60x slower)
         torch.set_num_threads(threads)
         self.cfg = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else config
@@ -104,9 +104,10 @@ class Navigator:
         lo, hi = self.cfg["speed_limit_range"]
         self.speed_limit = float(np.clip(hi if max_speed is None else max_speed, lo, hi))
         self.guard = guard
-        self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}))
+        crawling = {} if crawl else {"near_moving_gap": 0.0}
+        self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}), **crawling)
         # the shield with what the robot does around it: alternatives to a blocked command, backing off when stuck,
-        # crawling near people (the same code as the evaluation in simulation)
+        # crawling near what moved unless crawl=False (the same code as the evaluation in simulation)
         self.shield_guard = ShieldGuard(1, self.shield_cfg)
         self.goal: np.ndarray | None = None
         self.route: tuple[torch.Tensor, torch.Tensor] | None = None
