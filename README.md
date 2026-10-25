@@ -1,6 +1,6 @@
 # G1 Patrol: Humanoid Navigation in Dense Urban Pedestrian Environments
 
-Mehmet Kerem Turkcan · [Project page](https://mehmetkeremturkcan.com/g1_patrol/)
+Mehmet Kerem Turkcan · [Project page](https://mehmetkeremturkcan.com/g1_patrol/) · [B2-W page](https://mehmetkeremturkcan.com/g1_patrol/b2w/)
 
 This repository contains the simulation environments, training configurations and evaluation tools for goal-directed
 navigation of a Unitree G1 humanoid in dense urban pedestrian environments. A procedurally generated suite of New
@@ -9,8 +9,9 @@ plazas, each at ten difficulty levels) is populated by pedestrians that follow a
 hierarchical: a locomotion policy tracks velocity commands at 50 Hz, and a navigation policy issues these commands at
 10 Hz. A navigation teacher with privileged state is trained with PPO and distilled into student policies that
 observe only the robot's onboard sensors (Livox MID-360 lidar or Intel RealSense D435i depth camera). The same
-pipeline trains navigation for a Unitree B2-W wheeled quadruped in an indoor lab ([Unitree B2-W](#unitree-b2-w)). All
-experiments are in simulation, using Isaac Lab 3.0 and Isaac Sim 6.1.
+pipeline trains navigation for a Unitree B2-W wheeled quadruped in an indoor lab ([Unitree B2-W](#unitree-b2-w)), and
+civic tasks add litter and trash-bag collection, people who need room, incidents and crosswalk signals
+([Civic tasks](#civic-tasks)). All experiments are in simulation, using Isaac Lab 3.0 and Isaac Sim 6.1.
 
 The project is part of work toward a civic robot system for the applications of the
 [Center for Smart Streetscapes (CS3)](https://cs3-erc.org/), an NSF Engineering Research Center led by Columbia
@@ -292,24 +293,163 @@ and the camera student 3.2 points of success. Faster pedestrians, fewer of whom 
 contacts from 8–16% to 19–33%. The degraded robot (payload, weak motors, latency, friction 0.3) costs 3–5 points of
 success, and falls rise to 1–2%.
 
+## Civic tasks
+
+The civic task (`G1Patrol-Navigate-Civic`) extends the street task with what a robot on patrol meets besides the crowd
+and with work along the way. The same scenario tiles gain litter baskets, curbside piles of trash bags, lines of people
+and, at crosswalks, pedestrian signals; each episode (60 s) places litter, bags, people who need room and at most one
+incident. Frequencies, speeds and forces grow with the difficulty level.
+
+**Robot.** The navigation policy commands a reaching walker (`G1Patrol-Walk-Reach`) with a velocity and a posture
+(pelvis height above the ground and forward lean). The walker drives the legs only; the waist, arms and hands follow a
+hands controller. It is trained like the street walker (three phases, Newton) with posture commands (pelvis 0.40–0.72 m
+with a coupled lean up to 1.2 rad, half of them deep squats; a braced stance), random upper-body motion, up to 3 kg in
+one hand, and shoves (60–250 N) and kicks (80–250 N) during random windows, followed by a fourth phase of 2,000
+iterations in which 30% of the commands are slow walking or turning on the spot and half of the robots receive yaw-rate
+rather than heading commands, as the navigation policy sends them.
+
+**Hands.** Two further policy outputs, a trigger and a brace, drive a scripted hands controller. Triggered with an item
+up to 1 m in front of the robot, the controller walks the robot up to it (arcs at 0.3–0.45 m/s), squats, brings the
+hand's grasp center to the item by damped least-squares inverse kinematics of the waist and arm, and closes the hand;
+near a litter basket it walks up to the basket, lifts the litter over the rim, lets go and steps back; a bag is set
+down beside a bag pile. Next to a person who has fallen, the trigger raises an arm and calls for help. Bracing lowers
+the pelvis, leans forward and raises both forearms.
+
+**Litter and bags.** Sixteen kinds of litter (5–200 g: cups, cans, bottles, takeout boxes, paper, a plastic bag, ...)
+and six trash bags (1.0–2.4 kg) are dynamic rigid bodies with convex collision hulls; nineteen are CC-BY 4.0 and CC0
+models (`scripts/assets/import_litter_assets.py`, credited in `src/g1_patrol/assets/data/trash/ATTRIBUTION.md`), three
+are generated. Per episode, 0–3 pieces of litter lie within 2 m of the route (at least 0.5 m from structures) on tiles
+with a basket, and 0–1 bags on tiles with a bag pile.
+
+**People and incidents.**
+
+| | |
+|---|---|
+| Wheelchairs and strollers | 0.8 m wide, 0.6–1.1 m/s, notice the robot; 20–50% of episodes |
+| White canes | slow, notice the robot only at 0.6 m; 2–6% of pedestrians |
+| Dogs on leashes | 0.8–2 m from their owner; passing between dog and owner ends the episode |
+| Groups and lines | groups of two or three side by side; lines of 3–6 people at doors, bus stops and kiosks |
+| Cyclists | on the sidewalk at 3–5 m/s, swerve but do not slow down; 5–35% of episodes |
+| Blocking | someone stands 1 m in front of the robot, following its moves, for 4–12 s |
+| Attack | someone walks or runs at the robot (1.0–2.6 m/s), shoves and kicks it within reach every 0.8–2.5 s for 4–15 s; 8–25% of episodes |
+| Fallen person | lying on the route; the robot's goal is to call for help next to them; 8–12% of episodes |
+| Signals | starting to cross on anything but WALK ends the episode; 5–15% of pedestrians cross anyway |
+
+**Rewards and training.** The street task's terms, with contacts, falls and the roadway costing twice as much, and:
++25 per item picked up, +80 per item in a basket, +100 per bag set down at a pile, all taken back if the episode ends
+in a contact, fall or the roadway; progress towards the next item or place to put it; under attack, distance from the
+attacker and bracing when it is within 1 m; room for people in wheelchairs, with strollers or white canes; groups and
+lines not split. The privileged teacher is trained with PPO on 16,384 robots from scratch in two steps, 2,500
+iterations without litter and bags and then 3,000 with them (trained together from the start, collecting litter
+competed with learning to navigate), with the entropy coefficient adapted so that the action standard deviation stays
+near 0.35. Two students observe what the robot's sensors and the city's data provide: people from a tracker on the
+MID-360 (lidar student) or the D435i depth stream (camera student), litter and bags detected in the color image and
+kept in a drifting odometry frame, baskets and bag piles from a city map, and the signal phase at 70% of the
+crossings; they are distilled from the teacher for 2,000 iterations.
+
+**Results.** The civic task is harder than the street task: the teacher reaches the goal in 38.1% of the episodes
+(street task 63.8%), the students in 41.7% and 40.3%, with pedestrian contacts in 21–25% and obstacle contacts in
+24–28% of the episodes (Table 10). The policies call for help next to a fallen person in 58–64% of the episodes in
+which there is one, but rarely use the hands: the teacher picks up 9.3% of the litter and puts 1.3% into a basket, the
+students fewer. The hands controller itself, triggered once per item with nobody around, picks up 67.4% of the litter
+and 91.1% of the bags and puts 87.5% and 98.9% of them where they belong (Table 11): the policy rarely triggers it
+when an item is within reach, which suggests sequencing the litter work at the task level (walk to the item, pick it
+up, walk to the basket) rather than learning it end to end. With an attack in every episode at full strength, goals
+fall to 13–19% and obstacle contacts rise to 38–52% (Table 13). The reaching walker falls 13–14 times in 341
+robot-minutes under its training randomization; under attacks on PhysX, which it was not trained on and on which the
+civic tasks run, it falls 130 times (19 on Newton; Table 12).
+
+*Table 10. Civic task: episode outcomes and civic metrics over all tiles (2,400 robots, 120 s, curriculum disabled).
+Attack rows are over the episodes in which an attack took place.*
+
+<!-- table:civic -->
+| Outcome | Teacher | Lidar student | Camera student |
+|---|---:|---:|---:|
+| Goal reached | 38.1% | 41.7% | 40.3% |
+| Pedestrian contact (including passing between a dog and its owner) | 20.6% | 21.6% | 25.1% |
+| Obstacle contact | 27.9% | 25.7% | 23.6% |
+| Roadway (left the sidewalk, or crossed against the signal) | 4.8% | 3.2% | 2.0% |
+| Fall | 0.88% | 0.67% | 0.66% |
+| Time-out (60 s) | 7.7% | 7.1% | 8.4% |
+| Litter picked up, per item | 9.3% | 5.3% | 4.8% |
+| Litter put in a basket, per item | 1.3% | 0.8% | 0.6% |
+| Bags set down at a curbside pile, per bag | 2.6% | 1.2% | 0.8% |
+| Fallen person: help called | 57.7% | 61.7% | 64.3% |
+| Attack: fall | 2.9% | 4.3% | 3.9% |
+| Attack: contact with a bystander | 12.2% | 22.7% | 29.1% |
+| Attack: mean distance to the attacker (m) | 3.74 | 3.00 | 2.88 |
+| Attack: braced while the attacker is within 1 m | 36.1% | 32.6% | 13.6% |
+| Shoves and kicks received per episode | 0.03 | 0.10 | 0.12 |
+| Braced without a threat (time) | 1.6% | 0.8% | 4.4% |
+| Time within 1.2 m of a person who needs room | 8.9% | 10.5% | 12.5% |
+| Groups or lines split, per 100 episodes | 0.2 | 0.3 | 0.2 |
+| Signal violations, per 100 episodes | 0.1 | 0.0 | 0.0 |
+| Completed episodes | 12,121 | 12,668 | 12,487 |
+<!-- /table:civic -->
+
+*Table 11. The hands controller with scripted triggers (`scripts/evaluate_hands.py`; nobody around, one trigger per
+item and one per put-down).*
+
+<!-- table:hands -->
+| Hands controller | Litter | Trash bags |
+|---|---:|---:|
+| Picked up (item 0.3–1.0 m ahead, up to 0.45 m to the side) | 67.4% | 91.1% |
+| Reached (walked up to it, squatting) | 83.6% | 95.8% |
+| Grasped, once reached | 80.7% | 95.1% |
+| Median time to hold it | 5.8 s | 5.1 s |
+| Put where it belongs (basket; bag pile) | 87.5% | 98.9% |
+| Let go elsewhere | 6.2% | 0.0% |
+| Median time to put it down | 4.1 s | 3.7 s |
+| Falls | 0 | 0 |
+| Items (robots putting down) | 390 (176) | 236 (179) |
+<!-- /table:hands -->
+
+*Table 12. Falls of the reaching walker in 341 robot-minutes (setup of Table 6) under its training randomization and
+with every robot at the edge of one of its tasks.*
+
+<!-- table:reach_walker_stress -->
+| Condition (every robot) | Reaching walker, Newton | Reaching walker, PhysX |
+|---|---:|---:|
+| Training randomization | 14 | 13 |
+| Shoves and kicks half of the time | 19 | 130 |
+| Braced, walking at 0.8–1.3 m/s and turning while attacked | 40 | 305 |
+| Deep squats only | 0 | 8 |
+| 3 kg in one hand all the time | 13 | 49 |
+| Payload, weak motors, latency, friction 0.3 and sensor noise | 301 | 454 |
+<!-- /table:reach_walker_stress -->
+
+*Table 13. Civic task under degraded conditions applied to every robot: goal reached / pedestrian contact / obstacle
+contact / fall (%).*
+
+<!-- table:civic_stress -->
+| Condition | Teacher | Lidar student | Camera student |
+|---|---:|---:|---:|
+| Nominal | 38.1 / 20.6 / 27.9 / 0.9 | 41.7 / 21.6 / 25.7 / 0.7 | 40.3 / 25.1 / 23.6 / 0.7 |
+| An attack in every episode, at full strength | 12.9 / 18.0 / 52.4 / 2.5 | 18.5 / 27.3 / 41.3 / 3.1 | 19.0 / 33.2 / 37.5 / 2.6 |
+| Attacks, people blocking the way and fallen people at twice the training rates | 34.8 / 20.1 / 31.3 / 1.2 | – | – |
+| Sensors: twice the noise and odometry drift, 0–200 ms latency | – | 41.0 / 21.8 / 26.0 / 0.7 | 36.9 / 24.8 / 24.6 / 0.7 |
+| Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3 | 34.2 / 20.7 / 28.7 / 3.1 | 38.7 / 21.4 / 25.8 / 2.5 | 38.0 / 25.6 / 23.3 / 2.5 |
+<!-- /table:civic_stress -->
+
 ## Unitree B2-W
 
 The tiles, pedestrians and training pipeline also train navigation for a second robot, Unitree's B2-W wheeled
 quadruped, for an indoor lab. `deploy/b2w` holds the software that runs on the robot's Jetson -- the policy, the
 safety shield, SLAM (slam_toolbox) and a route planner on the map it builds, started by one ROS 2 launch file -- and a
 step-by-step guide (`deploy/b2w/README.md`). The stack has been run against a simulated B2-W on ROS 2
-(`deploy/b2w/sim`), not yet on the robot.
+(`deploy/b2w/sim`), not yet on the robot. Videos and results: [B2-W
+page](https://mehmetkeremturkcan.com/g1_patrol/b2w/).
 
 **Robot model.** The B2-W is driven through Unitree's sport-mode controller, which takes body velocity commands
-(forward −0.8 to 1.5 m/s, lateral ±0.3 m/s, yaw rate ±1.2 rad/s). It is simulated as a kinematic body with a
-1.12 × 0.58 m footprint that follows the commands through a model of the controller drawn per episode: latency
-40–160 ms, a first-order response, acceleration bounds, gain errors, deadband, yaw drift and velocity noise
-(`g1_patrol.controller_model`; `scripts/b2w/sysid.py` fits the same model to logs of the robot). Each episode caps
-the planar speed at a value between 0.4 and 1.5 m/s that the policy observes; on the robot it is the operator's speed
+(forward −0.8 to 1.5 m/s, lateral ±0.3 m/s, yaw rate ±1.2 rad/s). It is simulated as a kinematic body with a 1.12 ×
+0.58 m footprint that follows the commands through a model of the controller drawn per episode: latency 40–160 ms, a
+first-order response, acceleration bounds, gain errors, deadband, yaw drift and velocity noise
+(`g1_patrol.controller_model`; `scripts/b2w/sysid.py` fits the same model to logs of the robot). Each episode caps the
+planar speed at a value between 0.4 and 1.5 m/s that the policy observes; on the robot it is the operator's speed
 setting. The body stands 0.55-0.72 m above the ground (drawn per episode), and the students' maps take their heights
-from the floor as the robot measures it in each scan. A cap the policy was not trained with changes its turns, since it keeps the yaw rate: in lab, lobby and
-corridor tiles without pedestrians, a route-following teacher trained without caps touched structures in 42% of the
-episodes at a 0.6 m/s cap and in 29% without one.
+from the floor as the robot measures it in each scan. A cap the policy was not trained with changes its turns, since
+it keeps the yaw rate: in lab, lobby and corridor tiles without pedestrians, a route-following teacher trained without
+caps touched structures in 42% of the episodes at a 0.6 m/s cap and in 29% without one.
 
 **Tiles and routes.** Besides the street tiles, the robot trains on six procedural indoor tile types (labs,
 corridors, doorways between rooms, offices, warehouses with a loading dock, lobbies with a stairwell) and on
@@ -331,10 +471,17 @@ current scan, previous scan), they observe the route waypoints, odometry, gravit
 speed cap. Rewards slow the robot near structures (the fastest point of the footprint, which turning swings, at most
 0.3 m/s within 0.1 m and 1.5 m/s from 1 m) and keep it within 0.2 m of its route.
 
-**Safety shield.** On the robot, every command passes a shield that is independent of the policy
-(`g1_patrol.shield`): it is scaled down until the robot, executing it for 0.35 s and then braking at 0.8 m/s², stops
-before any sensor return comes within a margin (0.1 m, growing to 0.45 m around tall things at speed); returns that
-appear in open floor are assumed to be people approaching at 1.4 m/s.
+**Safety shield.** On the robot, every command passes a shield that is independent of the policy (`g1_patrol.shield`):
+it is scaled down until the robot, executing it for 0.35 s and then braking at 0.8 m/s², stops before any sensor
+return comes within a margin (0.1 m, growing to 0.45 m around tall things at speed); returns that appear in open floor
+are assumed to be people approaching at 1.4 m/s, and the closing speed towards tall things is held to 0.25 m/s within
+0.8 m. Within 1.2 m of anything tall that moves, or moved there in the last 2 s, the robot crawls at 0.1 m/s. A guard
+around the shield replaces a nearly blocked command, when the robot is at rest, by a safe command near it (the turn or
+the translation alone, a nudge sideways, a step back) and backs the robot off after 1.5 s of being blocked. The
+alternatives are checked against the same returns as the command, those closest to the footprint: checked against the
+returns closest to the robot's center, a wall alongside crowded out what lay ahead and structure contacts rose to 9%.
+Crawling costs time, because the returns that appear where the previous scan saw floor also come from static things
+coming into view as the robot moves; `crawl:=false` turns it off (Table B2).
 
 *Table B1. B2-W policies on the lab mixture (half lab-hall tiles), all difficulty levels, 1,024 robots for 300 s.
 Speed caps are drawn per episode unless fixed. A pedestrian contact counts as the robot's if it was moving towards
@@ -343,20 +490,32 @@ the person at more than 0.1 m/s. Shield stops: steps at which the shield set the
 <!-- table:b2w -->
 | Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
 |---|---|---|---|---|---|---|---|---|---|
-| Lab teacher (privileged) | 19,239 | 68.6 | 78.7 | 14.3 | 11.5 | 3.9 | 1.3 | 0.54 | – |
-| Fused student (lidar + 2 depth cameras) | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
-| Lidar-only student | 19,442 | 69.5 | 81.1 | 8.9 | 12.3 | 7.7 | 1.5 | 0.52 | – |
-| Fused, shield | 13,322 | 73.7 | 83.2 | 2.7 | 1.5 | 14.5 | 7.5 | 0.37 | 11.5 |
-| Fused, shield, cap 0.5 m/s | 11,685 | 70.2 | 81.7 | 2.4 | 2.2 | 17.4 | 7.8 | 0.31 | 9.5 |
-| Fused, shield, cap 1.0 m/s | 14,502 | 74.8 | 83.8 | 2.5 | 1.3 | 14.5 | 6.8 | 0.40 | 12.8 |
+| Lab teacher (privileged) | 18,239 | 69.4 | 79.4 | 16.6 | 8.5 | 3.2 | 1.8 | 0.53 | – |
+| Fused student (lidar + 2 depth cameras) | 18,831 | 72.5 | 81.0 | 10.3 | 6.9 | 8.2 | 1.8 | 0.52 | – |
+| Lidar-only student | 18,591 | 73.1 | 82.4 | 10.5 | 7.0 | 7.4 | 1.8 | 0.52 | – |
+| Fused, shield | 9,339 | 57.3 | 72.6 | 1.9 | 0.6 | 22.6 | 17.6 | 0.24 | 12.4 |
+| Fused, shield, cap 0.5 m/s | 8,610 | 53.9 | 69.8 | 1.8 | 0.7 | 23.9 | 19.7 | 0.21 | 11.3 |
+| Fused, shield, cap 1.0 m/s | 9,609 | 58.7 | 73.6 | 1.8 | 0.4 | 22.2 | 16.8 | 0.24 | 12.9 |
 <!-- /table:b2w -->
 
-With the shield, structure contacts fall from 9.5% to 2.4–2.7% of the episodes and contacts in which the robot moves
-into a pedestrian from 11.2% to 1.3–2.2%; most remaining pedestrian contacts are simulated pedestrians, a quarter of
-whom are distracted, walking into the stopped robot. Controller latency, slower response, weaker tracking and drift,
-failed depth cameras and a degraded lidar map each change the goal rate by at most 1.1 points
-(`deploy/b2w/README.md`). The release is reproduced by `bash scripts/reproduce/b2w.sh` (about 17 h on one GPU,
-the lidar-only student on a second).
+*Table B2. The shield alone and with the guard around it (setup of Table B1).*
+
+<!-- table:b2w_shield -->
+| Fused student | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| No shield | 18,831 | 72.5 | 81.0 | 10.3 | 6.9 | 8.2 | 1.8 | 0.52 | – |
+| Shield alone: commands scaled down | 13,017 | 73.5 | 84.3 | 3.2 | 0.7 | 14.8 | 7.7 | 0.37 | 11.0 |
+| + alternatives from rest, backing off (crawl:=false) | 13,056 | 76.0 | 86.7 | 2.2 | 0.8 | 14.3 | 6.7 | 0.38 | 14.1 |
+| + crawling near what moved (released default) | 9,339 | 57.3 | 72.6 | 1.9 | 0.6 | 22.6 | 17.6 | 0.24 | 12.4 |
+<!-- /table:b2w_shield -->
+
+With the shield, the fused student reaches 57.3% of its goals (without the shield 72.5%); structure contacts fall from
+10.3% to 1.9% of the episodes and contacts in which the robot moves into a pedestrian from 6.9% to 0.6%. Most
+remaining pedestrian contacts are simulated pedestrians, a quarter of whom are distracted, walking into the robot
+while it stands or crawls. Without crawling the goal rate is 76.0% and contacts in which the robot moves into a
+pedestrian 0.8%. Controller latency, slower response, weaker tracking and drift, failed depth cameras and a degraded
+lidar map each change the goal rate without the shield by at most 1.3 points (`deploy/b2w/README.md`). The release is
+reproduced by `bash scripts/reproduce/b2w.sh` (about 17 h on one GPU, the lidar-only student on a second).
 
 ## Installation
 
@@ -390,7 +549,7 @@ bash scripts/reproduce/4_evaluate.sh           # evaluations, logs/reproduce/eva
 bash scripts/reproduce/5_ablations.sh          # optional: locomotion ablations (Tables 7 and 8)
 bash scripts/reproduce/b2w.sh                  # B2-W: teacher, lab teacher, students, evaluations, export (Table B1)
 python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
-python scripts/b2w/results_table.py --write    # writes the B2-W tables into README.md and deploy/b2w/README.md
+python scripts/b2w/results_table.py --write    # writes the B2-W tables into the READMEs and docs/b2w/index.html
 ```
 
 Every stage starts from scratch (the students from the stage-2 teacher), with all settings in the task
@@ -481,9 +640,10 @@ scripts/
 ├── stress_nav.py                navigation evaluation with degraded sensors, pedestrians or robot
 ├── reproduce/                   training and evaluation of the released policies (seeds, schedules, overrides)
 ├── b2w/                         B2-W evaluation, export, controller identification, replay, benchmark
-├── demo/                        RTX rendering with animated pedestrians
+├── demo/                        RTX rendering with animated pedestrians (nyc_demo.py; b2w_demo.py with Unitree's
+│                                B2-W model) and a check of the dressing for coincident faces (check_dressing.py)
 └── figures/                     result tables (build_results.py), diagrams and overview video
-docs/                            project page (GitHub Pages)
+docs/                            project page (GitHub Pages); docs/b2w: the B2-W page
 DEPLOYMENT.md                    policy interfaces, rates, frames and the assumptions of the simulation
 deploy/b2w/                      B2-W robot software (launch file, ROS 2 nodes, shield, planner), released policies,
                                  install script, a simulated B2-W for testing the stack (sim/)

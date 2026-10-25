@@ -244,7 +244,7 @@ def hands(eval_dir: str) -> Table:
 REACH_STRESS = [("nominal", "Training randomization"), ("attacks", "Shoves and kicks half of the time"),
                 ("brace_retreat", "Braced, walking at 0.8–1.3 m/s and turning while attacked"),
                 ("deep_squat", "Deep squats only"), ("hand_load", "3 kg in one hand all the time"),
-                ("combined", "Payload, weak motors, latency, friction 0.3 and sensor noise (Table 7)")]  # fmt: skip
+                ("combined", "Payload, weak motors, latency, friction 0.3 and sensor noise")]  # fmt: skip
 
 
 def reach_walker_stress(eval_dir: str) -> Table:
@@ -258,14 +258,14 @@ def reach_walker_stress(eval_dir: str) -> Table:
             cells.append(f'{m["falls"]:,}' if m else "–")
         rows.append([label] + cells)
     return Table(["Condition (every robot)"] + [c for c, _ in cols], rows,
-                 "<b>Table 10.</b> Falls of the reaching walker in 341 robot-minutes (setup of Table 7) under its "
+                 "<b>Table 10.</b> Falls of the reaching walker in 341 robot-minutes (setup of Table 5) under its "
                  "training randomization and with every robot at the edge of one of its tasks.")
 
 
 def civic_stress(eval_dir: str) -> Table:
     cell = lambda e: (f'{100 * e["goal_reached_rate"]:.1f} / {100 * e["pedestrian_collision_rate"]:.1f} / '  # noqa: E731
                       f'{100 * e["obstacle_collision_rate"]:.1f} / {100 * e["fall_rate"]:.1f}') if e else "–"
-    conditions = [("nominal", "Nominal (Table 9)"), ("attacks", "An attack in every episode, at full strength"),
+    conditions = [("nominal", "Nominal"), ("attacks", "An attack in every episode, at full strength"),
                   ("incidents", "Attacks, people blocking the way and fallen people at twice the training rates"),
                   ("sensors", "Sensors: twice the noise and odometry drift, 0–200 ms latency"),
                   ("robot", "Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3")]

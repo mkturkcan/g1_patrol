@@ -214,6 +214,8 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
       <a href="#environment">Environment</a>
       <a href="#sensing">Sensing</a>
       <a href="#results">Results</a>
+      <a href="#civic">Civic tasks</a>
+      <a href="b2w/">B2-W</a>
       <a class="gh" href="https://github.com/mkturkcan/g1_patrol">Code</a>
     </nav>
   </div>
@@ -463,10 +465,53 @@ dialog.lightbox .cap { margin-top: 10px; color: #e8eaed; font-size: 0.9rem; }
     </div>
   </section>
 
+  <section id="civic" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Civic tasks</h2>
+      <p class="prose">The civic task extends the street task with what a robot on patrol meets besides the crowd and with work along the way. The same scenario tiles gain litter baskets, curbside piles of trash bags, lines of people and, at crosswalks, pedestrian signals; each 60 s episode places litter (0–3 pieces near the route), trash bags, people who need room (wheelchair users, people with strollers or white canes), dogs on leashes, groups, sidewalk cyclists and at most one incident: someone blocking the way, someone attacking the robot with shoves and kicks, or someone who has fallen, next to whom the robot's goal is to call for help.</p>
+      <p class="prose">The navigation policy commands a reaching walker with a velocity and a posture (pelvis height and forward lean); the walker is trained like the street walker with posture commands, random upper-body motion, loads of up to 3 kg in one hand, shoves and kicks, and slow walking and turning on the spot. Two further outputs, a trigger and a brace, drive a scripted hands controller: triggered with an item up to 1 m in front of the robot, it walks the robot up to the item, squats and grasps it by inverse kinematics of the waist and arm; near a litter basket it lifts the litter over the rim and lets go; a bag is set down beside a bag pile. Litter and bags are dynamic rigid bodies (sixteen kinds of litter, 5–200 g, and six trash bags, 1.0–2.4 kg; nineteen of them CC-BY 4.0 and CC0 models). A privileged teacher is trained with PPO on 16,384 robots in two steps (2,500 iterations without litter and bags, then 3,000 with them) and distilled into a lidar student and a camera student that observe people through a tracker, litter detected in the color image, baskets and bag piles from a city map and, at 70% of the crossings, the signal phase.</p>
+      <p class="prose">The civic task is harder than the street task: the teacher reaches the goal in 38.1% of the episodes (street task 63.8%), the students in 41.7% and 40.3%, with pedestrian contacts in 21–25% and obstacle contacts in 24–28% (Table 9). The policies call for help next to a fallen person in 58–64% of the episodes in which there is one, but rarely use the hands: the teacher picks up 9.3% of the litter and puts 1.3% into a basket. The hands controller itself, triggered once per item with nobody around, picks up 67.4% of the litter and 91.1% of the bags and puts 87.5% and 98.9% of them where they belong (Table 12): the policy rarely triggers it when an item is within reach, which suggests sequencing the litter work at the task level rather than learning it end to end. With an attack in every episode at full strength, goals fall to 13–19% and obstacle contacts rise to 38–52% (Table 11).</p>
+    </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table id="civicTable"><caption><b>Table 9.</b> Civic task: episode outcomes and civic metrics over all tiles (2,400 robots, 120 s, curriculum disabled). Attack rows are over the episodes in which an attack took place.</caption><thead><tr><th>Outcome</th><th class="num">Teacher</th><th class="num">Lidar student</th><th class="num">Camera student</th></tr></thead><tbody><tr><td>Goal reached</td><td class="num">38.1%</td><td class="num">41.7%</td><td class="num">40.3%</td></tr><tr><td>Pedestrian contact (including passing between a dog and its owner)</td><td class="num">20.6%</td><td class="num">21.6%</td><td class="num">25.1%</td></tr><tr><td>Obstacle contact</td><td class="num">27.9%</td><td class="num">25.7%</td><td class="num">23.6%</td></tr><tr><td>Roadway (left the sidewalk, or crossed against the signal)</td><td class="num">4.8%</td><td class="num">3.2%</td><td class="num">2.0%</td></tr><tr><td>Fall</td><td class="num">0.88%</td><td class="num">0.67%</td><td class="num">0.66%</td></tr><tr><td>Time-out (60 s)</td><td class="num">7.7%</td><td class="num">7.1%</td><td class="num">8.4%</td></tr><tr><td>Litter picked up, per item</td><td class="num">9.3%</td><td class="num">5.3%</td><td class="num">4.8%</td></tr><tr><td>Litter put in a basket, per item</td><td class="num">1.3%</td><td class="num">0.8%</td><td class="num">0.6%</td></tr><tr><td>Bags set down at a curbside pile, per bag</td><td class="num">2.6%</td><td class="num">1.2%</td><td class="num">0.8%</td></tr><tr><td>Fallen person: help called</td><td class="num">57.7%</td><td class="num">61.7%</td><td class="num">64.3%</td></tr><tr><td>Attack: fall</td><td class="num">2.9%</td><td class="num">4.3%</td><td class="num">3.9%</td></tr><tr><td>Attack: contact with a bystander</td><td class="num">12.2%</td><td class="num">22.7%</td><td class="num">29.1%</td></tr><tr><td>Attack: mean distance to the attacker (m)</td><td class="num">3.74</td><td class="num">3.00</td><td class="num">2.88</td></tr><tr><td>Attack: braced while the attacker is within 1 m</td><td class="num">36.1%</td><td class="num">32.6%</td><td class="num">13.6%</td></tr><tr><td>Shoves and kicks received per episode</td><td class="num">0.03</td><td class="num">0.10</td><td class="num">0.12</td></tr><tr><td>Braced without a threat (time)</td><td class="num">1.6%</td><td class="num">0.8%</td><td class="num">4.4%</td></tr><tr><td>Time within 1.2 m of a person who needs room</td><td class="num">8.9%</td><td class="num">10.5%</td><td class="num">12.5%</td></tr><tr><td>Groups or lines split, per 100 episodes</td><td class="num">0.2</td><td class="num">0.3</td><td class="num">0.2</td></tr><tr><td>Signal violations, per 100 episodes</td><td class="num">0.1</td><td class="num">0.0</td><td class="num">0.0</td></tr><tr><td>Completed episodes</td><td class="num">12,121</td><td class="num">12,668</td><td class="num">12,487</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table id="reach_walker_stressTable"><caption><b>Table 10.</b> Falls of the reaching walker in 341 robot-minutes (setup of Table 5) under its training randomization and with every robot at the edge of one of its tasks.</caption><thead><tr><th>Condition (every robot)</th><th class="num">Reaching walker, Newton</th><th class="num">Reaching walker, PhysX</th></tr></thead><tbody><tr><td>Training randomization</td><td class="num">14</td><td class="num">13</td></tr><tr><td>Shoves and kicks half of the time</td><td class="num">19</td><td class="num">130</td></tr><tr><td>Braced, walking at 0.8–1.3 m/s and turning while attacked</td><td class="num">40</td><td class="num">305</td></tr><tr><td>Deep squats only</td><td class="num">0</td><td class="num">8</td></tr><tr><td>3 kg in one hand all the time</td><td class="num">13</td><td class="num">49</td></tr><tr><td>Payload, weak motors, latency, friction 0.3 and sensor noise</td><td class="num">301</td><td class="num">454</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table id="civic_stressTable"><caption><b>Table 11.</b> Civic task under degraded conditions applied to every robot: goal reached / pedestrian contact / obstacle contact / fall (%).</caption><thead><tr><th>Condition</th><th class="num">Teacher</th><th class="num">Lidar student</th><th class="num">Camera student</th></tr></thead><tbody><tr><td>Nominal</td><td class="num">38.1 / 20.6 / 27.9 / 0.9</td><td class="num">41.7 / 21.6 / 25.7 / 0.7</td><td class="num">40.3 / 25.1 / 23.6 / 0.7</td></tr><tr><td>An attack in every episode, at full strength</td><td class="num">12.9 / 18.0 / 52.4 / 2.5</td><td class="num">18.5 / 27.3 / 41.3 / 3.1</td><td class="num">19.0 / 33.2 / 37.5 / 2.6</td></tr><tr><td>Attacks, people blocking the way and fallen people at twice the training rates</td><td class="num">34.8 / 20.1 / 31.3 / 1.2</td><td class="num">–</td><td class="num">–</td></tr><tr><td>Sensors: twice the noise and odometry drift, 0–200 ms latency</td><td class="num">–</td><td class="num">41.0 / 21.8 / 26.0 / 0.7</td><td class="num">36.9 / 24.8 / 24.6 / 0.7</td></tr><tr><td>Robot: +5 kg, torque 80%, 15–25 ms actuation latency, friction 0.3</td><td class="num">34.2 / 20.7 / 28.7 / 3.1</td><td class="num">38.7 / 21.4 / 25.8 / 2.5</td><td class="num">38.0 / 25.6 / 23.3 / 2.5</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="col space" style="padding:0">
+      <div class="tablewrap">
+        <table id="handsTable"><caption><b>Table 12.</b> The hands controller with scripted triggers (<code>scripts/evaluate_hands.py</code>; nobody around, one trigger per item and one per put-down).</caption><thead><tr><th>Hands controller</th><th class="num">Litter</th><th class="num">Trash bags</th></tr></thead><tbody><tr><td>Picked up (item 0.3–1.0 m ahead, up to 0.45 m to the side)</td><td class="num">67.4%</td><td class="num">91.1%</td></tr><tr><td>Reached (walked up to it, squatting)</td><td class="num">83.6%</td><td class="num">95.8%</td></tr><tr><td>Grasped, once reached</td><td class="num">80.7%</td><td class="num">95.1%</td></tr><tr><td>Median time to hold it</td><td class="num">5.8 s</td><td class="num">5.1 s</td></tr><tr><td>Put where it belongs (basket; bag pile)</td><td class="num">87.5%</td><td class="num">98.9%</td></tr><tr><td>Let go elsewhere</td><td class="num">6.2%</td><td class="num">0.0%</td></tr><tr><td>Median time to put it down</td><td class="num">4.1 s</td><td class="num">3.7 s</td></tr><tr><td>Falls</td><td class="num">0</td><td class="num">0</td></tr><tr><td>Items (robots putting down)</td><td class="num">390 (176)</td><td class="num">236 (179)</td></tr></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <section id="b2w" class="col">
+    <h2>Unitree B2-W</h2>
+    <p class="prose">The tiles, pedestrians and training pipeline also train navigation for Unitree's B2-W wheeled quadruped in an indoor lab: a route-following policy that drives through the robot's built-in controller and observes a height map from an RS-Helios-5515 lidar and two D435i depth cameras, a safety shield that is independent of the policy, and the software that runs them on the robot with SLAM and a route planner. Details, videos and results are on the <a href="b2w/">B2-W page</a>.</p>
+    <figure class="space">
+      <a href="b2w/" aria-label="B2-W page"><div class="media"><img src="b2w/media/hero.jpg" alt="The B2-W in the digital twin of its deployment lab" loading="lazy"></div></a>
+      <figcaption><b>Figure 12.</b> The B2-W policy with its safety shield in the digital twin of the lab it is deployed in (simulation).</figcaption>
+    </figure>
+  </section>
+
   <section id="limitations" class="col">
     <h2>Limitations</h2>
     <ul class="facts">
       <li>All results are in simulation; the policies have not been deployed on hardware.</li>
+      <li>In the civic task the policies rarely trigger the hands controller when an item is within reach (9.3% of the litter picked up by the teacher), although the controller picks up 67.4% of the litter when triggered; the reaching walker falls about once every 2.6 robot-minutes under shoves and kicks on PhysX, on which it was not trained (Table 10).</li>
       <li>Odometry is modeled as the simulated robot motion with a random-walk error, and the students' velocity estimate as the true velocity with noise and a bias per episode; no state estimator is simulated.</li>
       <li>The walker is blind and steps onto curbs without perceiving them; curbs higher than 20 cm are outside its training range.</li>
       <li>On low-friction ground (0.3, e.g. wet paint or steel plates) the walker falls about once every 6.5 robot-minutes under random commands (Table 7).</li>
