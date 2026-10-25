@@ -147,39 +147,67 @@ def _smooth_ground_mesh(lay: TileLayout) -> trimesh.Trimesh:
 
 def _sidewalk_joints(lay: TileLayout, cells: np.ndarray, width: float = 0.025) -> trimesh.Trimesh | None:
     """Joints between the concrete flags of the sidewalk: thin strips every ``FLAG`` m across and along the street,
-    on the sidewalk cells only, slightly above the ground."""
+    on the flat sidewalk cells only (on the sloped cells at a curb a flat strip would cut into the ground), slightly
+    above the ground."""
     quads = []
     nx, ny = cells.shape
+    h = lay.heights
     for i in range(nx):
         x0 = -TILE_SIZE[0] / 2 + i * HF_RESOLUTION
         for j in range(ny):
-            if cells[i, j] != "sidewalk":
+            if cells[i, j] != "sidewalk" or i + 1 >= h.shape[0] or j + 1 >= h.shape[1]:
+                continue
+            corners = (h[i, j], h[i + 1, j], h[i, j + 1], h[i + 1, j + 1])
+            if max(corners) - min(corners) > 0.01:
                 continue
             y0 = -TILE_SIZE[1] / 2 + j * HF_RESOLUTION
-            lines_x = [k * FLAG for k in range(int(np.ceil(x0 / FLAG)), int(np.floor((x0 + HF_RESOLUTION) / FLAG)) + 1)]
-            lines_y = [HALF_W - k * FLAG for k in range(int(np.ceil((HALF_W - y0 - HF_RESOLUTION) / FLAG)),
-                                                        int(np.floor((HALF_W - y0) / FLAG)) + 1)]
-            for lx in lines_x:  # across the street
-                quads.append(((lx - width / 2, y0), (lx + width / 2, y0 + HF_RESOLUTION)))
-            for ly in lines_y:  # along the street
-                quads.append(((x0, ly - width / 2), (x0 + HF_RESOLUTION, ly + width / 2)))
+            x1, y1, w = x0 + HF_RESOLUTION, y0 + HF_RESOLUTION, width / 2
+            # the strips' pieces in this cell, each split where it crosses the cell's diagonal (the crease between
+            # the ground's two triangles), so that every piece lies on one triangle (up to the crease's corner)
+            for lx in (k * FLAG for k in range(int(np.ceil((x0 - w) / FLAG)), int(np.floor((x1 + w) / FLAG)) + 1)):
+                xa, xb = max(lx - w, x0), min(lx + w, x1)  # across the street
+                cuts = sorted({y0, y1, *(min(max(y0 + c - x0, y0), y1) for c in (xa, xb))})
+                quads += [((xa, ya), (xb, yb)) for ya, yb in zip(cuts[:-1], cuts[1:])]
+            for k in range(int(np.ceil((HALF_W - y1 - w) / FLAG)), int(np.floor((HALF_W - y0 + w) / FLAG)) + 1):
+                ly = HALF_W - k * FLAG  # along the street
+                ya, yb = max(ly - w, y0), min(ly + w, y1)
+                cuts = sorted({x0, x1, *(min(max(x0 + c - y0, x0), x1) for c in (ya, yb))})
+                quads += [((xa, ya), (xb, yb)) for xa, xb in zip(cuts[:-1], cuts[1:])]
     if not quads:
         return None
-
-    def ground(x: float, y: float) -> float:  # bilinear in the height field, so that the strips follow the ground
-        u = np.clip((x + TILE_SIZE[0] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[0] - 1.001)
-        v = np.clip((y + TILE_SIZE[1] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[1] - 1.001)
-        i, j = int(u), int(v)
-        a, b = u - i, v - j
-        h = lay.heights
-        return float((1 - a) * (1 - b) * h[i, j] + a * (1 - b) * h[i + 1, j] + (1 - a) * b * h[i, j + 1] + a * b * h[i + 1, j + 1])
-
     vertices, faces = [], []
     for (ax, ay), (bx, by) in quads:
+        if bx - ax < 1e-4 or by - ay < 1e-4:
+            continue
         k = len(vertices)
-        vertices += [(x, y, ground(x, y) + 0.004) for x, y in ((ax, ay), (bx, ay), (bx, by), (ax, by))]
+        vertices += [(x, y, _ground_height(lay, x, y) + 0.005) for x, y in ((ax, ay), (bx, ay), (bx, by), (ax, by))]
         faces += [(k, k + 1, k + 2), (k, k + 2, k + 3)]
     return trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=False)
+
+
+def _ground_height(lay: TileLayout, x: float, y: float) -> float:
+    """Height of the rendered ground at tile-local (x, y): on the triangles of :func:`_smooth_ground_mesh`."""
+    h = lay.heights
+    u = (x + TILE_SIZE[0] / 2) / HF_RESOLUTION
+    v = (y + TILE_SIZE[1] / 2) / HF_RESOLUTION
+    i, j = int(np.clip(np.floor(u), 0, h.shape[0] - 2)), int(np.clip(np.floor(v), 0, h.shape[1] - 2))
+    a, b = float(np.clip(u - i, 0.0, 1.0)), float(np.clip(v - j, 0.0, 1.0))
+    if a >= b:  # triangle (i, j), (i + 1, j), (i + 1, j + 1)
+        return float(h[i, j] + a * (h[i + 1, j] - h[i, j]) + b * (h[i + 1, j + 1] - h[i + 1, j]))
+    return float(h[i, j] + b * (h[i, j + 1] - h[i, j]) + a * (h[i + 1, j + 1] - h[i, j + 1]))
+
+
+def _ground_bilinear(lay: TileLayout, x: float, y: float) -> float:
+    """Height of the rendered ground (bilinear in the height field) at tile-local (x, y); street level (0) beyond
+    the tile."""
+    if abs(x) > TILE_SIZE[0] / 2 or abs(y) > TILE_SIZE[1] / 2:
+        return 0.0
+    u = np.clip((x + TILE_SIZE[0] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[0] - 1.001)
+    v = np.clip((y + TILE_SIZE[1] / 2) / HF_RESOLUTION, 0.0, lay.heights.shape[1] - 1.001)
+    i, j = int(u), int(v)
+    a, b = u - i, v - j
+    h = lay.heights
+    return float((1 - a) * (1 - b) * h[i, j] + a * (1 - b) * h[i + 1, j] + (1 - a) * b * h[i, j + 1] + a * b * h[i + 1, j + 1])
 
 
 def _submesh(vertices: np.ndarray, faces: np.ndarray) -> trimesh.Trimesh:
@@ -292,11 +320,13 @@ def _box(center, extents, yaw: float = 0.0) -> trimesh.Trimesh:
 def _city_block(stage, root: str, lay: TileLayout, center, y: float, facing: float, base: float, rng):
     """A row of buildings (brick or limestone, 3-8 storeys) along the tile edge at ``y``, facing the tile.
 
-    ``base`` is the height up to which the tile's own facade (doors, storefronts) already exists.
+    ``base`` is the height up to which the tile's own facade (doors, storefronts) already exists. The tile's fronts
+    stand on the sidewalk, so they reach a little above ``base``; above them the block stands 2 cm proud and reaches
+    deeper, so that none of its faces lies in one of theirs (the renderer flickers between coincident faces).
     """
     cx, cy = center
-    front = y if base > 0 else y  # facade plane (tile-local y)
-    depth = 0.6
+    front = y + facing * (0.02 if base > 0 else 0.0)  # facade plane (tile-local y)
+    depth = 0.9 if base > 0 else 0.6
     by = cy + front - facing * depth / 2  # slab center: behind the facade plane
     x = -HALF_L
     walls: dict[str, list] = {}
@@ -345,7 +375,8 @@ def _storefronts(stage, root: str, lay: TileLayout, center, rng):
             sx = bx - hx + (i + 0.5) * 2 * hx / shops
             width = 2 * hx / shops - 0.8
             z = lay.ground(sx, front + facing * 0.3)
-            glass.append(_box((cx + sx, cy + front + facing * 0.02, z + 1.65), (width, 0.04, 2.3)))
+            # (3 mm off the front: structures that end at the front, a partition say, meet the glass in no face)
+            glass.append(_box((cx + sx, cy + front + facing * 0.0215, z + 1.65), (width, 0.037, 2.3)))
             frames += _window_frames(cx + sx, cy + front + facing * 0.05, z + 1.65, width, 2.3)
             if rng.uniform() < 0.5:
                 awnings.append(_box((cx + sx, cy + front + facing * 0.45, z + 3.1), (width + 0.2, 0.9, 0.08)))
@@ -416,26 +447,30 @@ def _window_frames(x: float, y: float, z: float, width: float, height: float, pa
     t = 0.07
     parts = [_box((x, y, z + height / 2), (width + t, 0.08, t)), _box((x, y, z - height / 2), (width + t, 0.08, t))]
     n = max(1, round(width / pane))
-    for k in range(n + 1):
-        parts.append(_box((x - width / 2 + k * width / n, y, z), (t, 0.08, height)))
+    for k in range(n + 1):  # (ending inside the rails, not level with the glass)
+        parts.append(_box((x - width / 2 + k * width / n, y, z), (t, 0.08, height - t)))
     return parts
 
 
 def add_backdrop(stage, generator, dressed: set, margin: float = 300.0):
-    """Asphalt at street level over the undressed tiles and around the terrain, so nothing shows as a void."""
+    """Asphalt at street level over the undressed tiles and around the terrain, so nothing shows as a void. None of it
+    lies under a dressed tile (copies may lie beyond the terrain): its top would coincide with the tile's street."""
     sx, sy = generator.cfg.size
-    rows, cols = generator.cfg.num_rows, generator.cfg.num_cols
     x0, y0 = generator.shift[0], generator.shift[1]
+    rows = [r for r, _ in dressed] + [0, generator.cfg.num_rows - 1]
+    cols = [c for _, c in dressed] + [0, generator.cfg.num_cols - 1]
+    r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
     quads = [
         _box((x0 + (r + 0.5) * sx, y0 + (c + 0.5) * sy, -0.05), (sx, sy, 0.1))
-        for r in range(rows) for c in range(cols) if (r, c) not in dressed
+        for r in range(r0, r1 + 1) for c in range(c0, c1 + 1) if (r, c) not in dressed
     ]
-    w, h = rows * sx, cols * sy
+    ax0, ax1, ay0, ay1 = x0 + r0 * sx, x0 + (r1 + 1) * sx, y0 + c0 * sy, y0 + (c1 + 1) * sy
+    w, h = ax1 - ax0, ay1 - ay0
     quads += [
-        _box((x0 - margin / 2, 0.0, -0.05), (margin, h + 2 * margin, 0.1)),
-        _box((x0 + w + margin / 2, 0.0, -0.05), (margin, h + 2 * margin, 0.1)),
-        _box((x0 + w / 2, y0 - margin / 2, -0.05), (w, margin, 0.1)),
-        _box((x0 + w / 2, y0 + h + margin / 2, -0.05), (w, margin, 0.1)),
+        _box((ax0 - margin / 2, (ay0 + ay1) / 2, -0.05), (margin, h + 2 * margin, 0.1)),
+        _box((ax1 + margin / 2, (ay0 + ay1) / 2, -0.05), (margin, h + 2 * margin, 0.1)),
+        _box(((ax0 + ax1) / 2, ay0 - margin / 2, -0.05), (w, margin, 0.1)),
+        _box(((ax0 + ax1) / 2, ay1 + margin / 2, -0.05), (w, margin, 0.1)),
     ]
     add_mesh(stage, f"{ROOT}/backdrop", trimesh.util.concatenate(quads), "asphalt")
 
@@ -450,9 +485,18 @@ def _far_side(stage, root: str, lay: TileLayout, center, rng):
     far_curb = curb_y - 10.0
     walk = 3.5
     mid = (curb_y + far_curb) / 2
-    lines = [_box((cx, cy + mid + dy, 0.004), (2 * HALF_L, 0.11, 0.01)) for dy in (-0.09, 0.09)]
-    add_mesh(stage, f"{root}/center_lines", trimesh.util.concatenate(lines), "stripe_yellow")
-    add_mesh(stage, f"{root}/sidewalk", _box((cx, cy + far_curb - walk / 2, 0.075), (2 * HALF_L, walk, 0.15)), "sidewalk")
+    # center lines: painted strips that follow the asphalt (the tile's height field has bumps of about a centimetre)
+    vertices, faces = [], []
+    xs = np.linspace(-HALF_L, HALF_L, int(2 * HALF_L / 0.25) + 1)
+    for dy in (-0.09, 0.09):
+        for y in (mid + dy - 0.055, mid + dy + 0.055):
+            vertices += [(cx + x, cy + y, _ground_bilinear(lay, x, y) + 0.008) for x in xs]
+        k, n = len(vertices) - 2 * len(xs), len(xs)
+        faces += [f for i in range(n - 1) for f in ((k + i, k + i + 1, k + n + i + 1), (k + i, k + n + i + 1, k + n + i))]
+    add_mesh(stage, f"{root}/center_lines", trimesh.Trimesh(np.array(vertices), np.array(faces), process=False), "stripe_yellow")
+    # the sidewalk behind the curb (they meet in no face)
+    add_mesh(stage, f"{root}/sidewalk", _box((cx, cy + far_curb - (walk + 0.24) / 2, 0.075), (2 * HALF_L, walk - 0.24, 0.15)),
+             "sidewalk")
     add_mesh(stage, f"{root}/curb", _box((cx, cy + far_curb - 0.12, 0.08), (2 * HALF_L, 0.24, 0.16)), "curb")
     _city_block(stage, f"{root}/block", lay, center, far_curb - walk, facing=1.0, base=0.0, rng=rng)
     for k, x in enumerate(np.arange(-HALF_L + rng.uniform(1.0, 4.0), HALF_L, rng.uniform(6.0, 8.0))):
