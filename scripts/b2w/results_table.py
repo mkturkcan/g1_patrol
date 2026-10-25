@@ -72,13 +72,13 @@ def _html(first: str, rows: list, caption: str) -> str:
 
 
 CAPTIONS = {
-    "b2w": "<b>Table 1.</b> Policies on the lab mixture (half lab-hall tiles), all difficulty levels, 1,024 robots for "
+    "b2w": "<b>Table 5.</b> Policies on the lab mixture (half lab-hall tiles), all difficulty levels, 1,024 robots for "
            "300 s. Speed caps are drawn per episode from 0.4–1.5 m/s unless fixed. A pedestrian contact counts as the "
            "robot's if it was moving towards the person at more than 0.1 m/s. Shield stops: steps at which the shield "
            "set the command to zero because the robot's own momentum already breached.",
-    "b2w_stress": "<b>Table 2.</b> The fused student with a built-in controller worse than in training and with "
-                  "degraded sensing (setup of Table 1).",
-    "b2w_shield": "<b>Table 3.</b> What the shield and the guard around it do (fused student, setup of Table 1).",
+    "b2w_stress": "<b>Table 6.</b> The fused student with a built-in controller worse than in training and with "
+                  "degraded sensing (setup of Table 5).",
+    "b2w_shield": "<b>Table 2.</b> What the shield and the guard around it do (fused student, setup of Table 5).",
 }
 
 

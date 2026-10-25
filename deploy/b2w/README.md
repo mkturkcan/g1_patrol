@@ -98,17 +98,20 @@ ros2 topic pub --once /b2w/goal_relative geometry_msgs/msg/PointStamped "{point:
 ```
 
 Hold L1: the robot drives along the route; release L1: it stops. Moving a stick takes over (the policy stops sending
-until the stick is released). Then longer goals, through doors, with people walking by; `max_speed` up to 1.0 m/s
-(the policy was trained with caps of 0.4-1.5 m/s and is told the cap). `record:=$HOME/drive.npz` records every scan
-for `scripts/b2w/replay.py` (offline: the same commands, map statistics).
+until the stick is released). Then longer goals, through doors, with people walking by; `max_speed` up to 1.0 m/s (the
+policy was trained with caps of 0.4-1.5 m/s and is told the cap). Keep about 1.2 m from the robot while it drives:
+nearer, it crawls. Where nobody walks, `crawl:=false` lets it drive at its pace near racks and walls.
+`record:=$HOME/drive.npz` records every scan for `scripts/b2w/replay.py` (offline: the same commands, map statistics).
 
 ## Safety
 
 * **Dead-man button.** The policy's commands go to the robot only while L1 is held (`deadman:=<button>` chooses
   another; check that it does nothing on its own in the robot's mode). Releasing it sends StopMove.
 * **Operator takeover.** Moving a stick stops the policy's commands at once.
-* **Shield** (`g1_patrol.shield`, below): the robot never drives into what its lidar, cameras and map show; near
-  anything that moves (people) it crawls at 0.1 m/s for two seconds after, in any direction.
+* **Shield** (`g1_patrol.shield`, below): the robot never drives into what its lidar, cameras and map show, keeps
+  more room from tall things the faster it goes, closes in on them at most at 0.25 m/s within 0.8 m, and crawls at
+  0.1 m/s within 1.2 m of anything that moves or moved there in the last two seconds (people). Crawling also happens
+  near static things coming into view; `crawl:=false` drives faster where nobody walks.
 * **Watchdog.** No lidar scan or odometry for 0.3 s, or no remote for 0.5 s: StopMove.
 * **Software stop.** `ros2 topic pub --once /b2w_nav/stop std_msgs/msg/Bool "{data: true}"` stops the robot until
   `false` is published.
@@ -130,15 +133,15 @@ of the release (lab section, map unknown at the start, speed cap 0.6 m/s):
 
 | Scenario | Result | Time | Contacts (robot moving) |
 |---|---|---|---|
-| 12 m along the aisle, around a pallet, chairs and a tripod | reached | 30.5 s | 0 (0) |
-| through a 1.0 m door into unmapped space | reached | 34.5 s | 0 (0) |
-| starting facing away from the goal | reached | 33.0 s | 0 (0) |
-| a person walking the aisle at the robot (ignoring it) | reached | 70.0 s | 1 (0) |
-| two people crossing back and forth (ignoring it) | reached | 103.0 s | 12 (0) |
+| 12 m along the aisle, around a pallet, chairs and a tripod | reached | 42.5 s | 0 (0) |
+| through a 1.0 m door into unmapped space | reached | 52.5 s | 0 (0) |
+| starting facing away from the goal | reached | 35.5 s | 0 (0) |
+| a person walking the aisle at the robot (ignoring it) | reached | 44.0 s | 0 (0) |
+| two people crossing back and forth (ignoring it) | reached | 97.5 s | 5 (0) |
 | dead-man button not held | did not move | – | 0 |
 
-The contacts are simulated people, who ignore the robot, walking into it while it stood; the robot never moved into
-anyone. Near people it crawls, which makes those runs slow.
+The contacts are simulated people, who ignore the robot, walking into it while it stood or crept; the robot never
+moved into anyone.
 
 ## Troubleshooting
 
@@ -149,7 +152,8 @@ anyone. Near people it crawls, which makes those runs slow.
 | `waiting: no remote messages` | the remote is off or not paired; without it the robot does not drive |
 | `/b2w/planner_state`: `waiting for the robot's pose` | SLAM has no scans yet (lidar) or no odometry TF |
 | `no route to the goal` | the goal is inside an obstacle or walled off on the map; pick another |
-| state `shield` / `crawling` often in an empty room | the shield sees something close (`min_gap`, `moving_gap`); flickering returns near shelves |
+| state `shield` often in an empty room | the shield sees something close (`min_gap`); flickering returns near shelves |
+| state `crawling (people near)` with nobody near | static things coming into view count as moving; `crawl:=false` where nobody walks |
 | `floor` far from -0.6 ... -0.7 | the lidar mount in `deploy.json` is not the robot's |
 | the step takes longer than 50 ms (benchmark) | `device:=cuda` with NVIDIA's PyTorch for the Jetson |
 
@@ -217,17 +221,21 @@ doors are passed slowly and people with room. Returns where the current scan see
 saw floor, in a cell that held nothing tall for the last second, are taken to be people walking at the robot at
 1.4 m/s while it closes in on them (the second excludes the edges of furniture, which flicker between floor and tall
 from scan to scan as the lidar's rays fall differently). The closing speed towards a tall thing is held to 0.25 m/s
-within 0.8 m, and within 1.2 m of anything that moves the footprint's fastest point (turning swings the corners)
-crawls at 0.1 m/s in any direction, for two seconds after it was last seen moving there (a person close by leaves the
-scan's view of what moves: the floor around them is hidden). Moving away is never limited; if the robot's own momentum
-already breaches, the command is zero. A person detector on the cameras' color images can mark people (`person`),
-who then keep 0.45 m at any speed.
+within 0.8 m. Moving away is never limited; if the robot's own momentum already breaches, the command is zero. A person
+detector on the cameras' color images can mark people (`person`), who then keep 0.45 m at any speed.
 
-The shield scales the policy's command down, keeping its direction. When less than 30 % of it gets through, it also
-tries commands near it -- the translation or the turn alone, a nudge sideways, a step back -- and sends the safe one
-that goes furthest the way the policy wanted: half through a door at an angle, turning and driving on together may be
-blocked where the turn alone is not. A robot blocked for 1.5 s backs off for a second at 0.15 m/s, and the policy tries
-again. The same code (`ShieldGuard`) runs on the robot and in the simulated evaluation.
+Within 1.2 m of anything tall that moves, the footprint's fastest point (turning swings the corners) crawls at 0.1 m/s
+in any direction, also within 1.2 m of where something was seen moving in the last two seconds (a person close by
+leaves the scan's view of what moves: the floor around them is hidden). This costs time: the moving returns also come
+from static things coming into view as the robot moves, and in simulation the robot crawled in about half of all
+steps, often with nobody near (results below). `crawl:=false` turns it off.
+
+The shield scales the policy's command down, keeping its direction. When less than 30 % of it gets through and the
+robot is (nearly) at rest, it also tries commands near it -- the translation or the turn alone, a nudge sideways, a
+step back -- and sends the safe one that goes furthest the way the policy wanted: half through a door at an angle,
+turning and driving on together may be blocked where the turn alone is not. Only at rest, because the shield checks a
+command as if the robot followed it at once. A robot blocked for 1.5 s backs off for a second at 0.15 m/s, and the
+policy tries again. The same code (`ShieldGuard`) runs on the robot and in the simulated evaluation.
 
 The shield's deceleration and latency must be at least as pessimistic as the identified controller (`sysid.py fit`;
 `scripts/b2w/evaluate.py --shield --shield_set latency=...,brake=...` evaluates other values). It does not see low
@@ -246,34 +254,46 @@ contact counts as the robot's if it was moving towards the person at more than 0
 <!-- table:b2w -->
 | Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
 |---|---|---|---|---|---|---|---|---|---|
-| Lab teacher (privileged) | 19,239 | 68.6 | 78.7 | 14.3 | 11.5 | 3.9 | 1.3 | 0.54 | – |
-| Fused student (lidar + 2 depth cameras) | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
-| Lidar-only student | 19,442 | 69.5 | 81.1 | 8.9 | 12.3 | 7.7 | 1.5 | 0.52 | – |
-| Fused, shield | 13,322 | 73.7 | 83.2 | 2.7 | 1.5 | 14.5 | 7.5 | 0.37 | 11.5 |
-| Fused, shield, cap 0.5 m/s | 11,685 | 70.2 | 81.7 | 2.4 | 2.2 | 17.4 | 7.8 | 0.31 | 9.5 |
-| Fused, shield, cap 1.0 m/s | 14,502 | 74.8 | 83.8 | 2.5 | 1.3 | 14.5 | 6.8 | 0.40 | 12.8 |
+| Lab teacher (privileged) | 18,239 | 69.4 | 79.4 | 16.6 | 8.5 | 3.2 | 1.8 | 0.53 | – |
+| Fused student (lidar + 2 depth cameras) | 18,831 | 72.5 | 81.0 | 10.3 | 6.9 | 8.2 | 1.8 | 0.52 | – |
+| Lidar-only student | 18,591 | 73.1 | 82.4 | 10.5 | 7.0 | 7.4 | 1.8 | 0.52 | – |
+| Fused, shield | 9,339 | 57.3 | 72.6 | 1.9 | 0.6 | 22.6 | 17.6 | 0.24 | 12.4 |
+| Fused, shield, cap 0.5 m/s | 8,610 | 53.9 | 69.8 | 1.8 | 0.7 | 23.9 | 19.7 | 0.21 | 11.3 |
+| Fused, shield, cap 1.0 m/s | 9,609 | 58.7 | 73.6 | 1.8 | 0.4 | 22.2 | 16.8 | 0.24 | 12.9 |
 <!-- /table:b2w -->
 
 <!-- table:b2w_stress -->
 | Fused student | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
 |---|---|---|---|---|---|---|---|---|---|
-| Nominal controller | 19,583 | 70.1 | 79.9 | 9.5 | 11.2 | 7.8 | 1.2 | 0.52 | – |
-| Laggy controller (0.16-0.25 s latency) | 19,679 | 69.3 | 79.4 | 9.8 | 12.0 | 7.8 | 1.2 | 0.52 | – |
-| Sluggish controller (2x response time, 1/2 acceleration) | 19,531 | 69.0 | 79.0 | 9.5 | 12.9 | 7.3 | 1.2 | 0.51 | – |
-| Weak controller (70-80 % of the command) | 16,256 | 69.0 | 79.7 | 9.1 | 10.8 | 9.4 | 1.7 | 0.43 | – |
-| Drifting controller (2x yaw drift) | 19,741 | 69.8 | 79.7 | 9.5 | 11.4 | 7.9 | 1.3 | 0.52 | – |
-| Depth cameras failed | 19,168 | 70.1 | 80.2 | 9.7 | 10.8 | 7.9 | 1.5 | 0.51 | – |
-| Degraded lidar map (20 % dropout, odometry drift) | 19,741 | 69.4 | 79.6 | 10.0 | 11.9 | 7.5 | 1.2 | 0.52 | – |
-| Laggy controller, shield | 13,553 | 73.0 | 82.7 | 3.0 | 2.1 | 15.1 | 6.8 | 0.37 | 11.9 |
+| Nominal controller | 18,831 | 72.5 | 81.0 | 10.3 | 6.9 | 8.2 | 1.8 | 0.52 | – |
+| Laggy controller (0.16-0.25 s latency) | 18,569 | 72.8 | 81.5 | 9.8 | 7.3 | 7.9 | 1.9 | 0.53 | – |
+| Sluggish controller (2x response time, 1/2 acceleration) | 18,701 | 71.5 | 81.0 | 10.1 | 8.3 | 8.1 | 1.7 | 0.51 | – |
+| Weak controller (70-80 % of the command) | 15,579 | 71.3 | 81.7 | 9.1 | 6.2 | 10.4 | 2.7 | 0.42 | – |
+| Drifting controller (2x yaw drift) | 18,686 | 72.9 | 81.5 | 10.1 | 6.9 | 8.1 | 1.8 | 0.52 | – |
+| Depth cameras failed | 19,208 | 71.3 | 80.6 | 10.6 | 7.5 | 8.9 | 1.6 | 0.53 | – |
+| Degraded lidar map (20 % dropout, odometry drift) | 18,758 | 72.8 | 81.8 | 9.7 | 7.4 | 8.0 | 1.8 | 0.52 | – |
+| Laggy controller, shield | 9,302 | 57.1 | 72.4 | 1.7 | 0.8 | 22.7 | 17.7 | 0.23 | 13.1 |
 <!-- /table:b2w_stress -->
 
+What the guard around the shield adds, and what crawling near anything that moved costs:
+
+<!-- table:b2w_shield -->
+| Fused student | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| No shield | 18,831 | 72.5 | 81.0 | 10.3 | 6.9 | 8.2 | 1.8 | 0.52 | – |
+| Shield alone: commands scaled down | 13,017 | 73.5 | 84.3 | 3.2 | 0.7 | 14.8 | 7.7 | 0.37 | 11.0 |
+| + alternatives from rest, backing off (crawl:=false) | 13,056 | 76.0 | 86.7 | 2.2 | 0.8 | 14.3 | 6.7 | 0.38 | 14.1 |
+| + crawling near what moved (released default) | 9,339 | 57.3 | 72.6 | 1.9 | 0.6 | 22.6 | 17.6 | 0.24 | 12.4 |
+<!-- /table:b2w_shield -->
+
 Most of the remaining pedestrian contacts with the shield are simulated pedestrians walking into a robot that has
-stopped (on average the robot approached at 0.03 m/s, the pedestrian at 0.75 m/s); a quarter of the simulated
-pedestrians (10 % at the easiest level, 40 % at the hardest) are distracted and give way only at the last moment.
-With a perfect person detector (`evaluate.py --person_oracle`: people keep 0.45 m), contacts in which the robot was
-moving fall from about 2 % to 0.55 % of the episodes at 0.5 m/s. The lidar-only student is as good as the fused one
-in simulation; the cameras see the ground close around the robot that the lidar misses (low obstacles beside it),
-which the simulated tiles rarely test.
+stopped (on average the robot approached at 0.01 m/s, the pedestrian at 0.77 m/s); a quarter of the simulated
+pedestrians (10 % at the easiest level, 40 % at the hardest) are distracted and give way only at the last moment. The
+guard raises the goal rate of the shield alone (73.5%) to 76.0% and lowers structure contacts from 3.2% to 2.2%;
+crawling near what moved lowers contacts in which the robot moves into a pedestrian from 0.8% to 0.6% and the goal
+rate to 57.3%. With the speed caps of the first trials: 53.9% at 0.5 m/s, 58.7% at 1.0 m/s. The lidar-only student is
+as good as the fused one in simulation; the cameras see the ground close around the robot that the lidar misses (low
+obstacles beside it), which the simulated tiles rarely test.
 
 ### The lab
 

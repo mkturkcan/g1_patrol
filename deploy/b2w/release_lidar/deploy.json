@@ -57,17 +57,17 @@
     ],
     "unknown_value": -1.0,
     "drop_above": 1.0,
-    "base_height": 0.55,
+    "base_height": 0.65,
     "crop_box": [
       [
         0.0,
         0.0,
-        -0.15
+        -0.25
       ],
       [
-        0.6,
-        0.33,
-        0.45
+        0.62,
+        0.34,
+        0.55
       ]
     ]
   },
@@ -97,7 +97,7 @@
     "half_length": 0.56,
     "half_width": 0.29,
     "corner_radius": 0.12,
-    "ground_z": -0.55
+    "ground_z": -0.65
   },
   "depth_cameras": {},
   "task": "G1Patrol-B2W-Navigate-Lab-Lidar",
