@@ -20,3 +20,4 @@ pyrightconfig.json
 src/g1_patrol/assets/data/people/
 *.mp4
 !docs/media/*.mp4
+!docs/b2w/media/*.mp4
