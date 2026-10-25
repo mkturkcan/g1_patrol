@@ -24,9 +24,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from g1_patrol.floor import FloorEstimator
 from g1_patrol.heightmap import HeightMap, drop_returns
 from g1_patrol.route import path_project, polyline, waypoints
-from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
+from g1_patrol.shield import ShieldCfg, ShieldGuard, map_points, moving_returns
 
 
 @dataclass
@@ -80,11 +81,16 @@ class Navigator:
     """
 
     def __init__(self, config: dict | str | Path, policy=None, device: str = "cpu", max_speed: float | None = None,
-                 guard: bool = True, shield_cfg: ShieldCfg | None = None):
+                 guard: bool = True, shield_cfg: ShieldCfg | None = None, threads: int = 2):
+        # the tensors are small: more threads only cost (with one thread per core on a large machine, 60x slower)
+        torch.set_num_threads(threads)
         self.cfg = json.loads(Path(config).read_text()) if isinstance(config, (str, Path)) else config
         m = self.cfg["map"]
         self.device = device
         self.map = HeightMap(1, m["size"], m["resolution"], device)
+        # the floor below the base, measured in every scan (the standing height is not assumed; deploy.json's is a prior)
+        self.floor = FloorEstimator(prior=-float(m.get("base_height", 0.65)))
+        self.floor_z = self.floor.prior
         self.policy = policy
         ranges = np.asarray(self.cfg["command"]["ranges"], dtype=np.float64)
         self.mid, self.half = ranges.mean(axis=1), (ranges[:, 1] - ranges[:, 0]) / 2
@@ -99,6 +105,9 @@ class Navigator:
         self.speed_limit = float(np.clip(hi if max_speed is None else max_speed, lo, hi))
         self.guard = guard
         self.shield_cfg = shield_cfg or ShieldCfg(**self.cfg.get("shield", {}))
+        # the shield with what the robot does around it: alternatives to a blocked command, backing off when stuck,
+        # crawling near people (the same code as the evaluation in simulation)
+        self.shield_guard = ShieldGuard(1, self.shield_cfg)
         self.goal: np.ndarray | None = None
         self.route: tuple[torch.Tensor, torch.Tensor] | None = None
         self.route_s: torch.Tensor | None = None
@@ -111,6 +120,8 @@ class Navigator:
 
     def reset(self):
         self.map.reset()
+        self.floor.reset()
+        self.shield_guard.reset()
         self.last_action[:] = 0.0
         self.last_stamp = None
 
@@ -169,10 +180,12 @@ class Navigator:
                 base = np.concatenate([base, self.depth_to_base(name, pts)])
         self.last_scan_base = base
         world = base @ pose.rotation().T + np.array([pose.x, pose.y, pose.z])
+        # the floor below the base (gravity-aligned): the map's heights are taken from it
+        self.floor_z = self.floor.update(world - np.array([pose.x, pose.y, pose.z]))
         dev = self.device
         points = torch.as_tensor(world, dtype=torch.float32, device=dev)[None]
         local = torch.as_tensor(base, dtype=torch.float32, device=dev)[None]
-        ground = torch.tensor([pose.z - m["base_height"]], dtype=torch.float32, device=dev)
+        ground = torch.tensor([pose.z + self.floor_z], dtype=torch.float32, device=dev)
         points = drop_returns(points, local, ground, tuple(map(tuple, m["crop_box"])), m["drop_above"])
         root = torch.tensor([[pose.x, pose.y, pose.z]], dtype=torch.float32, device=dev)
         yaw = torch.tensor([pose.yaw], dtype=torch.float32, device=dev)
@@ -205,7 +218,7 @@ class Navigator:
         return self.mid + self.half * np.tanh(action)
 
     def shielded(self, command: np.ndarray, velocity_b: np.ndarray, height_map: np.ndarray | None,
-                 person: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
+                 person: np.ndarray | None = None, dt: float = 0.1) -> tuple[np.ndarray, dict]:
         """The safety shield (:mod:`g1_patrol.shield`) on the latest returns and the map's remembered obstacles: never
         into anything seen, slowly towards people. ``person``: which of the latest returns a detector marks."""
         if not self.guard or self.last_scan_base is None:
@@ -217,15 +230,16 @@ class Navigator:
             res = self.cfg["map"]["resolution"]
             hm = torch.as_tensor(height_map, dtype=torch.float32)[None]
             tall_age = None if self.map.tall_age_out is None else self.map.tall_age_out[:1].cpu()
-            moving = moving_returns(pts, hm, res, self.shield_cfg.ground_z, tall_age=tall_age,
+            moving = moving_returns(pts, hm, res, self.floor_z, tall_age=tall_age,
                                     recent=self.shield_cfg.still_for, min_cells=self.shield_cfg.moving_cells)
-            cells = map_points(hm[:, 0], res, self.shield_cfg.ground_z)  # obstacles that left the sensors' view
+            cells = map_points(hm[:, 0], res, self.floor_z)  # obstacles that left the sensors' view
             pts = torch.cat([pts, cells], dim=1)
             moving = torch.cat([moving, torch.zeros(1, cells.shape[1], dtype=torch.bool)], dim=1)
             if mask is not None:
                 mask = torch.cat([mask, torch.zeros(1, cells.shape[1], dtype=torch.bool)], dim=1)
-        safe, info = shield(pts, torch.as_tensor(command, dtype=torch.float32)[None], self.shield_cfg,
-                            torch.as_tensor(velocity_b, dtype=torch.float32)[None], moving, mask)
+        vel = torch.as_tensor(velocity_b, dtype=torch.float32)[None]
+        safe, info = self.shield_guard(pts, torch.as_tensor(command, dtype=torch.float32)[None], dt, vel, moving, mask,
+                                       self.floor_z)
         return safe[0].numpy().astype(np.float64), {k: float(v[0]) for k, v in info.items()}
 
     def step(self, points_lidar: np.ndarray, pose: Pose, velocity_b: np.ndarray, stamp: float,
@@ -251,8 +265,11 @@ class Navigator:
             speed = float(np.hypot(command[0], command[1]))
             if speed > self.max_speed:
                 command[:2] *= self.max_speed / speed
-        command, report = self.shielded(command, velocity_b, height_map, person)
-        state = "emergency stop" if report.get("emergency") else "shield" if report.get("scale", 1.0) < 0.999 else "driving"
+        info["policy_command"] = command.copy()
+        command, report = self.shielded(command, velocity_b, height_map, person, dt)
+        state = ("emergency stop" if report.get("emergency") else "backing off" if report.get("backing_off")
+                 else "crawling (people near)" if report.get("crawling") else "shield"
+                 if report.get("scale", 1.0) < 0.999 else "driving")
         return command, {**info, "state": state, "shield": report, "obs": obs, "action": action}
 
 

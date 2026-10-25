@@ -1,0 +1,29 @@
+# rslidar_sdk configuration for the B2-W's RoboSense RS-Helios-5515 (32 lines). The lidar sends UDP packets to the
+# destination IP set in its web interface (default 192.168.1.102); that IP must be the Jetson's address on the lidar's
+# network, or check with `sudo tcpdump -i <interface> udp port 6699 -c 5` where the packets go.
+common:
+  msg_source: 1                # packets from the online lidar
+  send_packet_ros: false
+  send_point_cloud_ros: true
+lidar:
+  - driver:
+      lidar_type: RSHELIOS
+      msop_port: 6699
+      difop_port: 7788
+      imu_port: 0
+      user_layer_bytes: 0
+      tail_layer_bytes: 0
+      min_distance: 0.2
+      max_distance: 150
+      use_lidar_clock: false     # stamps from the Jetson's clock, like the odometry
+      dense_points: true         # drop NaN points
+      ts_first_point: true
+      start_angle: 0
+      end_angle: 360
+    ros:
+      ros_frame_id: rslidar
+      ros_recv_packet_topic: /rslidar_packets
+      ros_send_packet_topic: /rslidar_packets
+      ros_send_imu_data_topic: /rslidar_imu_data
+      ros_send_point_cloud_topic: /rslidar_points
+      ros_queue_length: 10

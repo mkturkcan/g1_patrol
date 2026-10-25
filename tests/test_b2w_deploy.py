@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
@@ -139,3 +140,32 @@ def test_depth_image_back_projection():
     assert len(pts) > 0.8 * D435I["width"] * D435I["height"]
     height = pts[:, 1] * c + pts[:, 2] * s
     assert np.abs(height - 0.6).max() < 0.01
+
+
+def test_floor_is_measured_not_assumed():
+    """The robot stands 0.58 m high, not the nominal height: the navigator measures the floor, and its map reads the
+    floor at 0 and a 0.3 m box at 0.3 m, despite low platforms and a drop in view."""
+    from g1_patrol.floor import FloorEstimator
+
+    rng = np.random.default_rng(3)
+    height = 0.58
+    pose = Pose(0.0, 0.0, 10.0 + height, 0.02, -0.03, 0.4)
+    floor = np.c_[rng.uniform(-6, 6, 6000), rng.uniform(-6, 6, 6000), np.full(6000, 10.0)]
+    pallet = np.c_[rng.uniform(1.5, 3.0, 1500), rng.uniform(-1.0, 1.0, 1500), np.full(1500, 10.15)]  # low platform
+    dock = np.c_[rng.uniform(-3.0, -2.0, 300), rng.uniform(-3, 3, 300), np.full(300, 8.8)]  # a drop of 1.2 m
+    box = np.c_[rng.uniform(1.0, 1.3, 300), rng.uniform(1.5, 1.8, 300), rng.uniform(10.05, 10.3, 300)]
+    world = np.concatenate([floor, pallet, dock, box])
+    est = FloorEstimator(prior=-BASE_HEIGHT)
+    assert abs(est.measure(world - np.array([pose.x, pose.y, pose.z])) + height) < 0.01
+    nav = Navigator(deploy_config(), policy=None)
+    lidar = (world - np.array([pose.x, pose.y, pose.z])) @ pose.rotation() - np.array(LIDAR_MOUNT)
+    for k in range(20):  # the running estimate converges from the prior
+        m = nav.update_map(lidar, pose, 0.1)
+    assert abs(nav.floor_z + height) < 0.01
+    c = MAP["size"] / MAP["resolution"] / 2
+    yy, xx = np.meshgrid((np.arange(int(2 * c)) + 0.5 - c) * MAP["resolution"], (np.arange(int(2 * c)) + 0.5 - c) * MAP["resolution"], indexing="ij")
+    # cells around (-2, -2) in the heading frame are floor (no platform, no box there)
+    ring = (np.hypot(xx, yy) > 1.0) & (np.hypot(xx, yy) < 1.6)
+    known = m[0] > MAP["unknown_value"] + 1e-6
+    assert np.median(m[0][ring & known]) == pytest.approx(0.0, abs=0.02)
+    assert m[0].max() == pytest.approx(0.3, abs=0.02)  # the box

@@ -157,14 +157,17 @@ def main(argv: list[str]) -> None:
         steps_in_episode = torch.zeros(base_env.num_envs, device=dev)
         motion = {"speed": 0.0, "backward": 0.0, "lateral": 0.0, "command_change": 0.0, "near_people": 0.0, "steps": 0}
         contacts = {"robot_moving": 0, "pedestrian_walked_in": 0, "robot_speed": 0.0, "pedestrian_speed": 0.0}
-        shield_stats = {"interventions": 0.0, "scale": 0.0, "emergencies": 0.0, "steps": 0}
+        shield_stats = {"interventions": 0.0, "scale": 0.0, "emergencies": 0.0, "backing_off": 0.0, "crawling": 0.0,
+                        "steps": 0}
         if use_shield:
             from g1_patrol.b2w import MAP, shield_settings
             from g1_patrol.heightmap import rotate_inverse
-            from g1_patrol.shield import ShieldCfg, map_points, moving_returns, shield
+            from g1_patrol.shield import ShieldCfg, ShieldGuard, map_points, moving_returns
 
             overrides = dict(kv.split("=") for kv in shield_set.split(",")) if shield_set else {}
             shield_cfg = ShieldCfg(**shield_settings(), **{k: type(getattr(ShieldCfg, k))(v) for k, v in overrides.items()})
+            # the shield with what the robot does around it (alternatives, backing off, crawling near people)
+            guard = ShieldGuard(base_env.num_envs, shield_cfg, dev)
             if group is not None:  # the student's height map (its history tells what moved)
                 om = base_env.observation_manager
                 height_map_term = om._group_obs_term_cfgs[group][om.active_terms[group].index(group)].func
@@ -199,8 +202,10 @@ def main(argv: list[str]) -> None:
                     if moving is not None:
                         person = torch.cat([person, torch.zeros(person.shape[0], local.shape[1] - person.shape[1],
                                                                 dtype=torch.bool, device=person.device)], dim=1)
-                safe, info = shield(local, command, shield_cfg, base.velocity_b, moving, person, ground_z)
+                safe, info = guard(local, command, base_env.step_dt, base.velocity_b, moving, person, ground_z)
                 shield_stats["interventions"] += float((info["scale"] < 0.999).sum())
+                shield_stats["backing_off"] += float(info["backing_off"].sum())
+                shield_stats["crawling"] += float(info["crawling"].sum())
                 shield_stats["scale"] += float(info["scale"].sum())
                 shield_stats["emergencies"] += float(info["emergency"].sum())
                 shield_stats["steps"] += base_env.num_envs
@@ -215,6 +220,8 @@ def main(argv: list[str]) -> None:
                     actions = shielded(actions)
                 obs, _, dones, _ = env.step(actions)
                 policy.reset(dones)
+                if use_shield:
+                    guard.reset(dones.bool())
                 steps_in_episode += 1
                 assigned = torch.zeros(base_env.num_envs, dtype=torch.bool, device=dev)
                 for name in outcomes:
@@ -281,7 +288,9 @@ def main(argv: list[str]) -> None:
             steps = max(shield_stats["steps"], 1)
             metrics["shield_stats"] = {"intervention_rate": shield_stats["interventions"] / steps,
                                        "mean_scale": shield_stats["scale"] / steps,
-                                       "emergency_rate": shield_stats["emergencies"] / steps}
+                                       "emergency_rate": shield_stats["emergencies"] / steps,
+                                       "backing_off_rate": shield_stats["backing_off"] / steps,
+                                       "crawling_rate": shield_stats["crawling"] / steps}
         if maps:
             from g1_patrol.b2w import MAP
             from g1_patrol.heightmap import map_statistics

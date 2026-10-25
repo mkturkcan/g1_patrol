@@ -190,3 +190,18 @@ def test_closed_loop_person_walking_at_the_robot():
         if x_person - 0.15 - x - FRONT <= 0.0:
             break
     assert float(vel[0, 0]) < 0.1, f"robot still at {float(vel[0, 0]):.2f} m/s when the person reached it"
+
+
+def test_guard_alternatives_see_a_person_among_many_floor_returns():
+    """With thousands of floor returns close by, a person 0.5 m ahead still blocks the guard's alternatives."""
+    from g1_patrol.shield import ShieldGuard
+
+    rng = np.random.default_rng(0)
+    floor = np.c_[rng.uniform(-1.5, 1.5, (6000, 2)), np.full((6000, 1), FLOOR + 0.01)]
+    person = _column(FRONT + 0.15 + 0.5, 0.0, 1.7)
+    pts = torch.tensor(np.concatenate([floor, person]), dtype=torch.float32)[None]
+    moving = torch.zeros(pts.shape[:2], dtype=torch.bool)
+    moving[0, len(floor):] = True  # the person walks
+    guard = ShieldGuard(1, CFG)
+    safe, info = guard(pts, torch.tensor([[0.6, 0.0, 0.3]]), 0.1, torch.zeros(1, 3), moving)
+    assert float(safe[0, 0]) <= 0.02  # no step towards the person, whichever alternative

@@ -295,8 +295,10 @@ success, and falls rise to 1–2%.
 ## Unitree B2-W
 
 The tiles, pedestrians and training pipeline also train navigation for a second robot, Unitree's B2-W wheeled
-quadruped, for an indoor lab. The policies have not been tested on the robot yet; `deploy/b2w/README.md` describes
-the robot-side code and a sequence of checks before the policy drives it.
+quadruped, for an indoor lab. `deploy/b2w` holds the software that runs on the robot's Jetson -- the policy, the
+safety shield, SLAM (slam_toolbox) and a route planner on the map it builds, started by one ROS 2 launch file -- and a
+step-by-step guide (`deploy/b2w/README.md`). The stack has been run against a simulated B2-W on ROS 2
+(`deploy/b2w/sim`), not yet on the robot.
 
 **Robot model.** The B2-W is driven through Unitree's sport-mode controller, which takes body velocity commands
 (forward −0.8 to 1.5 m/s, lateral ±0.3 m/s, yaw rate ±1.2 rad/s). It is simulated as a kinematic body with a
@@ -304,7 +306,8 @@ the robot-side code and a sequence of checks before the policy drives it.
 40–160 ms, a first-order response, acceleration bounds, gain errors, deadband, yaw drift and velocity noise
 (`g1_patrol.controller_model`; `scripts/b2w/sysid.py` fits the same model to logs of the robot). Each episode caps
 the planar speed at a value between 0.4 and 1.5 m/s that the policy observes; on the robot it is the operator's speed
-setting. A cap the policy was not trained with changes its turns, since it keeps the yaw rate: in lab, lobby and
+setting. The body stands 0.55-0.72 m above the ground (drawn per episode), and the students' maps take their heights
+from the floor as the robot measures it in each scan. A cap the policy was not trained with changes its turns, since it keeps the yaw rate: in lab, lobby and
 corridor tiles without pedestrians, a route-following teacher trained without caps touched structures in 42% of the
 episodes at a 0.6 m/s cap and in 29% without one.
 
@@ -482,7 +485,8 @@ scripts/
 └── figures/                     result tables (build_results.py), diagrams and overview video
 docs/                            project page (GitHub Pages)
 DEPLOYMENT.md                    policy interfaces, rates, frames and the assumptions of the simulation
-deploy/b2w/                      B2-W robot-side code (ROS 2 node, navigator), released policies, Nav2 settings
+deploy/b2w/                      B2-W robot software (launch file, ROS 2 nodes, shield, planner), released policies,
+                                 install script, a simulated B2-W for testing the stack (sim/)
 tests/                           registration, tile capacity, passability and walkable-area tests
 ```
 

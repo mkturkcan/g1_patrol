@@ -10,6 +10,8 @@ Usage (on the robot):
         --check samples.npz --device cuda
 """
 
+from __future__ import annotations
+
 import argparse
 import time
 

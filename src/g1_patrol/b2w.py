@@ -5,6 +5,8 @@ No simulator imports (only the standard library): the simulation configs (:mod:`
 computes its observations exactly as in training. Values marked "measure" should be checked on the robot.
 """
 
+from __future__ import annotations
+
 import math
 
 BASE_HEIGHT = 0.65

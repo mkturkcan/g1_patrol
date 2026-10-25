@@ -19,6 +19,8 @@ from collections.abc import Callable
 
 import numpy as np
 
+from g1_patrol.planning import ClearancePlanner
+
 from .tiles import HALF_L, HALF_W, MAX_PATH_POINTS, MAX_ROUTES, OFF, TileLayout, _lerp, _new_layout
 
 WALL_T, WALL_H = 0.15, 2.7
@@ -116,15 +118,16 @@ def _box_extent(cx, cy, yaw, hx, hy) -> tuple[float, float, float, float]:
     return cx - ex, cx + ex, cy - ey, cy + ey
 
 
-class Planner:
+class Planner(ClearancePlanner):
     """Clearance map of a layout (numpy only): distance from each 0.1 m cell to the nearest structure below
-    ``z_max`` (drops count as structures), for planning pedestrian paths and robot routes."""
+    ``z_max`` (drops count as structures), for planning pedestrian paths and robot routes
+    (:class:`g1_patrol.planning.ClearancePlanner`, which the robot also plans with)."""
 
     def __init__(self, lay: TileLayout, z_max: float = 2.0, res: float = 0.1):
-        self.lay, self.res = lay, res
-        self.xs = np.arange(-HALF_L + res / 2, HALF_L, res)
-        self.ys = np.arange(-HALF_W + res / 2, HALF_W, res)
-        px, py = np.meshgrid(self.xs, self.ys, indexing="ij")
+        self.lay = lay
+        xs = np.arange(-HALF_L + res / 2, HALF_L, res)
+        ys = np.arange(-HALF_W + res / 2, HALF_W, res)
+        px, py = np.meshgrid(xs, ys, indexing="ij")
         clear = np.full(px.shape, 1e3)
         for x, y, r, z0, _ in lay.circles:
             if z0 < z_max:
@@ -139,96 +142,7 @@ class Planner:
         drop = lay.heights[hi, hj] < -0.25
         for x0, x1, y0, y1 in lay.forbidden:
             drop |= (px > x0) & (px < x1) & (py > y0) & (py < y1)
-        self.clear = np.where(drop, -1.0, clear)
-        self._cache = {}
-
-    def _cell(self, p) -> tuple[int, int]:
-        i = int(np.clip(np.floor((p[0] + HALF_L) / self.res), 0, len(self.xs) - 1))
-        j = int(np.clip(np.floor((p[1] + HALF_W) / self.res), 0, len(self.ys) - 1))
-        return i, j
-
-    def clearance(self, p) -> float:
-        return float(self.clear[self._cell(p)])
-
-    def segment_free(self, p, q, margin: float) -> bool:
-        n = max(int(math.hypot(q[0] - p[0], q[1] - p[1]) / (self.res / 2)), 1)
-        t = np.linspace(0.0, 1.0, n + 1)
-        i = np.clip(np.floor((p[0] + t * (q[0] - p[0]) + HALF_L) / self.res).astype(int), 0, len(self.xs) - 1)
-        j = np.clip(np.floor((p[1] + t * (q[1] - p[1]) + HALF_W) / self.res).astype(int), 0, len(self.ys) - 1)
-        return bool((self.clear[i, j] > margin).all())
-
-    def distances(self, start, margin: float) -> np.ndarray:
-        """Grid steps (8-connected) from ``start`` through cells with more than ``margin`` clearance; -1: unreachable."""
-        key = (round(start[0], 3), round(start[1], 3), margin)
-        if key in self._cache:
-            return self._cache[key]
-        free = self.clear > margin
-        dist = np.full(free.shape, -1, dtype=np.int32)
-        i, j = self._cell(start)
-        if not free[i, j]:
-            return dist
-        dist[i, j] = 0
-        frontier = np.zeros_like(free)
-        frontier[i, j] = True
-        k = 0
-        while frontier.any():
-            k += 1
-            grown = frontier.copy()
-            grown[1:] |= frontier[:-1]
-            grown[:-1] |= frontier[1:]
-            g2 = grown.copy()
-            g2[:, 1:] |= grown[:, :-1]
-            g2[:, :-1] |= grown[:, 1:]
-            frontier = g2 & free & (dist < 0)
-            dist[frontier] = k
-        self._cache[key] = dist
-        return dist
-
-    def path(self, dist: np.ndarray, start, goal, margin: float) -> list | None:
-        """Shortest any-angle path from ``start`` (the source of ``dist``) to ``goal``: the grid path, then pulled
-        taut (each waypoint as far along as stays clear). None if ``goal`` is unreachable."""
-        gi, gj = self._cell(goal)
-        if dist[gi, gj] < 0:
-            return None
-        cells = [(gi, gj)]
-        i, j = gi, gj
-        while dist[i, j] > 0:
-            best = None
-            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
-                a, b = i + di, j + dj
-                if 0 <= a < dist.shape[0] and 0 <= b < dist.shape[1] and dist[a, b] == dist[i, j] - 1:
-                    best = (a, b) if best is None or abs(di) + abs(dj) < 2 else best
-            i, j = best
-            cells.append((i, j))
-        pts = [tuple(start)] + [(float(self.xs[a]), float(self.ys[b])) for a, b in reversed(cells[1:-1])] + [tuple(goal)]
-        return self.pull(pts, margin)
-
-    def footprint_clearance(self, p, heading: float, half: tuple[float, float] = (0.56, 0.29)) -> float:
-        """Smallest clearance over a rectangular footprint (half sizes ``half``, default the B2-W's) at ``p``."""
-        c, s = math.cos(heading), math.sin(heading)
-        u, v = np.meshgrid(np.linspace(-half[0], half[0], 23), np.linspace(-half[1], half[1], 13), indexing="ij")
-        x, y = p[0] + c * u - s * v, p[1] + s * u + c * v
-        i = np.clip(np.floor((x + HALF_L) / self.res).astype(int), 0, len(self.xs) - 1)
-        j = np.clip(np.floor((y + HALF_W) / self.res).astype(int), 0, len(self.ys) - 1)
-        return float(self.clear[i, j].min())
-
-    def visible(self, p, pts, margin: float) -> np.ndarray:
-        """Which of the points ``pts`` can be reached from ``p`` in a straight line that keeps ``margin``."""
-        q = np.asarray(pts, dtype=float).reshape(-1, 2)
-        n = int(np.hypot(q[:, 0] - p[0], q[:, 1] - p[1]).max() / (self.res / 4)) + 2
-        t = np.linspace(0.0, 1.0, n)[None]
-        i = np.clip(np.floor((p[0] + t * (q[:, :1] - p[0]) + HALF_L) / self.res).astype(int), 0, len(self.xs) - 1)
-        j = np.clip(np.floor((p[1] + t * (q[:, 1:] - p[1]) + HALF_W) / self.res).astype(int), 0, len(self.ys) - 1)
-        return (self.clear[i, j] > margin).all(axis=1)
-
-    def pull(self, pts: list, margin: float) -> list:
-        """Pull a polyline taut: from each waypoint on, straight to the farthest later point in view."""
-        out, k = [pts[0]], 0
-        while k < len(pts) - 1:
-            seen = np.nonzero(self.visible(pts[k], pts[k + 1 :], margin))[0]
-            k = k + 1 + (int(seen.max()) if len(seen) else 0)
-            out.append(pts[k])
-        return out
+        super().__init__(np.where(drop, -1.0, clear), xs, ys, -HALF_L, -HALF_W, res)
 
 
 def _paths_between(lay: TileLayout, plan: Planner, ends: list, rng: np.random.Generator, count: int, weight: float = 1.0,

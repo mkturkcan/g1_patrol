@@ -1,19 +1,166 @@
-# Unitree B2-W: deployment and sim-to-real checks
+# Unitree B2-W: running the navigation policy on the robot
 
-The B2-W navigation policy commands body velocities to Unitree's sport-mode controller; it was trained against a
-randomized model of that controller, a simulated RoboSense RS-Helios-5515 lidar and front and rear RealSense D435i depth
-cameras. This note specifies the interface and a sequence of inexpensive checks that test the simulation's assumptions
-on the robot before the policy drives it. Nothing here has been tested on hardware yet.
+This directory holds everything that runs on the B2-W's Jetson Orin NX: the navigation policy trained in simulation,
+the safety shield, SLAM and a route planner, and one launch file that starts them. You install it once, check that
+each part receives what it needs, map the lab while watching what the policy would do (it sends nothing), and then let
+it drive while you hold a button on the remote. Nothing has to be measured on the robot: the floor under it is
+measured in every scan, and the map is built while it drives.
 
-The released policies: `deploy/b2w/release` (lidar and depth cameras) and `deploy/b2w/release_lidar` (lidar only),
-each with `policy.onnx` and its weights `policy.onnx.data`, `deploy.json` (the settings of the robot-side code) and
-`samples.npz` (inputs and outputs from simulation, for `scripts/b2w/benchmark.py --check`); copy the whole directory.
+Status: the whole stack has been run against a simulated B2-W on ROS 2 (below, "Trying it without the robot"); it has
+not run on the robot yet.
 
-## Interface
+## What runs where
+
+| Where | What |
+|---|---|
+| B2-W (Unitree) | the sport-mode controller (legs and wheels); state on `/sportmodestate`, the remote on `/wirelesscontroller`, velocity requests on `/api/sport/request` |
+| Jetson (expansion dock) | `launch/b2w_navigation.launch.py`: lidar driver, the D435i cameras (optional), odometry, SLAM, the route planner, the policy and the shield |
+| Laptop (optional) | RViz: the map, the route, the robot; goals with "2D Goal Pose" |
+
+Every lidar scan (10 Hz): SLAM updates the map from a slice of the scan; the planner (once a second) plans a route on
+the map from the robot to the goal, through space not yet seen if needed; the policy gets the two points of the route
+1 and 2.5 m ahead, its velocity, the speed cap and a height map built from the scan (and the cameras), and commands a
+velocity; the shield lets through only what keeps the robot clear of everything it sees; the command goes to the
+sport-mode controller as Move(vx, vy, wz). The policy drives only while the dead-man button (L1) is held.
+
+## Step by step
+
+### 1. Network
+
+The Jetson is on the robot's internal network (192.168.123.x). Find its interface and address there:
+
+```bash
+ip -4 -o addr | grep 192.168.123.     # e.g. "eth0 ... 192.168.123.18/24"
+```
+
+A laptop for RViz joins the same network (the robot's Wi-Fi, or Ethernet with a static address such as
+192.168.123.99/24) and uses the same `ROS_DOMAIN_ID` (default 0).
+
+### 2. Install (once)
+
+```bash
+git clone https://github.com/mkturkcan/g1_patrol.git ~/g1_patrol && cd ~/g1_patrol
+bash deploy/b2w/install.sh eth0          # the interface from step 1
+source ~/b2w_env.sh                      # in every new shell
+```
+
+`install.sh` installs (with `sudo apt`) slam_toolbox, pointcloud_to_laserscan, CycloneDDS and realsense2_camera for
+the ROS 2 of the Jetson's Ubuntu (Foxy on 20.04, Humble on 22.04; ROS 2 itself if missing), the Python packages
+(numpy, scipy, onnxruntime, PyTorch), builds Unitree's message packages and RoboSense's lidar driver in `~/b2w_ws`, and
+writes `~/b2w_env.sh` (ROS 2, the workspace, CycloneDDS on that interface). It ends by checking the policy on the
+Jetson (`scripts/b2w/benchmark.py`: the same actions as in simulation, and the time per scan, which must stay well
+under 100 ms).
+
+### 3. Check the parts (with the robot on and standing)
+
+```bash
+ros2 topic hz /sportmodestate          # the robot's state: tens to hundreds of Hz
+ros2 topic echo --once /wirelesscontroller   # the remote: hold L1 and look at "keys"
+ros2 topic hz /rslidar_points          # the lidar, ~10 Hz -- only once the driver runs (step 4) or if it runs already
+```
+
+* No `/sportmodestate`: the interface in `~/b2w_env.sh` is not the robot's, or the robot is off.
+* The lidar: if `ros2 topic list` already shows a point cloud from the robot's own software, run the stack with
+  `lidar_driver:=false lidar_topic:=<that topic>`. Otherwise the stack starts RoboSense's driver, which receives the
+  lidar's UDP packets on ports 6699/7788: `sudo tcpdump -i eth0 udp port 6699 -c 5` must show packets addressed to
+  the Jetson. If they go elsewhere, set the lidar's destination address to the Jetson's in the lidar's web page.
+* The D435i cameras are optional (the policy was trained with cameras that fail, and drives without them). If they are
+  plugged into the Jetson, `rs-enumerate-devices -s` lists their serial numbers; cover one to see which is the front.
+
+### 4. Shadow run: map the lab and watch the policy (it sends nothing)
+
+```bash
+ros2 launch deploy/b2w/launch/b2w_navigation.launch.py mode:=shadow
+# with the cameras: ... cameras:=true front_serial:=<serial> rear_serial:=<serial>
+```
+
+On the laptop: `source ~/b2w_env.sh` (written by `install.sh` there too, or ROS 2 with the same CycloneDDS settings)
+and `rviz2 -d deploy/b2w/rviz/b2w.rviz`. Drive the robot through the lab with the remote: the map grows. Set a goal
+with "2D Goal Pose": the planned route appears (magenta), and the policy's two waypoints and the footprint are drawn
+on the robot. `ros2 topic echo /b2w_nav/state` shows what the policy would do (`policy_command`), what the shield
+would let through (`command`), the measured floor below the base (`floor`, about -0.6 to -0.7 m when the robot
+stands) and which cameras deliver. Its commands should point along the route and slow down near people, in doors and
+near shelves.
+
+### 5. First drive
+
+Clear space around the robot, the remote in hand, the robot standing in the mode in which the remote's sticks drive it
+on its wheels.
+
+```bash
+ros2 launch deploy/b2w/launch/b2w_navigation.launch.py mode:=drive max_speed:=0.5
+```
+
+Give a goal a few meters ahead in open space, from RViz or without it:
+
+```bash
+ros2 topic pub --once /b2w/goal_relative geometry_msgs/msg/PointStamped "{point: {x: 3.0, y: 0.0}}"
+```
+
+Hold L1: the robot drives along the route; release L1: it stops. Moving a stick takes over (the policy stops sending
+until the stick is released). Then longer goals, through doors, with people walking by; `max_speed` up to 1.0 m/s
+(the policy was trained with caps of 0.4-1.5 m/s and is told the cap). `record:=$HOME/drive.npz` records every scan
+for `scripts/b2w/replay.py` (offline: the same commands, map statistics).
+
+## Safety
+
+* **Dead-man button.** The policy's commands go to the robot only while L1 is held (`deadman:=<button>` chooses
+  another; check that it does nothing on its own in the robot's mode). Releasing it sends StopMove.
+* **Operator takeover.** Moving a stick stops the policy's commands at once.
+* **Shield** (`g1_patrol.shield`, below): the robot never drives into what its lidar, cameras and map show; near
+  anything that moves (people) it crawls at 0.1 m/s for two seconds after, in any direction.
+* **Watchdog.** No lidar scan or odometry for 0.3 s, or no remote for 0.5 s: StopMove.
+* **Software stop.** `ros2 topic pub --once /b2w_nav/stop std_msgs/msg/Bool "{data: true}"` stops the robot until
+  `false` is published.
+* The remote's own stop (damping) is the last resort: keep the remote in hand.
+
+## Trying it without the robot
+
+`deploy/b2w/sim/fake_b2w.py` is a simulated B2-W on ROS 2: it speaks like the robot (`/sportmodestate`,
+`/api/sport/request`, `/wirelesscontroller`), ray-casts the Helios's point cloud in a section of the lab hall
+(`sim/lab_world.json`) with walking people, and moves with the controller model of the training. With ROS 2 and
+Unitree's messages sourced (e.g. on a laptop after `install.sh`), from the repository root:
+
+```bash
+bash deploy/b2w/sim/run_sil.sh 5.5 -0.6            # goal (x, y); prints "SIL RESULT {...}"
+```
+
+This runs the real launch file (odometry, SLAM, planner, policy, shield, dead-man) against the simulated robot. Results
+of the release (lab section, map unknown at the start, speed cap 0.6 m/s):
+
+| Scenario | Result | Time | Contacts (robot moving) |
+|---|---|---|---|
+| 12 m along the aisle, around a pallet, chairs and a tripod | reached | 30.5 s | 0 (0) |
+| through a 1.0 m door into unmapped space | reached | 34.5 s | 0 (0) |
+| starting facing away from the goal | reached | 33.0 s | 0 (0) |
+| a person walking the aisle at the robot (ignoring it) | reached | 70.0 s | 1 (0) |
+| two people crossing back and forth (ignoring it) | reached | 103.0 s | 12 (0) |
+| dead-man button not held | did not move | – | 0 |
+
+The contacts are simulated people, who ignore the robot, walking into it while it stood; the robot never moved into
+anyone. Near people it crawls, which makes those runs slow.
+
+## Troubleshooting
+
+| Symptom (in the launch output or `/b2w_nav/state`) | Cause |
+|---|---|
+| `waiting: no odometry` and the odometry node's "no sport-mode state" | CycloneDDS on the wrong interface (`~/b2w_env.sh`), robot off, or Unitree's messages not sourced |
+| `waiting: no lidar scans` | lidar driver not receiving packets (step 3) or another `lidar_topic` |
+| `waiting: no remote messages` | the remote is off or not paired; without it the robot does not drive |
+| `/b2w/planner_state`: `waiting for the robot's pose` | SLAM has no scans yet (lidar) or no odometry TF |
+| `no route to the goal` | the goal is inside an obstacle or walled off on the map; pick another |
+| state `shield` / `crawling` often in an empty room | the shield sees something close (`min_gap`, `moving_gap`); flickering returns near shelves |
+| `floor` far from -0.6 ... -0.7 | the lidar mount in `deploy.json` is not the robot's |
+| the step takes longer than 50 ms (benchmark) | `device:=cuda` with NVIDIA's PyTorch for the Jetson |
+
+## Reference
+
+### Interface
 
 | Stage | Rate | Input | Output |
 |---|---|---|---|
-| Global planner (e.g. Nav2 `planner_server`) | per goal, then 1 Hz | map, localization, goal | path (`nav_msgs/Path`) |
+| SLAM (`slam_toolbox`) | per scan | a slice of the lidar (0.15-1.0 m above the floor), odometry | map, map -> odom |
+| Route planner (`b2w.planner_node`) | per goal, then 1 Hz | map, robot pose, goal | route (`nav_msgs/Path`) |
 | Route following (`g1_patrol.route`) | per scan | path, odometry pose | 2 waypoints ahead on the path |
 | Height map (`g1_patrol.heightmap`) | per lidar scan (10 Hz) | scan (lidar frame), latest depth frames (optical frames), odometry pose | 3 × 80 × 80 map |
 | Policy (`policy.onnx`) | per scan | `obs` (14), `height_map` (3 × 80 × 80) | 3 raw actions |
@@ -38,7 +185,7 @@ and on the robot come from one module, `src/g1_patrol/b2w.py`; `scripts/b2w/expo
 | speed limit | 1 | the cap on the planar speed, `max_speed` (m/s) | – |
 
 `height_map` (3 × 80 × 80, 0.1 m cells, 8 × 8 m centred on the robot; rows: forward, columns: left): the highest return
-of the lidar and the depth cameras per cell relative to the ground under the robot (base height − 0.55 m), clipped to
+of the lidar and the depth cameras per cell relative to the floor under the robot as measured in that scan (`g1_patrol.floor`), clipped to
 [−0.6, 1.0] m, −1 where unknown. The cameras look 45° down at the ground the lidar cannot see (within about 0.7 m in
 front, 5 m behind); their returns count from 0.3 to 4 m, sampled on a 64 × 40 grid of the depth image. In training a
 camera delivers nothing in 5 % of the episodes. A fallback policy uses the lidar alone (`release_lidar`, input
@@ -59,10 +206,9 @@ line, which is only right in open space. In a quarter of the episodes the robot 
 Footprint used in training: 1.12 × 0.58 m with rounded corners. Structures whose bottom is higher than 1 m do not
 block the robot; drops (stairwells, a loading dock) end an episode.
 
-## Safety shield
+### Safety shield
 
-The shield runs on the NX after the policy and is independent of it; it can only slow the robot down along the path
-it was taking, never steer it. A command is admissible if the robot, executing it, can still stop before anything it
+The shield runs on the NX after the policy and is independent of it. A command is admissible if the robot, executing it, can still stop before anything it
 sees comes within a margin: it keeps the commanded arc for 0.35 s (sensing, policy, controller latency), then brakes at
 0.8 m/s² (allowing 12 % more speed than commanded and 8 cm of drift per meter); the footprint is swept along this
 stopping path and the command is scaled down until it comes to rest in time. Margins: 0.10 m to obstacles, 0.25 m to
@@ -71,8 +217,17 @@ doors are passed slowly and people with room. Returns where the current scan see
 saw floor, in a cell that held nothing tall for the last second, are taken to be people walking at the robot at
 1.4 m/s while it closes in on them (the second excludes the edges of furniture, which flicker between floor and tall
 from scan to scan as the lidar's rays fall differently). The closing speed towards a tall thing is held to 0.25 m/s
-within 0.8 m. Moving away is never limited; if the robot's own momentum already breaches, the command is zero. A
-person detector on the cameras' color images can mark people (`person`), who then keep 0.45 m at any speed.
+within 0.8 m, and within 1.2 m of anything that moves the footprint's fastest point (turning swings the corners)
+crawls at 0.1 m/s in any direction, for two seconds after it was last seen moving there (a person close by leaves the
+scan's view of what moves: the floor around them is hidden). Moving away is never limited; if the robot's own momentum
+already breaches, the command is zero. A person detector on the cameras' color images can mark people (`person`),
+who then keep 0.45 m at any speed.
+
+The shield scales the policy's command down, keeping its direction. When less than 30 % of it gets through, it also
+tries commands near it -- the translation or the turn alone, a nudge sideways, a step back -- and sends the safe one
+that goes furthest the way the policy wanted: half through a door at an angle, turning and driving on together may be
+blocked where the turn alone is not. A robot blocked for 1.5 s backs off for a second at 0.15 m/s, and the policy tries
+again. The same code (`ShieldGuard`) runs on the robot and in the simulated evaluation.
 
 The shield's deceleration and latency must be at least as pessimistic as the identified controller (`sysid.py fit`;
 `scripts/b2w/evaluate.py --shield --shield_set latency=...,brake=...` evaluates other values). It does not see low
@@ -80,7 +235,7 @@ objects beside the robot that neither the lidar nor the cameras cover, except as
 (`tests/test_shield.py`) cover doors, walls, drops, a person walking at the robot and closed loops through the slowest
 controller of the training ranges. It does not replace the remote's stop: keep it in hand.
 
-## Results in simulation
+### Results in simulation
 
 Evaluations of the release (`scripts/reproduce/b2w_3_evaluate.sh`; `scripts/b2w/results_table.py` prints the tables)
 on the lab mixture: half the tiles are sections of the lab hall, half street and indoor tiles, robots spread over all
@@ -120,44 +275,7 @@ moving fall from about 2 % to 0.55 % of the episodes at 0.5 m/s. The lidar-only 
 in simulation; the cameras see the ground close around the robot that the lidar misses (low obstacles beside it),
 which the simulated tiles rarely test.
 
-## Values to check on the robot
-
-| Value | Where | Assumed |
-|---|---|---|
-| Lidar model | `b2w.LIDAR`, `b2w.LIDARS` | RoboSense RS-Helios-5515: 32 lines, −55° to +15° (confirmed) |
-| Lidar mount (x, y, z, rpy in base_link) | `b2w.LIDAR_MOUNT` | URDF `lidar_link`: (0.342, 0, 0.179), upright |
-| Depth camera mounts (optical frames) | `b2w.DEPTH_CAMERAS` | URDF `f_dc_link`, `r_dc_link`: 45° down, front and rear |
-| Depth topics (16-bit, mm) and camera info | node parameters | `/<front, rear>_camera/depth/image_rect_raw` |
-| Base height above the floor, standing | `b2w.BASE_HEIGHT` | 0.55 m |
-| Odometry: frame, rate, twist in base frame | ROS topic | `nav_msgs/Odometry`, ≥ 20 Hz |
-
-A wrong base height or mount shows up as a floor that does not read 0 in the replayed maps (below).
-
-## Checks, cheapest first
-
-1. **Inference on the Jetson.** `scripts/b2w/benchmark.py --check samples.npz` runs the exported policy on inputs
-   saved in simulation and compares the actions (catches a broken ONNX Runtime/TensorRT setup), then times a full
-   step on a scan of the lidar's size. One step must fit well within the 100 ms scan period.
-2. **Controller identification.** `scripts/b2w/sysid.py profile` writes a 2.5-minute command profile (steps, small
-   commands, turns, arcs, sinusoids; it returns near its start). Play it in an open area with the node in
-   `mode:=sysid`, then `sysid.py fit --log sysid_log.csv --json sysid.json` fits latency, gain, deadband, response
-   time, acceleration bound and yaw drift, and flags values outside the training ranges (`b2w.CONTROLLER`).
-   `scripts/b2w/evaluate.py --controller sysid:sysid.json` then evaluates the policy with the identified controller.
-3. **Shadow drive.** Drive the robot by hand with the node in `mode:=shadow` and `record:=drive.npz`: it computes and
-   publishes the policy's commands on `~/command` without sending them. Watch them in RViz or a plot: they should
-   point along the path and slow down near people and in doorways.
-4. **Map replay.** `scripts/b2w/replay.py --record drive.npz` rebuilds the maps offline, checks that it reproduces
-   the node's commands and reports map statistics; `evaluate.py --map_stats` reports the same statistics in
-   simulation. The floor should read about 0, and the share of known cells (overall, within 1.5 m) should be
-   comparable.
-5. **Twin evaluation.** Map the room (e.g. slam_toolbox with the lidar), draft a twin with
-   `scripts/b2w/occupancy_to_twin.py`, add doors, tables and routes (see `lab_twin_example.yaml`), and run
-   `evaluate.py --twin room.yaml` with the identified controller. Low success there predicts failure on the robot.
-6. **Slow closed loop.** `mode:=drive` with `max_speed:=0.3`, the shield on, an operator on the remote's stop, the
-   empty aisle first; then a person walking towards the robot (it must stop well short), then normal traffic. The
-   robot stops if lidar or odometry stop for 0.3 s and while `~/stop` is true.
-
-## The lab
+### The lab
 
 The released policy is specialized on the lab it is deployed in: half its training tiles are sections of that hall
 (`src/g1_patrol/tasks/navigation/nyc/makerlab.py`, modeled on photographs: the painted main aisle, drawer-cabinet
@@ -165,30 +283,17 @@ benches, test machines, open racks, bins, carts, pallets, a workstation area wit
 thin-legged objects are kept out of as a whole), and its students see the polished concrete floor lose far returns. A
 scan of the actual hall turned into a twin (step 5) adds its exact layout to the evaluation.
 
-## Running the node
+### Nav2 instead of the built-in planner
 
-```bash
-PYTHONPATH=<repo>/src:<repo>/deploy python3 -m b2w.ros2_node --ros-args \
-    -p config:=deploy.json -p policy:=policy.onnx -p mode:=shadow \
-    -p lidar_topic:=/rslidar_points -p odom_topic:=/odom -p goal_topic:=/goal_pose \
-    -p planner_action:=/compute_path_to_pose -p record:=drive.npz
-```
+The navigation node follows any `nav_msgs/Path` on `/plan`, so Nav2's planner server can replace ours: start the stack
+with `slam:=false`, run Nav2's `map_server`, a localization and `planner_server` (`nav2_b2w.yaml`), and pass
+`-p planner_action:=/compute_path_to_pose` to the navigation node to have it request a path for each goal and every
+second. Nav2's `controller_server` and `bt_navigator` must not run: the navigation node takes their place.
 
-With `planner_action`, the node asks a planner for the path to each goal and again every second; Nav2's
-`planner_server` with `map_server` and a localization (`amcl`, or slam_toolbox in localization mode) on a map of the
-lab made beforehand with the lidar is enough. Nav2's `controller_server` and `bt_navigator` must not run: this node
-takes their place. The path is brought into the odometry frame with TF (`map` -> `odom`) when it arrives. Without a
-planner the node follows any `nav_msgs/Path` published on `path_topic` (default `/plan`), or a goal in a straight line.
+### Controller identification (optional)
 
-The TF tree Nav2 needs: `map` -> `odom` from the localization, `odom` -> `base_link` from `b2w.sportstate_to_odom`
-(or the robot's own odometry node), and the lidar's mount,
-`ros2 run tf2_ros static_transform_publisher --x 0.342 --z 0.179 --frame-id base_link --child-frame-id rslidar`
-(the frame of the Helios's point cloud; the policy node takes the mount from `deploy.json` instead). AMCL and
-slam_toolbox take a laser scan: `pointcloud_to_laserscan` on `/rslidar_points`, target frame `base_link`, heights
-−0.25 to 0.45 m (0.3 to 1.0 m above the floor).
-
-Commands go to the sport-mode controller through `unitree_sdk2py` (`-p output:=sdk -p network_interface:=eth0`) or as
-`geometry_msgs/Twist` on `cmd_vel` for an existing bridge (`-p output:=twist`). If the robot provides its state
-estimate only as Unitree's `SportModeState`, `python3 -m b2w.sportstate_to_odom` republishes it as odometry (check
-once in which frame its velocity is expressed; see the module). The robot-side code needs Python 3,
-PyTorch, NumPy, ONNX Runtime and ROS 2 (rclpy, sensor_msgs_py, tf2_ros; nav2_msgs with a planner), not Isaac Lab.
+`scripts/b2w/sysid.py profile` writes a 2.5-minute command profile; play it in open space with the navigation node in
+`mode:=sysid` (hold the dead-man button), then `sysid.py fit --log sysid_log.csv --json sysid.json` fits latency,
+gain, deadband, response time, acceleration and yaw drift, and flags values outside the training ranges;
+`scripts/b2w/evaluate.py --controller sysid:sysid.json --shield --shield_set latency=...,brake=...` evaluates the
+policy and the shield with them in simulation.

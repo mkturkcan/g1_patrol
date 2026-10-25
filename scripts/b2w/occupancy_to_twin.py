@@ -11,6 +11,8 @@ Usage:
     python scripts/b2w/occupancy_to_twin.py --map lab.yaml --region -2 -3 13 6 --out lab_twin.yaml
 """
 
+from __future__ import annotations
+
 import argparse
 import math
 from pathlib import Path

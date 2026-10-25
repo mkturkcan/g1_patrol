@@ -13,6 +13,8 @@ Usage:
     PYTHONPATH=src:deploy python scripts/b2w/replay.py --record drive.npz --config deploy.json --policy policy.onnx --out replay/
 """
 
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
 

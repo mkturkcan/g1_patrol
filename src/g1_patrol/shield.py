@@ -20,7 +20,8 @@ footprint (a rectangle with rounded corners) is swept along this stopping path, 
 * returns that a person detector marks (``person``) keep ``person_margin`` at any speed;
 * returns that ``moving`` marks (the caller compares the current scan with the previous one, see
   :func:`moving_returns`) are assumed to come towards the robot at ``human_speed`` while it moves towards them (not
-  while it moves away: a retreating robot pushes no one).
+  while it moves away: a retreating robot pushes no one), and within ``near_moving_gap`` of them the robot crawls in
+  any direction (a person crossing its way).
 
 A return already within its margin only blocks motion that brings the robot closer to it, so the robot can always
 back or turn away. If the robot's measured velocity alone already breaches (something stepped in front of it), the
@@ -38,6 +39,7 @@ robot that left the sensors' view.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -74,6 +76,10 @@ class ShieldCfg:
     and with at least ``moving_cells`` such cells within 0.2 m. In simulation (lab mixture, 0.5 m/s) the first removes
     about four fifths of the moving returns at furniture and a quarter of the stops, without more pedestrian contacts;
     requiring 2 cells also misses people who stand and then walk off."""
+    near_moving_speed: float = 0.1
+    near_moving_gap: float = 1.2
+    """Within ``near_moving_gap`` (m) of anything that moves, the footprint's fastest point (turning swings the corners)
+    crawls at most at ``near_moving_speed`` (m/s), in any direction: a person crossing the robot's way is not pushed."""
     approach_speed: float = 0.25
     approach_gap: float = 0.8
     """Closing speed (m/s) towards a tall thing allowed within ``approach_gap`` (m); more only as far as the robot
@@ -263,6 +269,12 @@ def shield(points: torch.Tensor, command: torch.Tensor, cfg: ShieldCfg = ShieldC
     u_cap = torch.where(gap0 > cfg.approach_gap, u_cap.clamp(min=cfg.approach_speed), torch.full_like(u_cap, cfg.approach_speed))
     ratio = torch.where((tall | people) & (u > 1e-6), u_cap / u.clamp(min=1e-6), torch.full_like(u, float("inf")))
     scale = torch.minimum(scale, ratio.amin(dim=1).clamp(max=1.0))
+    # near anything that moves: crawl
+    near_moving = (approaching & (gap0 < cfg.near_moving_gap)).any(dim=1)
+    corner = math.hypot(cfg.half_length, cfg.half_width)
+    fastest = v_lin + w_abs * corner
+    crawl = (cfg.near_moving_speed / fastest.clamp(min=1e-6)).clamp(max=1.0)
+    scale = torch.where(near_moving, torch.minimum(scale, crawl), scale)
     safe = command * scale[:, None]
     far = torch.full_like(gap0, 1e3)
     info = {
@@ -271,6 +283,114 @@ def shield(points: torch.Tensor, command: torch.Tensor, cfg: ShieldCfg = ShieldC
         "min_gap": torch.where(obstacle, gap0, far).amin(dim=1),
         "min_tall_gap": torch.where(tall, gap0, far).amin(dim=1),
         "min_moving_gap": torch.where(approaching, gap0, far).amin(dim=1),
+        "near_moving": near_moving,
         "min_person_gap": torch.where(people, gap0, far).amin(dim=1),
     }
     return safe, info
+
+
+class ShieldGuard:
+    """The shield with what the robot does around it, batched over ``n`` robots (the robot runs one, the evaluation
+    many):
+
+    * a (nearly) blocked command -- less than ``alternatives_below`` of it gets through -- is replaced by the safe
+      command near it that goes furthest the way it wanted (:meth:`alternatives`: the translation or the turn alone,
+      a nudge sideways, a step back): in a tight spot, turning while half through a door say, one of them may be safe
+      where the combination is not;
+    * a robot that stays blocked for ``recovery[0]`` s backs off for ``recovery[1]`` s at ``recovery[2]`` m/s (checked
+      by the shield), then the policy tries again;
+    * for ``crawl_hold`` s after anything moving was within ``cfg.near_moving_gap``, the footprint's fastest point
+      crawls at ``cfg.near_moving_speed``: a person close by can leave the scan's view of what moves (the floor around
+      them is hidden) while still there.
+    """
+
+    def __init__(self, n: int, cfg: ShieldCfg = ShieldCfg(), device="cpu", alternatives_below: float = 0.3,
+                 recovery: tuple[float, float, float] = (1.5, 1.0, 0.15), crawl_hold: float = 2.0,
+                 alternative_points: int = 1024):
+        self.cfg, self.alternatives_below, self.recovery, self.crawl_hold = cfg, alternatives_below, recovery, crawl_hold
+        self.alternative_points = alternative_points
+        self.blocked_for = torch.zeros(n, device=device)
+        self.recovery_left = torch.zeros(n, device=device)
+        self.crawl_left = torch.zeros(n, device=device)
+
+    def reset(self, ids=None):
+        ids = slice(None) if ids is None else ids
+        self.blocked_for[ids] = 0.0
+        self.recovery_left[ids] = 0.0
+        self.crawl_left[ids] = 0.0
+
+    @staticmethod
+    def alternatives(c: torch.Tensor) -> torch.Tensor:
+        """Commands (n, K, 3) near the commands ``c`` (n, 3) (forward, lateral, yaw rate) to try when they are blocked."""
+        vx, vy, wz = c[:, 0], c[:, 1], c[:, 2]
+        z = torch.zeros_like(vx)
+        rows = [(vx, vy, wz), (vx, vy, z), (vx, vy, 0.5 * wz), (z, z, wz), (z, z, 0.5 * wz),
+                (0.5 * vx, vy + 0.15, z), (0.5 * vx, vy - 0.15, z), (z, z + 0.15, 0.5 * wz), (z, z - 0.15, 0.5 * wz),
+                (z - 0.15, z, z), (z - 0.15, z, 0.5 * wz)]
+        return torch.stack([torch.stack(r, dim=-1) for r in rows], dim=1)
+
+    def __call__(self, points: torch.Tensor, command: torch.Tensor, dt: float, velocity: torch.Tensor | None = None,
+                 moving: torch.Tensor | None = None, person: torch.Tensor | None = None,
+                 ground_z=None) -> tuple[torch.Tensor, dict]:
+        cfg, n, dev = self.cfg, command.shape[0], command.device
+        safe, info = shield(points, command, cfg, velocity, moving, person, ground_z)
+        weight = torch.tensor([1.0, 1.0, 0.5], device=dev)  # a yaw rate counts as the speed of a point 0.5 m out
+        intent = command * weight
+        intent = intent / torch.linalg.norm(intent, dim=1, keepdim=True).clamp(min=1e-6)
+        alternative = torch.full((n,), -1, dtype=torch.long, device=dev)
+        stuck = (info["scale"] < self.alternatives_below) & ~info["emergency"]
+        if stuck.any():
+            ids = stuck.nonzero(as_tuple=True)[0]
+            cands = self.alternatives(command[ids])  # (m, K, 3)
+            m, k = cands.shape[:2]
+            pts = points[ids]
+            mv = None if moving is None else moving[ids]
+            ps = None if person is None else person[ids]
+            if pts.shape[1] > self.alternative_points:  # the closest of the returns the shield counts (not the floor)
+                p = torch.nan_to_num(pts.float(), nan=1e3, posinf=1e3, neginf=-1e3)
+                gz_all = _per_robot(cfg.ground_z if ground_z is None else ground_z, n, dev)[ids]
+                h = p[..., 2] - gz_all
+                counted = ((h > cfg.z_min) & (h < cfg.z_max)) | (h < cfg.drop_z)
+                d = torch.where(counted, torch.linalg.norm(p[..., :2], dim=-1), torch.full_like(h, 1e6))
+                top = d.topk(self.alternative_points, dim=1, largest=False).indices
+                pts = torch.gather(pts, 1, top[..., None].expand(-1, -1, 3))
+                mv = None if mv is None else torch.gather(mv, 1, top)
+                ps = None if ps is None else torch.gather(ps, 1, top)
+
+            def rep(t):  # (m, ...) -> (m * K, ...)
+                return None if t is None else t[:, None].expand(m, k, *t.shape[1:]).reshape(m * k, *t.shape[1:])
+
+            gz = None if ground_z is None else torch.as_tensor(ground_z, dtype=torch.float32, device=dev).reshape(-1).expand(n)[ids]
+            alt, _ = shield(rep(pts), cands.reshape(m * k, 3), cfg, rep(None if velocity is None else velocity[ids]),
+                            rep(mv), rep(ps), rep(gz))
+            alt = alt.view(m, k, 3)
+            progress = ((alt * weight) * intent[ids, None]).sum(-1)
+            best = progress.argmax(dim=1)
+            better = progress.gather(1, best[:, None])[:, 0] > ((safe[ids] * weight) * intent[ids]).sum(-1) + 1e-3
+            pick = ids[better]
+            safe[pick] = alt[better, best[better]]
+            alternative[pick] = best[better]
+        state = torch.where(info["emergency"], 2, torch.where(info["scale"] < 0.999, 1, 0))  # 0 free, 1 limited, 2 stop
+        # stuck: the policy keeps asking for what the shield does not allow -> back off a little, then try again
+        blocked = (state > 0) & (torch.linalg.norm(safe * weight, dim=1) < 0.03) & (torch.linalg.norm(command * weight, dim=1) > 0.1)
+        self.blocked_for = torch.where(blocked, self.blocked_for + dt, torch.zeros_like(self.blocked_for))
+        start = (self.recovery_left <= 0.0) & (self.blocked_for > self.recovery[0])
+        self.recovery_left = torch.where(start, torch.full_like(self.recovery_left, self.recovery[1]), self.recovery_left)
+        self.blocked_for = torch.where(start, torch.zeros_like(self.blocked_for), self.blocked_for)
+        backing = self.recovery_left > 0.0
+        if backing.any():
+            back = torch.zeros_like(command)
+            back[:, 0] = -self.recovery[2]
+            back_safe, _ = shield(points, back, cfg, velocity, moving, person, ground_z)
+            safe = torch.where(backing[:, None], back_safe, safe)
+            self.recovery_left = torch.where(backing, self.recovery_left - dt, self.recovery_left)
+        # near something that moved: keep crawling for a while
+        self.crawl_left = torch.where(info["near_moving"], torch.full_like(self.crawl_left, self.crawl_hold),
+                                      (self.crawl_left - dt).clamp(min=0.0))
+        crawling = self.crawl_left > 0.0
+        corner = math.hypot(cfg.half_length, cfg.half_width)
+        fastest = torch.linalg.norm(safe[:, :2], dim=1) + safe[:, 2].abs() * corner
+        slow = (cfg.near_moving_speed / fastest.clamp(min=1e-6)).clamp(max=1.0)
+        safe = torch.where(crawling[:, None], safe * slow[:, None], safe)
+        info = {**info, "alternative": alternative, "backing_off": backing, "crawling": crawling, "state": state}
+        return safe, info
