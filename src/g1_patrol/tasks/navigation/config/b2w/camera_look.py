@@ -20,6 +20,8 @@ import numpy as np
 from isaaclab.sim.spawners.shapes.shapes import spawn_capsule
 from isaaclab.sim.utils.prims import clone
 
+from . import camera_furnish
+
 PROJECT = Path(__file__).resolve().parents[6]
 DEMO = PROJECT / "scripts" / "demo"
 CLIPS = PROJECT / "src" / "g1_patrol" / "assets" / "data" / "people"
@@ -52,7 +54,8 @@ def _demo_modules():
 
 @clone
 def spawn_hidden_capsule(prim_path, cfg, translation=None, orientation=None, **kwargs):
-    """A capsule (:func:`isaaclab.sim.spawners.shapes.spawn_capsule`) whose geometry is not drawn (purpose ``guide``)."""
+    """A capsule (:func:`isaaclab.sim.spawners.shapes.spawn_capsule`) whose geometry is not drawn (purpose
+    ``guide``)."""
     from pxr import Usd, UsdGeom
 
     prim = spawn_capsule.__wrapped__(prim_path, cfg, translation, orientation, **kwargs)
@@ -63,9 +66,10 @@ def spawn_hidden_capsule(prim_path, cfg, translation=None, orientation=None, **k
 
 
 def spawn_demo_look(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
-    """Dress every tile of the terrain as the demo does, with a ceiling and a light under it over each indoor room
-    (:func:`_ceiling`), a backdrop, a skyline, sky and sun, and hide the training meshes (spawned as a scene entity after the terrain, before the simulation
-    starts; ``prim_path`` must be the dressing's root, ``/World/Demo``)."""
+    """Dress every tile of the terrain as the demo does, the indoor rooms furnished with SimReady props and clutter
+    (:mod:`.camera_furnish`) and covered by a ceiling with a light under it (:func:`_ceiling`), with a backdrop, a
+    skyline, sky and sun, and hide the training meshes (spawned as a scene entity after the terrain, before the
+    simulation starts; ``prim_path`` must be the dressing's root, ``/World/Demo``)."""
     import omni.usd
 
     from g1_patrol.tasks.navigation.nyc.terrain import NycTerrainGenerator
@@ -79,12 +83,21 @@ def spawn_demo_look(prim_path: str, cfg, translation=None, orientation=None, **k
     b2w_look.register_indoor_materials()
     nyc_look.COLORS.update(CEILING_MATERIALS)
     nyc_look.EMISSIVE["ceiling_light"] = CEILING_LIGHT
+    camera_furnish.register_materials(nyc_look)
     nyc_look.create_materials()
     for r, c in tiles:
         lay, center = generator.layouts[(r, c)], nyc_look.tile_center(generator, r, c)
-        nyc_look.dress_tile(stage, lay, center, f"r{r}_c{c}", rng, far_side=(r, c - 1) not in generator.layouts)
+        tile = f"{prim_path}/Tiles/r{r}_c{c}"
+        drawn = lay
+        if lay.kind in INDOOR:  # furniture drawn as SimReady props (the layout without their boxes' plain meshes)
+            drawn = camera_furnish.furnish(stage, nyc_look, f"{tile}/furniture", lay, center, rng)
+        nyc_look.dress_tile(stage, drawn, center, f"r{r}_c{c}", rng, far_side=(r, c - 1) not in generator.layouts)
         if lay.kind in INDOOR:
-            height = _ceiling(stage, nyc_look, f"{prim_path}/Tiles/r{r}_c{c}/ceiling", lay.kind, center)
+            camera_furnish.wall_decor(stage, nyc_look, f"{tile}/wall_decor", lay, center, rng)
+            height = _ceiling(stage, nyc_look, f"{tile}/ceiling", lay.kind, center)
+            if lay.kind in HALLS:
+                side = 1.0 if c % 2 else -1.0  # (the same for every tile of a hall)
+                camera_furnish.hall_services(stage, nyc_look, f"{tile}/services", center, height, side)
             b2w_look.add_room_light(stage, f"{prim_path}/RoomLights/r{r}_c{c}", center, intensity=ROOM_LIGHT,
                                     height=height - 0.1)
     nyc_look.add_backdrop(stage, generator, set(tiles))
@@ -110,7 +123,8 @@ def _ceiling(stage, nyc_look, root: str, kind: str, center) -> float:
     up, mid = height - WALL_H + 0.02, (WALL_H + height) / 2
     walls = [nyc_look._box((cx, cy + side * (HALF_W - WALL_T / 2), mid), (2 * HALF_L, WALL_T, up)) for side in (-1, 1)]
     if kind not in HALLS:  # rooms are closed at their ends too; halls continue into the next tile
-        walls += [nyc_look._box((cx + side * (HALF_L - WALL_T / 2), cy, mid), (WALL_T, 2 * IN_W, up)) for side in (-1, 1)]
+        x = HALF_L - WALL_T / 2
+        walls += [nyc_look._box((cx + side * x, cy, mid), (WALL_T, 2 * IN_W, up)) for side in (-1, 1)]
     nyc_look.add_mesh(stage, f"{root}/walls", trimesh.util.concatenate(walls), "wall")
     slab = nyc_look._box((cx, cy, height + 0.1), (2 * HALF_L, 2 * HALF_W, 0.2))
     nyc_look.add_mesh(stage, f"{root}/slab", slab, "ceiling_hall" if kind in HALLS else "ceiling_room")
