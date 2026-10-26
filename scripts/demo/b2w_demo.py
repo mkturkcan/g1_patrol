@@ -5,6 +5,9 @@ scenario tile runs the navigation policy; the kinematic box of the simulation is
 (``b2w_look.py``: legs posed for the episode's base height, wheels turning with the motion); indoor tiles are roofless
 rooms filmed from above their walls. With ``--shield`` the policy's commands pass through the safety shield as on the
 robot (``scripts/b2w/shielded.py``). Every episode is saved as its own clip, named after its scenario and how it ended.
+``--camera d435`` films from the robot's front RealSense (its mount, the color stream's field of view) and ``--camera
+robot`` from a forward-looking camera on the front of the body; both also write the depth (``*_depth.mp4``: inverse
+depth, 0.5 m white to 20 m black) as a control video for video-to-video models.
 
 Usage:
     python scripts/demo/b2w_demo.py --task G1Patrol-B2W-Navigate-Lab-Fused --checkpoint <model.pt> \\
@@ -52,6 +55,7 @@ from nyc_demo import FollowCamera, Overlay, _camera_bounds, robot_in_structure  
 TITLES = {
     **STREET_TITLES,
     "makerlab": "The lab",
+    "civil_lab": "Civil engineering lab",
     "lab": "Laboratory",
     "corridor": "Office corridor",
     "doorway": "Doorways",
@@ -59,7 +63,11 @@ TITLES = {
     "warehouse": "Warehouse aisles",
     "lobby": "Building lobby",
 }
-INDOOR = ("makerlab", "lab", "corridor", "doorway", "office", "warehouse", "lobby")
+INDOOR = ("makerlab", "civil_lab", "lab", "corridor", "doorway", "office", "warehouse", "lobby")
+HALLS = ("makerlab", "civil_lab")
+"""Indoor tiles that are sections of a hall continuing beyond the tile's ends."""
+DEPTH_RANGE = (0.5, 20.0)
+"""Depth (m) drawn white and black in the depth videos (inverse depth in between)."""
 OUTCOMES = ("goal_reached", "pedestrian_collision", "obstacle_collision", "roadway", "time_out")
 DESCRIPTION = os.path.join(os.path.dirname(PROJECT), "assets_dl", "repos_ref", "unitree_ros", "robots", "b2w_description")
 
@@ -70,7 +78,7 @@ def parse_args(argv):
     parser.add_argument("--scenarios", nargs="+", default=["makerlab", "lab", "sidewalk"], choices=list(TITLES))
     parser.add_argument("--level", type=int, default=6, help="Difficulty level (terrain row) of the filmed tiles.")
     parser.add_argument("--levels", type=int, nargs="+", default=None, help="Per-scenario levels (overrides --level).")
-    parser.add_argument("--camera", default="chase", choices=["chase", "drone", "side"])
+    parser.add_argument("--camera", default="chase", choices=["chase", "drone", "side", "d435", "robot"])
     parser.add_argument("--no_overlay", action="store_true", help="Record clean frames without titles or labels.")
     parser.add_argument("--variant", type=int, default=0, help="Which of the scenario's terrain columns to use.")
     parser.add_argument("--seconds", type=float, default=60.0, help="Simulated seconds to record.")
@@ -141,6 +149,53 @@ class B2WCamera(FollowCamera):
         self.eye = self.eye + (eye - self.eye) * min(1.0, dt / 0.7)
         self.target = self.target + (target - self.target) * min(1.0, dt / 0.35)
         self._look_at(self.eye, self.target)
+
+
+class RobotCamera(FollowCamera):
+    """A camera on the robot: ``d435`` at the front RealSense's mount (45 deg down) with the color stream's field of
+    view (69 x 42 deg at 16:9), ``robot`` looking ahead from the front of the body (12 deg down, same lens). Also
+    renders the depth (distance to the image plane)."""
+
+    def __init__(self, stage, path: str, kind: str, width: int, height: int, mode: str):
+        import omni.replicator.core as rep
+
+        super().__init__(stage, path, kind, width, height, "chase")
+        self.mode = mode
+        self.focal = self.aperture[0] / (2 * math.tan(math.radians(69.0) / 2))
+        self.camera.GetFocalLengthAttr().Set(self.focal)
+        self.depth = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
+        self.depth.attach(self.render_product)
+
+    def update(self, robot_pos, robot_quat, dt):
+        """``robot_quat`` (w, x, y, z) of the base."""
+        from g1_patrol.b2w import DEPTH_CAMERAS, rpy_matrix
+
+        self.t += dt
+        w, x, y, z = robot_quat
+        base = np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ])  # fmt: skip
+        if self.mode == "d435":
+            mount, rpy = DEPTH_CAMERAS["front"]
+            axis = np.asarray(rpy_matrix(rpy))[:, 2]  # the optical axis in base_link
+        else:
+            mount, pitch = (0.58, 0.0, 0.08), math.radians(12.0)
+            axis = np.array([math.cos(pitch), 0.0, -math.sin(pitch)])
+        self.eye = np.asarray(robot_pos) + base @ np.asarray(mount)
+        self.target = self.eye + base @ axis
+        self._look_at(self.eye, self.target)
+
+    def depth_frame(self) -> np.ndarray | None:
+        """Inverse depth as 8-bit gray (white at :data:`DEPTH_RANGE` [0], black at [1] and beyond)."""
+        data = self.depth.get_data()
+        if data is None or len(data) == 0:
+            return None
+        d = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=DEPTH_RANGE[1], posinf=DEPTH_RANGE[1])
+        near, far = DEPTH_RANGE
+        v = (1.0 / np.clip(d, near, far) - 1.0 / far) / (1.0 / near - 1.0 / far)
+        return np.repeat((255 * v).astype(np.uint8)[..., None], 3, axis=-1)
 
 
 def _indoor_bounds(center) -> tuple:
@@ -230,7 +285,7 @@ def main(argv):
         b2w_look.register_indoor_materials()
         placements = {}
         for (r, c), name in zip(tiles, args.scenarios):
-            if name not in INDOOR or name == "makerlab":  # streets, and the lab hall, continue beyond the tile's ends
+            if name not in INDOOR or name in HALLS:  # streets, and the lab halls, continue beyond the tile's ends
                 placements.update({(r + k, c): (r, c) for k in (-2, -1, 1, 2)})
         placements.update({t: t for t in tiles})
         nyc_look.dress(stage, generator, placements)
@@ -247,7 +302,9 @@ def main(argv):
             for prim in Usd.PrimRange(stage.GetPrimAtPath(f"/World/envs/env_{e}/Robot")):
                 if prim.IsA(UsdGeom.Imageable):
                     UsdGeom.Imageable(prim).MakeInvisible()
-        cameras = [B2WCamera(stage, f"/World/Demo/Cameras/cam_{e}", name, args.width, args.height, args.camera)
+        on_robot = args.camera in ("d435", "robot")
+        camera_class = RobotCamera if on_robot else B2WCamera
+        cameras = [camera_class(stage, f"/World/Demo/Cameras/cam_{e}", name, args.width, args.height, args.camera)
                    for e, name in enumerate(args.scenarios)]  # fmt: skip
         centers0 = [nyc_look.tile_center(generator, *t) for t in tiles]
         camera_bounds = [
@@ -267,10 +324,16 @@ def main(argv):
         clip_frames = [0] * len(args.scenarios)
         clip_count = [0] * len(args.scenarios)
 
+        depth_clips = [None] * len(args.scenarios)
+
         def open_clip(e):
             clip_count[e] += 1
             path = os.path.join(out_dir, f"{args.scenarios[e]}_L{levels[e]}_{args.camera}_ep{clip_count[e]:02d}.mp4")
             clips[e] = (imageio.get_writer(path, fps=fps, codec="libx264", quality=9, macro_block_size=8), path)
+            if on_robot:
+                depth_path = path.replace(".mp4", "_depth.mp4")
+                writer = imageio.get_writer(depth_path, fps=fps, codec="libx264", quality=9, macro_block_size=8)
+                depth_clips[e] = (writer, depth_path)
             clip_t[e], clip_frames[e] = 0.0, 0
             people_events[e], prev_people[e] = [0, 0, 0, 0], None
             touches[e].clear()
@@ -278,11 +341,15 @@ def main(argv):
         def close_clip(e, outcome):
             writer, path = clips[e]
             writer.close()
+            if on_robot:
+                depth_clips[e][0].close()
             if clip_frames[e] == 0:
                 print(f"[DEMO] {args.scenarios[e]} episode {clip_count[e]}: {outcome} after {clip_t[e]:.1f} s, no frames", flush=True)
                 return
             final = path.replace(".mp4", f"_{outcome}.mp4")
             os.replace(path, final)
+            if on_robot:
+                os.replace(depth_clips[e][1], final.replace(".mp4", "_depth.mp4"))
             appear, vanish, backward, touching = people_events[e]
             print(f"[DEMO] {os.path.basename(final)} ({clip_t[e]:.1f} s, {clip_frames[e]} frames; people in view: {appear} appeared, "
                   f"{vanish} vanished, {backward} character-frames moving backwards; robot inside a structure in "
@@ -307,7 +374,10 @@ def main(argv):
             for e, cam in enumerate(cameras):
                 ground = float(pos[e][2] - heights[e])
                 models[e].update(pos[e], quat[e], float(heights[e]), velocity[e], frame_dt)
-                cam.update(pos[e], float(yaw[e]), centers[e], frame_dt, camera_bounds[e], ground)
+                if on_robot:
+                    cam.update(pos[e], quat[e], frame_dt)
+                else:
+                    cam.update(pos[e], float(yaw[e]), centers[e], frame_dt, camera_bounds[e], ground)
             play = settings.get("/app/player/playSimulations")
             settings.set("/app/player/playSimulations", False)
             omni.kit.app.get_app().update()
@@ -335,6 +405,9 @@ def main(argv):
                     sub = "Digital twin of the deployment lab" if name == "makerlab" else f"{where} · difficulty {levels[e] + 1}/10"
                     shown = frame if args.no_overlay else overlay.draw(frame, TITLES[name], sub, clip_t[e])
                     clips[e][0].append_data(shown)
+                    if on_robot:
+                        depth = cam.depth_frame()
+                        depth_clips[e][0].append_data(depth if depth is not None else np.zeros_like(frame))
                     clip_frames[e] += 1
                     if args.snapshot_every and clip_frames[e] % max(1, int(args.snapshot_every * fps)) == 1:
                         imageio.imwrite(os.path.join(out_dir, f"still_{name}_{args.camera}_ep{clip_count[e]:02d}_{clip_t[e]:05.1f}s.png"), frame)

@@ -141,7 +141,12 @@ of the release (lab section, map unknown at the start, speed cap 0.6 m/s):
 | dead-man button not held | did not move | – | 0 |
 
 The contacts are simulated people, who ignore the robot, walking into it while it stood or crept; the robot never
-moved into anyone.
+moved into anyone. Run four more times, the two-people scenario reached the goal three times (73.5-89.5 s, 3-5
+contacts) and once ran out of its 150 s while the people kept walking into the stopped robot. In four civil
+engineering lab worlds (`python deploy/b2w/sim/export_world.py --kind civil_lab
+--seed 1..4`, run with `SIL_WORLD=<world.json>`; the props are their bounding boxes), the release reached 7 of 8 goals
+(42-106 s) without contacts; at the eighth the start lies behind a 0.64 m gap that the planner's map closes, and the
+robot stayed where it was (`no route to the goal`).
 
 ## Troubleshooting
 
@@ -151,7 +156,7 @@ moved into anyone.
 | `waiting: no lidar scans` | lidar driver not receiving packets (step 3) or another `lidar_topic` |
 | `waiting: no remote messages` | the remote is off or not paired; without it the robot does not drive |
 | `/b2w/planner_state`: `waiting for the robot's pose` | SLAM has no scans yet (lidar) or no odometry TF |
-| `no route to the goal` | the goal is inside an obstacle or walled off on the map; pick another |
+| `no route to the goal` | the goal is inside an obstacle or walled off on the map; pick another. Passages narrower than about 0.75 m are closed on the map (the robot's half width, 0.29 m, on 0.1 m cells, with obstacles drawn a cell thicker by SLAM): widen them or drive the robot through by hand |
 | state `shield` often in an empty room | the shield sees something close (`min_gap`); flickering returns near shelves |
 | state `crawling (people near)` with nobody near | static things coming into view count as moving; `crawl:=false` where nobody walks |
 | `floor` far from -0.6 ... -0.7 | the lidar mount in `deploy.json` is not the robot's |
@@ -301,7 +306,11 @@ The released policy is specialized on the lab it is deployed in: half its traini
 (`src/g1_patrol/tasks/navigation/nyc/makerlab.py`, modeled on photographs: the painted main aisle, drawer-cabinet
 benches, test machines, open racks, bins, carts, pallets, a workstation area with office chairs and camera tripods;
 thin-legged objects are kept out of as a whole), and its students see the polished concrete floor lose far returns. A
-scan of the actual hall turned into a twin (step 5) adds its exact layout to the evaluation.
+scan of the actual hall turned into a twin (step 5) adds its exact layout to the evaluation. A more cluttered civil
+engineering laboratory furnished with NVIDIA SimReady props (`src/g1_patrol/tasks/navigation/nyc/civil_lab.py`: load
+frames, environmental chambers, actuator columns, workbenches, a strong floor with specimens, pallets, carts, hand
+trucks, scaffolds, ladders and tripods) serves for evaluation (`G1Patrol-B2W-Navigate-CivilLab-Fused`, Table B3 of
+the main README).
 
 ### Nav2 instead of the built-in planner
 

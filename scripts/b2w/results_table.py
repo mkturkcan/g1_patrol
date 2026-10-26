@@ -2,10 +2,10 @@
 
 Prints the tables; with ``--write``, replaces them between ``<!-- table:NAME -->`` / ``<!-- /table:NAME -->``
 markers in ``README.md`` and ``deploy/b2w/README.md`` and in the ``<table id="NAMETable">`` elements of
-``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``).
+``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``, ``b2w_civil``).
 
 Usage:
-    python scripts/b2w/results_table.py [--logs logs/rsl_rl] [--write]
+    python scripts/b2w/results_table.py [--logs logs/rsl_rl] [--tag release] [--write]
 """
 
 import argparse
@@ -42,30 +42,50 @@ SHIELD = [
 ]
 COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Structure contact (%)", "Pedestrian contact, robot moving (%)",
            "Pedestrian walked into stopped robot (%)", "Time-out (%)", "Speed (m/s)", "Shield stops (% of steps)"]
+CIVIL = [  # (name, run, policy, evaluation file): the mixture in which the civil engineering lab takes half the lab tiles
+    ("Released fused student", "release", "fused", "b2w_civil_mix.json"),
+    ("Released fused student, shield", "release", "fused", "b2w_civil_mix_shield.json"),
+    ("Lab teacher trained with the civil lab (privileged)", "civil", "teacher", "b2w_nominal.json"),
+    ("Fused student trained with the civil lab", "civil", "fused", "b2w_nominal.json"),
+    ("Fused student trained with the civil lab, shield", "civil", "fused", "b2w_nominal_shield.json"),
+]
+CIVIL_COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Goal, civil eng. lab (%)",
+                 "Structure contact, civil eng. lab (%)", "Pedestrian contact, robot moving (%)", "Time-out (%)"]
 
 
-def _lab(d: dict, key: str) -> float:
-    cells = [d["per_scenario"][f"makerlab/{b}"] for b in ("easy", "medium", "hard")]
+def _lab(d: dict, key: str, kind: str = "makerlab") -> float | None:
+    """The rate ``key`` over the tiles of ``kind`` (all difficulties); None if the evaluation had none."""
+    cells = [d["per_scenario"][f"{kind}/{b}"] for b in ("easy", "medium", "hard") if f"{kind}/{b}" in d["per_scenario"]]
     n = sum(c["episodes"] for c in cells)
-    return sum(c[key] * c["episodes"] for c in cells) / max(n, 1)
+    return sum(c[key] * c["episodes"] for c in cells) / n if n else None
+
+
+def _pct(x: float | None) -> str:
+    return "–" if x is None else f"{100 * x:.1f}"
 
 
 def _cells(d: dict) -> list[str]:
     pc = d["pedestrian_contacts"]
     shield = d.get("shield_stats")
-    return [f"{d['episodes']:,}", f"{100 * d['goal_reached_rate']:.1f}", f"{100 * _lab(d, 'goal_reached_rate'):.1f}",
+    return [f"{d['episodes']:,}", f"{100 * d['goal_reached_rate']:.1f}", _pct(_lab(d, "goal_reached_rate")),
             f"{100 * d['obstacle_collision_rate']:.1f}", f"{100 * pc['robot_moving_rate']:.1f}",
             f"{100 * pc['pedestrian_walked_in_rate']:.1f}", f"{100 * d['time_out_rate']:.1f}",
             f"{d['motion']['mean_speed_mps']:.2f}", f"{100 * shield['emergency_rate']:.1f}" if shield else "–"]
 
 
-def _markdown(first: str, rows: list) -> str:
-    lines = ["| " + " | ".join([first, *COLUMNS]) + " |", "|" + "---|" * (len(COLUMNS) + 1)]
+def _civil_cells(d: dict) -> list[str]:
+    return [f"{d['episodes']:,}", f"{100 * d['goal_reached_rate']:.1f}", _pct(_lab(d, "goal_reached_rate")),
+            _pct(_lab(d, "goal_reached_rate", "civil_lab")), _pct(_lab(d, "obstacle_collision_rate", "civil_lab")),
+            f"{100 * d['pedestrian_contacts']['robot_moving_rate']:.1f}", f"{100 * d['time_out_rate']:.1f}"]
+
+
+def _markdown(first: str, rows: list, columns: list = COLUMNS) -> str:
+    lines = ["| " + " | ".join([first, *columns]) + " |", "|" + "---|" * (len(columns) + 1)]
     return "\n".join(lines + ["| " + " | ".join([name, *cells]) + " |" for name, cells in rows])
 
 
-def _html(first: str, rows: list, caption: str) -> str:
-    head = "".join(f'<th class="num">{html.escape(c)}</th>' for c in COLUMNS)
+def _html(first: str, rows: list, caption: str, columns: list = COLUMNS) -> str:
+    head = "".join(f'<th class="num">{html.escape(c)}</th>' for c in columns)
     body = "".join("<tr><td>" + html.escape(name) + "</td>" + "".join(f'<td class="num">{c}</td>' for c in cells) + "</tr>"
                    for name, cells in rows)
     return f"<caption>{caption}</caption><thead><tr><th>{first}</th>{head}</tr></thead><tbody>{body}</tbody>"
@@ -79,31 +99,42 @@ CAPTIONS = {
     "b2w_stress": "<b>Table 6.</b> The fused student with a built-in controller worse than in training and with "
                   "degraded sensing (setup of Table 5).",
     "b2w_shield": "<b>Table 2.</b> What the shield and the guard around it do (fused student, setup of Table 5).",
+    "b2w_civil": "<b>Table 7.</b> The civil engineering lab: policies on a mixture in which it takes half the lab tiles "
+                 "(setup of Table 5 otherwise); the released policy was trained without it.",
 }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--logs", default="logs/rsl_rl")
+    parser.add_argument("--tag", default="release", help="The run (TAG of scripts/reproduce) to show.")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
     root = Path(args.logs)
-    dirs = {"teacher": root / "b2w_nav_lab_teacher/release/eval", "fused": root / "b2w_nav_lab_fused_student/release/eval",
-            "lidar": root / "b2w_nav_lab_lidar_student/release/eval"}
+    dirs = {who: root / f"b2w_nav_lab_{run}/{args.tag}/eval"
+            for who, run in (("teacher", "teacher"), ("fused", "fused_student"), ("lidar", "lidar_student"))}
     load = lambda who, f: json.loads((dirs[who] / f).read_text()) if (dirs[who] / f).exists() else None  # noqa: E731
     rows = {
         "b2w": ("Policy", [(name, _cells(d)) for name, who, f in ROWS if (d := load(who, f))]),
         "b2w_stress": ("Fused student", [(name, _cells(d)) for name, f in STRESS if (d := load("fused", f))]),
         "b2w_shield": ("Fused student", [(name, _cells(d)) for name, f in SHIELD if (d := load("fused", f))]),
     }
+    runs = {"teacher": "teacher", "fused": "fused_student", "lidar": "lidar_student"}
+    civil_rows = []
+    for name, run, who, f in CIVIL:
+        path = root / f"b2w_nav_lab_{runs[who]}/{run}/eval/{f}"
+        if path.exists():
+            civil_rows.append((name, _civil_cells(json.loads(path.read_text()))))
+    columns = {name: COLUMNS for name in rows}
+    rows["b2w_civil"], columns["b2w_civil"] = ("Policy", civil_rows), CIVIL_COLUMNS
     for name, (first, r) in rows.items():
-        print(_markdown(first, r) + "\n")
+        print(_markdown(first, r, columns[name]) + "\n")
     if args.write:
         for path in (ROOT / "README.md", ROOT / "deploy" / "b2w" / "README.md"):
             text = path.read_text()
             for name, (first, r) in rows.items():
                 text = re.sub(rf"(<!-- table:{name} -->\n).*?(\n<!-- /table:{name} -->)",
-                              lambda m: m.group(1) + _markdown(first, r) + m.group(2), text, flags=re.S)
+                              lambda m: m.group(1) + _markdown(first, r, columns[name]) + m.group(2), text, flags=re.S)
             path.write_text(text)
             print("wrote", path)
         page = ROOT / "docs" / "b2w" / "index.html"
@@ -111,7 +142,8 @@ def main():
             text = page.read_text()
             for name, (first, r) in rows.items():
                 text = re.sub(rf'<table id="{name}Table">.*?</table>',
-                              lambda m: f'<table id="{name}Table">{_html(first, r, CAPTIONS[name])}</table>', text, flags=re.S)
+                              lambda m: f'<table id="{name}Table">{_html(first, r, CAPTIONS[name], columns[name])}</table>',
+                              text, flags=re.S)
             page.write_text(text)
             print("wrote", page)
 

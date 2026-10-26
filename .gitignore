@@ -21,3 +21,7 @@ src/g1_patrol/assets/data/people/
 *.mp4
 !docs/media/*.mp4
 !docs/b2w/media/*.mp4
+
+# exports of experiments that are not the release (scripts/reproduce/b2w_civil.sh)
+deploy/b2w/release_civil/
+deploy/b2w/release_civil_lidar/

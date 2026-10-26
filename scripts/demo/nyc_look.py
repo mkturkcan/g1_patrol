@@ -237,9 +237,10 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
     if joints is not None:
         joints.apply_translation(offset)
         add_mesh(stage, f"{root}/sidewalk_joints", joints, "sidewalk_joint")
-    # structures, per material (the boxes standing in for curbside bag piles are drawn as bags below)
+    # structures, per material (the boxes standing in for curbside bag piles are drawn as bags below; SimReady props as
+    # their own USD files, with their materials)
     for mat, mesh in lay.structure_meshes_by_material().items():
-        if mat == "trash_bags":
+        if mat == "trash_bags" or mat.startswith("prop:"):
             continue
         mesh.apply_translation(offset)
         add_mesh(stage, f"{root}/structure_{mat}", mesh, mat if mat in TEXTURED or mat in COLORS else "concrete")
@@ -261,6 +262,41 @@ def dress_tile(stage, lay: TileLayout, center: tuple[float, float], name: str, r
             _stairs(stage, f"{root}/stairs_{k}", lay, center, *args)
         elif kind == "bag_pile":
             _bag_pile(stage, f"{root}/bag_pile_{k}", lay, center, *args, rng=rng)
+    inserts = [args for kind, *args in lay.decor if kind == "floor_insert"]
+    if inserts:  # the strong floor's anchor inserts: steel discs flush with the floor
+        discs = []
+        for x, y in inserts:
+            disc = trimesh.creation.cylinder(radius=0.07, height=0.004, sections=20)
+            disc.apply_translation((center[0] + x, center[1] + y, lay.ground(x, y) + 0.003))
+            discs.append(disc)
+        add_mesh(stage, f"{root}/floor_inserts", trimesh.util.concatenate(discs), "floor_insert")
+    _props(stage, f"{root}/props", lay, center)
+
+
+def _props(stage, root: str, lay: TileLayout, center):
+    """The tile's SimReady props (:mod:`g1_patrol.tasks.navigation.nyc.simready`): each a reference to the prop's USD
+    file under a transform placing it as in the layout, without physics (their rigid bodies, which the files apply
+    whatever the physics variant, would fall and take the simulation down)."""
+    from pxr import Usd, UsdPhysics
+
+    from g1_patrol.tasks.navigation.nyc.simready import root_usd
+
+    for k, (_, name, x, y, yaw, z, scale) in enumerate(part for part in lay.mesh_parts if part[0] == "prop"):
+        holder = UsdGeom.Xform.Define(stage, f"{root}/p{k:03d}")
+        holder.AddTranslateOp().Set(Gf.Vec3d(center[0] + x, center[1] + y, lay.ground(x, y) + z))
+        holder.AddRotateZOp().Set(math.degrees(yaw))
+        holder.AddScaleOp().Set(Gf.Vec3f(scale, scale, scale))
+        prim = stage.DefinePrim(f"{root}/p{k:03d}/{name}", "Xform")
+        prim.GetReferences().AddReference(root_usd(name))
+        variant_sets = prim.GetVariantSets()
+        for physics in ("PhysX", "Newton", "MuJoCo"):
+            if variant_sets.HasVariantSet(physics):
+                variant_sets.GetVariantSet(physics).SetVariantSelection("Disabled")
+        for part in Usd.PrimRange(prim):  # (instance proxies are not editable; their colliders stay, static)
+            if part.HasAPI(UsdPhysics.RigidBodyAPI):
+                part.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            if part.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(part).CreateCollisionEnabledAttr(False)
 
 
 TRASH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src", "g1_patrol",

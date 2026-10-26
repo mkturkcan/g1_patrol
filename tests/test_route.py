@@ -8,7 +8,7 @@ import torch
 
 from g1_patrol.route import path_at, path_project, polyline, remaining, waypoints
 from g1_patrol.tasks.navigation.nyc.indoor import Planner
-from g1_patrol.tasks.navigation.nyc.kinds import ALL_BUILDERS, LAB_KINDS, TRAINING_KINDS
+from g1_patrol.tasks.navigation.nyc.kinds import ALL_BUILDERS, CIVIL_LAB_KINDS, LAB_KINDS, TRAINING_KINDS
 from g1_patrol.tasks.navigation.nyc.routing import COARSE_DETOUR, MAX_ROUTE_POINTS, length, plan_routes, without_small
 
 HALF_WIDTH = 0.29
@@ -61,7 +61,7 @@ def _layouts(kinds, seeds=range(4), difficulties=(0.0, 0.5, 1.0)):
                 yield kind, d, seed, ALL_BUILDERS[kind](d, np.random.default_rng(seed), None)
 
 
-@pytest.mark.parametrize("kind", TRAINING_KINDS + LAB_KINDS)
+@pytest.mark.parametrize("kind", TRAINING_KINDS + LAB_KINDS + CIVIL_LAB_KINDS)
 def test_planned_routes_keep_clear_and_end_at_the_goal(kind):
     """Every drivable route gets a plan from its start to its goal that keeps the robot's half width from structures
     (but for the last hop to a goal close to one), and a coarse plan that is not much shorter. (Tiles without a

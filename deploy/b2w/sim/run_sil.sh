@@ -7,7 +7,8 @@
 #
 # Prints "SIL RESULT {...}" and exits with 0 if the robot reached the goal and never moved into anything. FAKE_ARGS adds
 # parameters of the simulated robot (e.g. "-p deadman_held:=false"), STACK_ARGS launch arguments of the stack (e.g.
-# "crawl:=true"), SIL_TIMEOUT sets the time allowed (s).
+# "crawl:=true"), SIL_TIMEOUT sets the time allowed (s), SIL_WORLD another world (export_world.py; default: a section
+# of the lab hall, lab_world.json).
 set -u
 GX=${1:-4.0}; GY=${2:--3.5}
 SX=${3:--6.5}; SY=${4:-0.0}; SYAW=${5:-0.0}
@@ -19,7 +20,7 @@ LOG=${SIL_LOG:-/tmp/b2w_sil}
 mkdir -p "$LOG"
 PEOPLE_ARG=()
 [ -n "$PEOPLE" ] && PEOPLE_ARG=(-p "people:='$PEOPLE'")  # a YAML string
-setsid python3 -m b2w.sim.fake_b2w --ros-args -p world:="$ROOT/deploy/b2w/sim/lab_world.json" \
+setsid python3 -m b2w.sim.fake_b2w --ros-args -p world:="${SIL_WORLD:-$ROOT/deploy/b2w/sim/lab_world.json}" \
     -p start:="[$SX, $SY, $SYAW]" "${PEOPLE_ARG[@]}" ${FAKE_ARGS:-} > "$LOG/fake_b2w.log" 2>&1 &
 FAKE=$!
 setsid ros2 launch "$ROOT/deploy/b2w/launch/b2w_navigation.launch.py" mode:=drive lidar_driver:=false cameras:=false \

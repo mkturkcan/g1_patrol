@@ -5,8 +5,8 @@
 source scripts/reproduce/env.sh
 DEVICE=${B2W_DEVICE:-cuda:0}
 ITERATIONS=${ITERATIONS:-1000}
-TEACHER=$(latest "$LOGS/b2w_nav_teacher/$TAG")
+TEACHER=$(latest "$LOGS/b2w_nav_teacher/${B2W_TEACHER_TAG:-$TAG}")  # B2W_TEACHER_TAG: a general teacher of another run
 isaaclab train --rl_library rsl_rl --external_callback g1_patrol.register_tasks --seed "$SEED" --run_timestamp "$TAG" \
-    --task G1Patrol-B2W-Navigate-Lab --num_envs 4096 --device "$DEVICE" --checkpoint "$TEACHER" \
+    --task "G1Patrol-B2W-Navigate-${B2W_LAB:-Lab}" --num_envs 4096 --device "$DEVICE" --checkpoint "$TEACHER" \
     agent.max_iterations="$ITERATIONS" physics=isaacsim_physx > "$OUT/b2w_1b_lab_teacher.log" 2>&1
 echo "B2-W lab teacher: $(latest "$LOGS/b2w_nav_lab_teacher/$TAG")"

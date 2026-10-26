@@ -453,7 +453,13 @@ caps touched structures in 42% of the episodes at a 0.6 m/s cap and in 29% witho
 
 **Tiles and routes.** Besides the street tiles, the robot trains on six procedural indoor tile types (labs,
 corridors, doorways between rooms, offices, warehouses with a loading dock, lobbies with a stairwell) and on
-sections of the lab hall it is deployed in, modeled on photographs (`nyc/makerlab.py`). Every route is planned on
+sections of the lab hall it is deployed in, modeled on photographs (`nyc/makerlab.py`). A second lab, a civil
+engineering laboratory (`nyc/civil_lab.py`: a test row of load frames, environmental chambers, actuator columns and
+workbenches along the aisle, a strong floor with specimens on supports, loaded pallets, carts, hand trucks, scaffolds,
+ladders and tripods, shelving along the walls), is furnished with 64 NVIDIA SimReady props (CC BY 4.0; downloaded and
+converted by `scripts/assets/fetch_simready.py`, not redistributed) and serves for evaluation (Table B3). A prop is
+kept out of as its bounding box, while the lidar and the depth cameras see its mesh (decimated to at most 3,000
+triangles, within about 1 cm of the original). Every route is planned on
 the tile's clearance map for the robot's width, keeping up to 0.6 m from structures where this costs little detour
 (`nyc/routing.py`); in 30% of the episodes the plan ignores small structures (chairs, carts, bins), which the robot
 then avoids by itself. The policy observes the points of the route 1.0 and 2.5 m ahead of its position on it and is
@@ -517,6 +523,29 @@ pedestrian 0.8%. Controller latency, slower response, weaker tracking and drift,
 lidar map each change the goal rate without the shield by at most 1.3 points (`deploy/b2w/README.md`). The release is
 reproduced by `bash scripts/reproduce/b2w.sh` (about 17 h on one GPU, the lidar-only student on a second).
 
+**Civil engineering lab.** On a mixture in which the civil engineering lab takes half of the lab tiles
+(`G1Patrol-B2W-Navigate-CivilLab-Fused`), the released policy reaches 56.5% of its goals there without the shield and
+41.4% with it, against 81.2% and 70.8% in the lab hall (Table B3). The civil engineering lab is more cluttered: 16% of
+its routes pass within 0.5 m of a structure, against 1% in the lab hall. Fine-tuning the lab teacher and distilling the
+students on that mixture (`bash scripts/reproduce/b2w_civil.sh`, from the general teacher of the release) did not
+improve on it: with the shield, 42.6% of the goals in the civil engineering lab against 41.4%, and contacts in which the
+robot moved towards a pedestrian in 1.1% of the episodes against 0.8%. Even the privileged teacher, which observes the
+distances to structures, touched structures in 22% of the easiest civil-lab episodes (10% in the lab hall). The
+released policy is the one trained without the civil engineering lab.
+
+*Table B3. The civil engineering lab: policies on a mixture in which it takes half the lab tiles (setup of Table B1
+otherwise).*
+
+<!-- table:b2w_civil -->
+| Policy | Episodes | Goal (%) | Goal, lab hall (%) | Goal, civil eng. lab (%) | Structure contact, civil eng. lab (%) | Pedestrian contact, robot moving (%) | Time-out (%) |
+|---|---|---|---|---|---|---|---|
+| Released fused student | 18,720 | 64.6 | 81.2 | 56.5 | 16.9 | 10.2 | 2.0 |
+| Released fused student, shield | 8,885 | 47.8 | 70.8 | 41.4 | 5.5 | 0.8 | 20.2 |
+| Lab teacher trained with the civil lab (privileged) | 18,555 | 60.8 | 75.6 | 54.6 | 27.6 | 12.8 | 1.6 |
+| Fused student trained with the civil lab | 19,594 | 62.7 | 78.2 | 54.4 | 19.5 | 14.2 | 1.4 |
+| Fused student trained with the civil lab, shield | 9,171 | 48.0 | 71.5 | 42.6 | 5.6 | 1.1 | 19.2 |
+<!-- /table:b2w_civil -->
+
 ## Installation
 
 Requirements: Linux, an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0`).
@@ -547,13 +576,16 @@ bash scripts/reproduce/2_teacher.sh            # teacher, from scratch (PhysX)
 bash scripts/reproduce/3_students.sh           # lidar and camera students, distilled from the teacher
 bash scripts/reproduce/4_evaluate.sh           # evaluations, logs/reproduce/eval/*.json
 bash scripts/reproduce/5_ablations.sh          # optional: locomotion ablations (Tables 7 and 8)
-bash scripts/reproduce/b2w.sh                  # B2-W: teacher, lab teacher, students, evaluations, export (Table B1)
+bash scripts/reproduce/b2w.sh                  # B2-W: props, teacher, lab teacher, students, evaluations, export (Table B1)
+bash scripts/reproduce/b2w_civil.sh            # B2-W: optional, training with the civil engineering lab (Table B3)
 python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
 python scripts/b2w/results_table.py --write    # writes the B2-W tables into the READMEs and docs/b2w/index.html
 ```
 
 Every stage starts from scratch (the students from the stage-2 teacher), with all settings in the task
-configurations and the Hydra overrides in the scripts. Runs use seed 42 (`SEED`; each GPU of a run adds its rank) and
+configurations and the Hydra overrides in the scripts. The B2-W pipeline first downloads the SimReady props of the
+civil engineering lab tiles at a pinned revision of `nvidia/simready-assets` and converts them
+(`scripts/assets/fetch_simready.py`, into `$G1_PATROL_SIMREADY`, default `~/.cache/g1_patrol/simready`). Runs use seed 42 (`SEED`; each GPU of a run adds its rank) and
 write to `logs/rsl_rl/<experiment>/release` (`TAG`); `NUM_GPUS` sets the number of GPUs. GPU simulation and
 multi-GPU reductions are not bitwise deterministic, so a rerun reproduces the training curves and evaluation results
 up to run-to-run variation, not exactly.
@@ -621,8 +653,9 @@ src/g1_patrol/
 └── tasks/
     ├── locomotion/              walking tasks: terrains, gait and posture rewards, configurations
     └── navigation/
-        ├── nyc/                 street tiles (tiles.py), indoor and lab tiles (indoor.py, makerlab.py), route
-        │                        planning (routing.py), terrain generator and importer
+        ├── nyc/                 street tiles (tiles.py), indoor and lab tiles (indoor.py, makerlab.py,
+        │                        civil_lab.py), SimReady props (simready.py), route planning (routing.py), terrain
+        │                        generator and importer
         ├── mdp/                 scenario command, observations, rewards, terminations, sensor processing
         ├── config/g1/           NYC teacher and student configurations, PPO and distillation settings
         └── config/b2w/          B2-W teacher and student configurations
@@ -666,4 +699,6 @@ tests/                           registration, tile capacity, passability and wa
 MIT, see [LICENSE](LICENSE). Files generated from the Isaac Lab project template keep their BSD-3-Clause notice.
 Icons in the figures are from [Lucide](https://lucide.dev) (ISC). Isaac Sim, Isaac Lab and their assets are subject to
 their own licenses; NVIDIA assets used for rendering are downloaded from NVIDIA's asset server and are not
-redistributed here.
+redistributed here. The props of the civil engineering lab tiles are NVIDIA SimReady assets
+([nvidia/simready-assets](https://huggingface.co/datasets/nvidia/simready-assets), CC BY 4.0); the repository holds
+only their bounding boxes (`src/g1_patrol/tasks/navigation/nyc/simready_catalog.json`).

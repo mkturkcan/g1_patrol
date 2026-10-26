@@ -52,6 +52,10 @@ def collect(lay, rng) -> list[tuple[str, str, trimesh.Trimesh]]:
 
     with mock.patch.object(nyc_look, "add_mesh", add_mesh):
         nyc_look.dress_tile(mock.MagicMock(), lay, (0.0, 0.0), "t", rng, far_side=True)
+    # SimReady props are drawn from their USD files; their decimated meshes stand in for them
+    props = [(mat, m) for mat, m in lay._structure_parts(sections=24) if mat.startswith("prop:")]
+    for k, (mat, mesh) in enumerate(props):
+        parts.append((f"t/{mat}#{k}", mat, mesh))
     return parts
 
 
@@ -114,8 +118,10 @@ def main():
     parser.add_argument("--civic", action="store_true", help="civic tiles (litter baskets, bag piles, signals)")
     args = parser.parse_args()
     bad = 0
+    from g1_patrol.tasks.navigation.nyc.kinds import ALL_BUILDERS
+
     for kind in args.kinds:
-        build = getattr(tiles, f"build_{kind}")
+        build = ALL_BUILDERS[kind]
         for d in args.difficulties:
             for seed in range(args.seeds):
                 rng = np.random.default_rng(seed)

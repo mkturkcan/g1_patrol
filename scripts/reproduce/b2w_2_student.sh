@@ -14,10 +14,10 @@ student() {  # task, device, log
         physics=isaacsim_physx > "$OUT/$3" 2>&1
 }
 if [ -n "$DEVICE2" ]; then
-    student G1Patrol-B2W-Navigate-Lab-Lidar "$DEVICE2" b2w_2_lidar_student.log &
+    student "G1Patrol-B2W-Navigate-${B2W_LAB:-Lab}-Lidar" "$DEVICE2" b2w_2_lidar_student.log &
     LIDAR_PID=$!
 fi
-student G1Patrol-B2W-Navigate-Lab-Fused "$DEVICE" b2w_2_fused_student.log
-if [ -n "$DEVICE2" ]; then wait "$LIDAR_PID"; else student G1Patrol-B2W-Navigate-Lab-Lidar "$DEVICE" b2w_2_lidar_student.log; fi
+student "G1Patrol-B2W-Navigate-${B2W_LAB:-Lab}-Fused" "$DEVICE" b2w_2_fused_student.log
+if [ -n "$DEVICE2" ]; then wait "$LIDAR_PID"; else student "G1Patrol-B2W-Navigate-${B2W_LAB:-Lab}-Lidar" "$DEVICE" b2w_2_lidar_student.log; fi
 echo "B2-W fused student: $(latest "$LOGS/b2w_nav_lab_fused_student/$TAG")"
 echo "B2-W lidar student: $(latest "$LOGS/b2w_nav_lab_lidar_student/$TAG")"

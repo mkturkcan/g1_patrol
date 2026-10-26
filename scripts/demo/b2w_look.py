@@ -47,6 +47,7 @@ INDOOR_TEXTURED = {
     "table": ("Base/Wood/Plywood.mdl", 1.2),
     "desk": ("Base/Wood/Plywood.mdl", 1.2),
     "coffee_table": ("Base/Wood/Plywood.mdl", 1.2),
+    "concrete_specimen": ("Base/Masonry/Concrete_Smooth.mdl", 1.0),
 }
 INDOOR_COLORS = {  # material -> (diffuse rgb, roughness, metallic)
     "floor_vinyl": ((0.5, 0.5, 0.47), 0.45, 0.0),
@@ -84,6 +85,17 @@ INDOOR_COLORS = {  # material -> (diffuse rgb, roughness, metallic)
     "steel_bin": ((0.5, 0.52, 0.55), 0.4, 0.8),
     "toolboxes": ((0.7, 0.1, 0.08), 0.45, 0.4),
     "tripod": ((0.08, 0.08, 0.08), 0.5, 0.5),
+    # the civil engineering lab
+    "floor_line_white": ((0.9, 0.9, 0.88), 0.5, 0.0),
+    "floor_insert": ((0.7, 0.7, 0.68), 0.3, 0.9),
+    "load_frame": ((0.62, 0.64, 0.66), 0.4, 0.5),
+    "steel": ((0.45, 0.47, 0.5), 0.4, 0.8),
+    "steel_polished": ((0.8, 0.8, 0.82), 0.2, 1.0),
+    "specimen": ((0.6, 0.6, 0.62), 0.5, 0.6),
+    "chamber": ((0.55, 0.56, 0.58), 0.45, 0.3),
+    "chamber_door": ((0.48, 0.49, 0.5), 0.4, 0.4),
+    "actuator": ((0.36, 0.38, 0.4), 0.5, 0.5),
+    "column_wood": ((0.78, 0.68, 0.5), 0.7, 0.0),
 }
 
 

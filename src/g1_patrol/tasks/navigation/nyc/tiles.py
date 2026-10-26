@@ -71,6 +71,7 @@ class TileLayout:
     decor: list = field(default_factory=list)  # visual-only extras: ("tree", x, y)
     # meshes that differ from the primitives (sensors see the meshes)
     mesh_parts: list = field(default_factory=list)  # ("box", cx, cy, yaw, half_x, half_y, z0, z1, mat) / ("circle", x, y, radius, z0, z1, mat)
+    # / ("prop", name, x, y, yaw, z, scale): a SimReady prop (.simready), origin at (x, y, ground + z), turned by yaw
     unmeshed: set = field(default_factory=set)  # ("box" | "circle", index): primitives without a mesh of their own
 
     # -- geometry helpers ---------------------------------------------------------------------------------------------
@@ -146,6 +147,32 @@ class TileLayout:
             for sy in (-1.0, 1.0):
                 lx, ly = sx * (length / 2 - leg), sy * (width / 2 - leg)
                 self.mesh_box(cx + c * lx - s * ly, cy + s * lx + c * ly, yaw, leg, leg, height - 0.04, mat=mat)
+
+    def prop(self, name: str, cx: float, cy: float, yaw: float = 0.0, z0: float = 0.0, scale: float = 1.0,
+             round_: bool = False, collide: bool = True) -> tuple[float, float, float]:
+        """A SimReady prop (:mod:`.simready`), scaled, whose bounding box, centered at (cx, cy) and turned by yaw,
+        stands at z0: for collisions the whole box (``round_``: the circle around its footprint; ``collide=False``:
+        none, e.g. a load inside its pallet's primitive), the sensors see the prop's mesh. Returns the box's half
+        length, half width and height."""
+        from .simready import catalog
+
+        lo, hi = (np.asarray(catalog()[name][k]) * scale for k in ("min", "max"))
+        hx, hy, height = (hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2, hi[2] - lo[2]
+        if not collide:
+            pass
+        elif round_:
+            self.circle(cx, cy, max(hx, hy), height, z0=z0, mat="prop")
+            self.unmeshed.add(("circle", len(self.circles) - 1))
+        else:
+            self.box(cx, cy, yaw, 2 * hx, 2 * hy, height, z0=z0, mat="prop")
+            self.unmeshed.add(("box", len(self.boxes) - 1))
+        ox, oy = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2  # the box center in the prop's frame
+        c, s = math.cos(yaw), math.sin(yaw)
+        # 5 mm above what it stands on: faces flush with the floor (a bin's inner bottom) would flicker in renders
+        self.mesh_parts.append(
+            ("prop", name, cx - c * ox + s * oy, cy - s * ox - c * oy, yaw, z0 - lo[2] + 0.005, scale)
+        )
+        return float(hx), float(hy), float(height)
 
     def segment_box(self, ax, ay, bx, by, width: float, height: float, z0: float = 0.0, mat: str = "concrete"):
         length = math.hypot(bx - ax, by - ay)
@@ -249,6 +276,14 @@ class TileLayout:
             m = trimesh.creation.cylinder(radius=r, height=z1 - z0, sections=sections)
             m.apply_translation((x, y, self.ground(x, y) + (z0 + z1) / 2))
             yield mat, m
+        for _, name, x, y, yaw, z, scale in (part for part in self.mesh_parts if part[0] == "prop"):
+            from .simready import prop_mesh
+
+            m = prop_mesh(name).copy()
+            m.apply_scale(scale)
+            m.apply_transform(trimesh.transformations.rotation_matrix(yaw, (0, 0, 1)))
+            m.apply_translation((x, y, self.ground(x, y) + z))
+            yield f"prop:{name}", m
 
     def ground_materials(self) -> np.ndarray:
         """Material name per height-field cell (nx, ny), for rendering: raised areas are sidewalk, the rest asphalt,

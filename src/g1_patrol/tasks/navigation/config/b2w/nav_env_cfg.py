@@ -68,7 +68,7 @@ from g1_patrol.b2w import (
 from g1_patrol.noise import PerEpisodeAdditiveBiasCfg
 
 from ... import mdp
-from ...nyc.kinds import LAB_KINDS, TRAINING_KINDS
+from ...nyc.kinds import CIVIL_LAB_KINDS, LAB_KINDS, TRAINING_KINDS
 from ...nyc.terrain_cfg import NycTerrainImporterCfg, nyc_terrain_generator_cfg
 
 ##
@@ -498,6 +498,13 @@ LAB_TERRAIN = nyc_terrain_generator_cfg(
     route_half_width=FOOTPRINT[1],
 )
 """13 x 2 columns of 10 levels: 13 of the lab, 13 of the street and indoor kinds."""
+CIVIL_LAB_TERRAIN = nyc_terrain_generator_cfg(
+    kinds=TRAINING_KINDS + LAB_KINDS + CIVIL_LAB_KINDS,
+    proportions={kind: len(TRAINING_KINDS) / 2 for kind in LAB_KINDS + CIVIL_LAB_KINDS},
+    route_half_width=FOOTPRINT[1],
+)
+"""The lab mixture with the civil engineering lab (:mod:`...nyc.civil_lab`) taking half of the lab tiles: 15 x 2
+columns of 10 levels."""
 LAB_FLOOR = (0.0, 0.7)
 """Share of the floor returns beyond 2 m lost per episode (the lab's polished concrete)."""
 
@@ -529,3 +536,35 @@ class B2WLabLidarStudentEnvCfg(B2WNavLidarStudentEnvCfg):
         super().__post_init__()
         self.scene.terrain.terrain_generator = LAB_TERRAIN
         self.observations.lidar_map.lidar_map.params["floor_dropout"] = LAB_FLOOR
+
+
+##
+# The civil engineering lab: the lab tasks on the mixture in which it takes half of the lab tiles.
+##
+
+
+@configclass
+class B2WCivilLabNavEnvCfg(B2WLabNavEnvCfg):
+    """The lab teacher on the mixture with the civil engineering lab."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = CIVIL_LAB_TERRAIN
+
+
+@configclass
+class B2WCivilLabFusedStudentEnvCfg(B2WLabFusedStudentEnvCfg):
+    """The fused student on the mixture with the civil engineering lab."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = CIVIL_LAB_TERRAIN
+
+
+@configclass
+class B2WCivilLabLidarStudentEnvCfg(B2WLabLidarStudentEnvCfg):
+    """The lidar-only student on the mixture with the civil engineering lab."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = CIVIL_LAB_TERRAIN
