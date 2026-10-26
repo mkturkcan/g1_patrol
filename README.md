@@ -524,14 +524,16 @@ lidar map each change the goal rate without the shield by at most 1.3 points (`d
 reproduced by `bash scripts/reproduce/b2w.sh` (about 17 h on one GPU, the lidar-only student on a second).
 
 **Civil engineering lab.** On a mixture in which the civil engineering lab takes half of the lab tiles
-(`G1Patrol-B2W-Navigate-CivilLab-Fused`), the released policy reaches 56.5% of its goals there without the shield and
-41.4% with it, against 81.2% and 70.8% in the lab hall (Table B3). The civil engineering lab is more cluttered: 16% of
-its routes pass within 0.5 m of a structure, against 1% in the lab hall. Fine-tuning the lab teacher and distilling the
-students on that mixture (`bash scripts/reproduce/b2w_civil.sh`, from the general teacher of the release) did not
-improve on it: with the shield, 42.6% of the goals in the civil engineering lab against 41.4%, and contacts in which the
-robot moved towards a pedestrian in 1.1% of the episodes against 0.8%. Even the privileged teacher, which observes the
-distances to structures, touched structures in 22% of the easiest civil-lab episodes (10% in the lab hall). The
-released policy is the one trained without the civil engineering lab.
+(`G1Patrol-B2W-Navigate-CivilLab-Fused`), the released policy reaches 71.9% of its goals there without the shield and
+57.0% with it, against 80.7% and 71.4% in the lab hall (Table B3). The lab leaves passages of at least 0.9 m between
+the things on its strong floor, so that no route passes within 0.5 m of a structure (0.8% of the routes in the lab
+hall), but it is denser: the privileged teacher, which observes the distances to structures, touched structures in 15%
+of the easiest civil-lab episodes (10% in the lab hall). Fine-tuning the lab teacher and distilling the students on that
+mixture (`bash scripts/reproduce/b2w_civil.sh`, from the general teacher of the release) did not improve on it: 72.2%
+of the goals in the civil engineering lab against 71.9% without the shield and 58.7% against 57.0% with it, while the
+goals in the lab hall fell to 66.9% with the shield (from 71.4%) and contacts in which the robot moved towards a
+pedestrian rose to 10.2% of the episodes without it (from 8.8%). The released policy is the one trained without the
+civil engineering lab.
 
 *Table B3. The civil engineering lab: policies on a mixture in which it takes half the lab tiles (setup of Table B1
 otherwise).*
@@ -539,11 +541,11 @@ otherwise).*
 <!-- table:b2w_civil -->
 | Policy | Episodes | Goal (%) | Goal, lab hall (%) | Goal, civil eng. lab (%) | Structure contact, civil eng. lab (%) | Pedestrian contact, robot moving (%) | Time-out (%) |
 |---|---|---|---|---|---|---|---|
-| Released fused student | 18,720 | 64.6 | 81.2 | 56.5 | 16.9 | 10.2 | 2.0 |
-| Released fused student, shield | 8,885 | 47.8 | 70.8 | 41.4 | 5.5 | 0.8 | 20.2 |
-| Lab teacher trained with the civil lab (privileged) | 18,555 | 60.8 | 75.6 | 54.6 | 27.6 | 12.8 | 1.6 |
-| Fused student trained with the civil lab | 19,594 | 62.7 | 78.2 | 54.4 | 19.5 | 14.2 | 1.4 |
-| Fused student trained with the civil lab, shield | 9,171 | 48.0 | 71.5 | 42.6 | 5.6 | 1.1 | 19.2 |
+| Released fused student | 18,864 | 68.3 | 80.7 | 71.9 | 13.7 | 8.8 | 1.9 |
+| Released fused student, shield | 8,966 | 51.4 | 71.4 | 57.0 | 5.7 | 0.6 | 19.3 |
+| Lab teacher trained with the civil lab (privileged) | 19,007 | 64.4 | 76.6 | 69.2 | 20.3 | 11.3 | 1.4 |
+| Fused student trained with the civil lab | 19,287 | 67.6 | 79.8 | 72.2 | 14.1 | 10.2 | 1.6 |
+| Fused student trained with the civil lab, shield | 8,940 | 50.2 | 66.9 | 58.7 | 5.7 | 0.7 | 20.2 |
 <!-- /table:b2w_civil -->
 
 ## Installation

@@ -70,6 +70,8 @@ WALL_ITEMS = ["storage_shelf_basic_a01", "storage_shelf_basic_b01", "storage_she
 WALL_WEIGHTS = [3, 3, 3, 2, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1]
 INSERT_PITCH = 1.0
 """Spacing (m) of the strong floor's anchor inserts."""
+FLOOR_GAP = 0.9
+"""Least gap (m) between things on the strong floor and anything else: passages the robot (0.58 m wide) can turn in."""
 
 
 def _extent(name: str, facing: float, scale: float = 1.0) -> tuple[float, float]:
@@ -97,10 +99,10 @@ class _Floor:
     def __init__(self, lay: TileLayout, keep: _Bands):
         self.lay, self.keep, self.taken = lay, keep, []
 
-    def take(self, rect, overlap: float = 0.0) -> bool:
-        """Claim the rectangle (x0, x1, y0, y1) if it overlaps nothing taken by more than ``overlap`` (m) and keeps
-        the aisles passable; returns whether it was claimed."""
-        x0, x1, y0, y1 = rect
+    def take(self, rect, overlap: float = 0.0, gap: float = 0.0) -> bool:
+        """Claim the rectangle (x0, x1, y0, y1) if it overlaps nothing taken by more than ``overlap`` (m), keeps
+        ``gap`` (m) from everything taken, and keeps the aisles passable; returns whether it was claimed."""
+        x0, x1, y0, y1 = rect[0] - gap, rect[1] + gap, rect[2] - gap, rect[3] + gap
         o = overlap
         if any(x1 - o > a0 and x0 + o < a1 and y1 - o > b0 and y0 + o < b1 for a0, a1, b0, b1 in self.taken):
             return False
@@ -110,13 +112,13 @@ class _Floor:
         return True
 
     def put(self, name: str, x: float, y: float, facing: float = 0.0, z0: float = 0.0, scale: float = 1.0,
-            round_: bool = False, overlap: float = 0.0) -> bool:
+            round_: bool = False, overlap: float = 0.0, gap: float = 0.0) -> bool:
         """Place a prop centered at (x, y), its front facing ``facing``, if its box can be claimed and there is room
         for its primitive; returns whether it was placed."""
         if not _room_for(self.lay, boxes=0 if round_ else 1, circles=1 if round_ else 0):
             return False
         ex, ey = _extent(name, facing, scale)
-        if not self.take((x - ex, x + ex, y - ey, y + ey), overlap):
+        if not self.take((x - ex, x + ex, y - ey, y + ey), overlap, gap):
             return False
         self.lay.prop(name, x, y, facing - FRONT.get(name, 0.0), z0=z0, scale=scale, round_=round_)
         return True
@@ -316,10 +318,13 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
     # racks and shelving along the far wall of the strong floor, the cross aisle kept clear
     _wall_row(floor, far, -open_side, rng, count=int(rng.integers(3, 7)), avoid=(cross_x, cross_w))
 
-    # the strong floor: specimens, loaded pallets, carts, a lift table, scaffold, ladders, lights, desks
+    # the strong floor: specimens, loaded pallets, carts, a lift table, scaffold, ladders, lights, desks, each with a
+    # passage around it (FLOOR_GAP)
+    g = FLOOR_GAP
+    square = [0.0, math.pi / 2, math.pi, -math.pi / 2]
     o0, o1 = (edge + 0.5, far - 0.5) if open_side > 0 else (far + 0.5, edge - 0.5)
     groups = ["beam", "pallet", "pallet", "cart", "hand_truck", "lift", "scaffold", "ladder", "desk", "drums", "light"]
-    for attempt in range(3 * (int(_lerp(5, 10, d)) + int(rng.integers(0, 3)))):  # about a third of the tries fit
+    for attempt in range(3 * (int(_lerp(3, 8, d)) + int(rng.integers(0, 3)))):  # about a third of the tries fit
         if o1 - o0 < 0.6 or not _room_for(lay, 3):
             break
         kind = rng.choice(groups)
@@ -327,28 +332,28 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
         if kind == "beam":
             yaw = 0.0 if rng.uniform() < 0.7 else math.pi / 2
             hx, hy = (1.75, 0.2) if yaw == 0.0 else (0.2, 1.75)
-            if floor.take((gx - hx, gx + hx, gy - hy, gy + hy)):
+            if floor.take((gx - hx, gx + hx, gy - hy, gy + hy), gap=g):
                 beam_specimen(lay, gx, gy, yaw, rng)
         elif kind == "pallet":
             yaw = float(rng.choice([0.0, math.pi / 2]))
             ex, ey = _extent("pallet_a01", yaw)
-            if floor.take((gx - ex, gx + ex, gy - ey, gy + ey)):
+            if floor.take((gx - ex, gx + ex, gy - ey, gy + ey), gap=g):
                 pallet_load(lay, gx, gy, yaw, rng)
         elif kind == "cart":
-            floor.put(rng.choice(CARTS), gx, gy, float(rng.choice([0.0, math.pi / 2, math.pi])))
+            floor.put(rng.choice(CARTS), gx, gy, float(rng.choice(square)), gap=g)
         elif kind == "hand_truck":
-            floor.put(rng.choice(HAND_TRUCKS), gx, gy, rng.uniform(0, 2 * math.pi))
+            floor.put(rng.choice(HAND_TRUCKS), gx, gy, float(rng.choice(square)), gap=g)
         elif kind == "lift":
             floor.put(rng.choice(["equipment_liftTable_scissorMobile_a01", "vehicleSupport_rolling_dolly_a01"]), gx, gy,
-                      float(rng.choice([0.0, math.pi / 2])))
+                      float(rng.choice(square)), gap=g)
         elif kind == "scaffold":
-            floor.put("scaffold_rolling_steel_a01", gx, gy, float(rng.choice([0.0, math.pi / 2])))
+            floor.put("scaffold_rolling_steel_a01", gx, gy, float(rng.choice([0.0, math.pi / 2])), gap=g)
         elif kind == "ladder":
             floor.put(rng.choice(["ladder_step_aluminium_a06", "ladder_rolling_yellow_a02"]), gx, gy,
-                      rng.uniform(0, 2 * math.pi))
+                      float(rng.choice(square)), gap=g)
         elif kind == "desk":  # a desk with a screen, a seat at it or someone standing there
             facing = float(rng.choice([0.0, math.pi]))
-            if floor.put("desk_a01", gx, gy, facing):
+            if floor.put("desk_a01", gx, gy, facing, gap=g):
                 c = math.cos(facing)
                 lay.prop("computer_monitor_office_a01", gx - 0.15 * c, gy,
                          facing - FRONT["computer_monitor_office_a01"], z0=_height("desk_a01"), collide=False)
@@ -359,19 +364,20 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
             for k in range(int(rng.integers(1, 4))):
                 name, scale = DRUMS[int(rng.integers(len(DRUMS)))]
                 r = max(_extent(name, 0.0, scale))
-                floor.put(name, gx + k * (2 * r + 0.05), gy, rng.uniform(0, 2 * math.pi), scale=scale, round_=True)
+                floor.put(name, gx + k * (2 * r + 0.05), gy, rng.uniform(0, 2 * math.pi), scale=scale, round_=True,
+                          gap=g if k == 0 else 0.0)
         else:  # a work light on a tripod
-            floor.put("lighting_taskLight_tripodFlood_a01", gx, gy, rng.uniform(0, 2 * math.pi))
+            floor.put("lighting_taskLight_tripodFlood_a01", gx, gy, float(rng.choice(square)), gap=g)
     for _ in range(int(_lerp(1, 4, d))):  # camera tripods around specimens and machines
         if o1 - o0 < 1.0:
             break
         tx, ty = rng.uniform(-IN_L + 1.0, IN_L - 1.0), rng.uniform(o0 + 0.5, o1 - 0.5)
-        if _room_for(lay, 0, 1) and floor.take((tx - 0.5, tx + 0.5, ty - 0.5, ty + 0.5)):
+        if _room_for(lay, 0, 1) and floor.take((tx - 0.5, tx + 0.5, ty - 0.5, ty + 0.5), gap=g):
             tripod(lay, tx, ty, rng)
 
     # along the aisle lines: a round column, bins, pails, drums, hand trucks, carts, tripods (narrowing the aisle)
     side = float(rng.choice([-1.0, 1.0]))
-    cx, cy = rng.uniform(-6.0, 6.0), (y1 if side > 0 else y0) + side * 0.12
+    cx, cy = rng.uniform(-6.0, 6.0), (y1 if side > 0 else y0) + side * 0.21  # just outside the line
     if floor.take((cx - 0.16, cx + 0.16, cy - 0.16, cy + 0.16)):
         lay.circle(cx, cy, 0.16, WALL_H, mat="column_wood")
     for _ in range(int(_lerp(2, 8, d))):
@@ -385,7 +391,7 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
             r = max(_extent(name, 0.0))
             floor.put(name, px, line + side * (r - intrude), rng.uniform(0, 2 * math.pi), round_=True)
         elif kind == "pail":
-            for k in range(int(rng.integers(1, 4))):
+            for k in range(int(rng.integers(1, 3))):
                 name, scale = PAILS[int(rng.integers(len(PAILS)))]
                 r = max(_extent(name, 0.0, scale))
                 floor.put(name, px + k * (2 * r + 0.04), line + side * (r - intrude), rng.uniform(0, 2 * math.pi),
@@ -396,7 +402,7 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
             floor.put(name, px, line + side * (r - intrude), rng.uniform(0, 2 * math.pi), scale=scale, round_=True)
         elif kind == "hand_truck":
             name = rng.choice(HAND_TRUCKS)
-            facing = rng.uniform(0, 2 * math.pi)
+            facing = float(rng.choice([0.0, math.pi / 2, math.pi, -math.pi / 2]))
             floor.put(name, px, line + side * (_extent(name, facing)[1] - intrude), facing)
         elif kind == "cart":
             name = rng.choice(["cart_mobile_b01", "cart_mobile_a01", "cart_mobile_c01", "cart_luggage_platform_a01"])
@@ -423,7 +429,7 @@ def build_civil_lab(d: float, rng: np.random.Generator, civic_rng: np.random.Gen
     _paths_between(lay, plan, ends, rng, count=2, weight=2.5, pairs=[(0, 1), (1, 0)])  # along the aisle, keeping right
     lo, hi = min(o0, o1), max(o0, o1)
     spots_open = [(float(x), float(y)) for x in np.linspace(-6.5, 6.5, 8) for y in np.linspace(lo, hi, 3)]
-    spots_open = [p for p in spots_open if plan.clearance(p) > 0.6]
+    spots_open = [p for p in spots_open if plan.clearance(p) > 0.8]
     rng.shuffle(spots_open)
     _paths_between(lay, plan, ends, rng, count=6, weight=1.0,  # aisle <-> doors
                    pairs=[(a, b) for a in range(len(ends)) for b in range(len(ends)) if a != b and (a >= 2 or b >= 2)])
