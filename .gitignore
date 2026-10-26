@@ -24,3 +24,5 @@ src/g1_patrol/assets/data/people/
 
 # exports of experiments that are not the release (scripts/reproduce/b2w_civil.sh)
 deploy/b2w/release_civil*/
+# the camera student's export (scripts/b2w/export_camera.py; the encoder alone is 88 MB)
+deploy/b2w/release_camera/
