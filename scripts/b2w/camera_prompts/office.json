@@ -1,0 +1,35 @@
+{
+ "subjects": [
+  {
+   "description": "Office cubicles with fabric partitions, desks with monitors and keyboards, office chairs, potted plants, filing cabinets, office workers sitting and walking.",
+   "appearance_details": "Realistic materials: brushed and painted steel, scuffed plastic, worn wood, cardboard boxes, cables; equipment shows normal signs of use; people move naturally.",
+   "location": "Along both sides of a central aisle and in the background",
+   "relative_size": "Life-size, seen from about 0.7 m above the floor",
+   "orientation": "Arranged along the aisle",
+   "number_of_subjects": 6
+  }
+ ],
+ "background_setting": "An open-plan office with grey carpet tiles, white walls, a suspended ceiling with LED panels, rows of cubicles along a main aisle, windows in the distance.",
+ "lighting": {
+  "conditions": "Bright, even overhead LED lighting typical of an indoor laboratory",
+  "direction": "From above",
+  "shadows": "Soft shadows under benches, machines and carts",
+  "illumination_effect": "Glossy reflections of the ceiling lights on the polished concrete floor"
+ },
+ "aesthetics": {
+  "composition": "First-person view from a camera mounted on a wheeled quadruped robot driving through the space",
+  "color_scheme": "Grey carpet, beige and grey partitions, black chairs, green plants",
+  "mood_atmosphere": "Busy, functional, realistic workplace",
+  "patterns": ""
+ },
+ "cinematography": {
+  "framing": "Wide",
+  "camera_angle": "Low, robot-mounted camera, moving forward smoothly",
+  "depth_of_field": "Deep",
+  "focus": "Sharp throughout",
+  "lens_focal_length": "Wide-angle, about 24 mm equivalent"
+ },
+ "style_medium": "Live-action video",
+ "artistic_style": "Photorealistic, documentary robot camera footage",
+ "text_and_signage_elements": []
+}

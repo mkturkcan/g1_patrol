@@ -1,0 +1,35 @@
+{
+ "subjects": [
+  {
+   "description": "A reception desk, lounge seating, potted plants, stanchions with belts, a stairwell with railings, visitors walking and standing.",
+   "appearance_details": "Realistic materials: brushed and painted steel, scuffed plastic, worn wood, cardboard boxes, cables; equipment shows normal signs of use; people move naturally.",
+   "location": "Along both sides of a central aisle and in the background",
+   "relative_size": "Life-size, seen from about 0.7 m above the floor",
+   "orientation": "Arranged along the aisle",
+   "number_of_subjects": 6
+  }
+ ],
+ "background_setting": "A building lobby with polished stone floor, tall windows, warm wall panels and modern pendant lights.",
+ "lighting": {
+  "conditions": "Bright, even overhead LED lighting typical of an indoor laboratory",
+  "direction": "From above",
+  "shadows": "Soft shadows under benches, machines and carts",
+  "illumination_effect": "Glossy reflections of the ceiling lights on the polished concrete floor"
+ },
+ "aesthetics": {
+  "composition": "First-person view from a camera mounted on a wheeled quadruped robot driving through the space",
+  "color_scheme": "Warm stone, wood panels, glass, black metal railings",
+  "mood_atmosphere": "Busy, functional, realistic workplace",
+  "patterns": ""
+ },
+ "cinematography": {
+  "framing": "Wide",
+  "camera_angle": "Low, robot-mounted camera, moving forward smoothly",
+  "depth_of_field": "Deep",
+  "focus": "Sharp throughout",
+  "lens_focal_length": "Wide-angle, about 24 mm equivalent"
+ },
+ "style_medium": "Live-action video",
+ "artistic_style": "Photorealistic, documentary robot camera footage",
+ "text_and_signage_elements": []
+}

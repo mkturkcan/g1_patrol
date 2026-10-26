@@ -2,7 +2,7 @@
 
 Prints the tables; with ``--write``, replaces them between ``<!-- table:NAME -->`` / ``<!-- /table:NAME -->``
 markers in ``README.md`` and ``deploy/b2w/README.md`` and in the ``<table id="NAMETable">`` elements of
-``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``, ``b2w_civil``).
+``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``, ``b2w_civil``, ``b2w_camera``).
 
 Usage:
     python scripts/b2w/results_table.py [--logs logs/rsl_rl] [--tag release] [--write]
@@ -48,6 +48,12 @@ CIVIL = [  # (name, run, policy, evaluation file): the mixture in which the civi
     ("Lab teacher trained with the civil lab (privileged)", "civil", "teacher", "b2w_nominal.json"),
     ("Fused student trained with the civil lab", "civil", "fused", "b2w_nominal.json"),
     ("Fused student trained with the civil lab, shield", "civil", "fused", "b2w_nominal_shield.json"),
+]
+CAMERA = [  # (name, policy, evaluation file): 256 robots for 150 s (scripts/reproduce/b2w_4_camera.sh)
+    ("Fused student (released)", "fused", "b2w_nominal_256.json"),
+    ("Camera student (+ front color camera)", "camera", "b2w_nominal.json"),
+    ("Fused student, shield", "fused", "b2w_nominal_shield_256.json"),
+    ("Camera student, shield", "camera", "b2w_nominal_shield.json"),
 ]
 CIVIL_COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Goal, civil eng. lab (%)",
                  "Structure contact, civil eng. lab (%)", "Pedestrian contact, robot moving (%)", "Time-out (%)"]
@@ -101,6 +107,8 @@ CAPTIONS = {
     "b2w_shield": "<b>Table 2.</b> What the shield and the guard around it do (fused student, setup of Table 5).",
     "b2w_civil": "<b>Table 7.</b> The civil engineering lab: policies on a mixture in which it takes half the lab tiles "
                  "(setup of Table 5 otherwise); the released policy was trained without it.",
+    "b2w_camera": "<b>Table 8.</b> The camera student and the fused student it started from, on the lab mixture (the "
+                  "camera student with its camera seeing the environment drawn as in the demo), 256 robots for 150 s.",
 }
 
 
@@ -112,12 +120,14 @@ def main():
     args = parser.parse_args()
     root = Path(args.logs)
     dirs = {who: root / f"b2w_nav_lab_{run}/{args.tag}/eval"
-            for who, run in (("teacher", "teacher"), ("fused", "fused_student"), ("lidar", "lidar_student"))}
+            for who, run in (("teacher", "teacher"), ("fused", "fused_student"), ("lidar", "lidar_student"),
+                             ("camera", "camera_student"))}
     load = lambda who, f: json.loads((dirs[who] / f).read_text()) if (dirs[who] / f).exists() else None  # noqa: E731
     rows = {
         "b2w": ("Policy", [(name, _cells(d)) for name, who, f in ROWS if (d := load(who, f))]),
         "b2w_stress": ("Fused student", [(name, _cells(d)) for name, f in STRESS if (d := load("fused", f))]),
         "b2w_shield": ("Fused student", [(name, _cells(d)) for name, f in SHIELD if (d := load("fused", f))]),
+        "b2w_camera": ("Policy", [(name, _cells(d)) for name, who, f in CAMERA if (d := load(who, f))]),
     }
     runs = {"teacher": "teacher", "fused": "fused_student", "lidar": "lidar_student"}
     civil_rows = []
