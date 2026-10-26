@@ -9,6 +9,7 @@ __all__ = [
     "base_fall",
     "base_velocity",
     "speed_limit",
+    "camera_features",
     "detected_litter",
     "known_places",
     "tracked_people",
@@ -87,6 +88,7 @@ from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .actions import WalkerPolicyActionCfg
 from .base_velocity import BaseVelocityActionCfg, base_command, base_fall, base_velocity, speed_limit
+from .camera import camera_features
 from .civic_perception import detected_litter, known_places, tracked_people
 from .civic_terms import (
     approach_threat,

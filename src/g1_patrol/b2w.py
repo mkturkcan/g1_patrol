@@ -46,6 +46,13 @@ DEPTH_CAMERAS = {
     "rear": ((-0.42244, -0.025, 0.038026), (-2.3562, 0.0, 1.5708)),
 }
 """Intel RealSense D435i depth cameras (measure the mounts)."""
+OPTICAL_CAMERAS = {
+    # name: position (m) and orientation (roll, pitch, yaw; rad; R = Rz Ry Rx) of the optical frame (z along the
+    # optical axis, x right, y down) in base_link, from the URDF's f_oc_link and r_oc_ink: looking straight ahead and back
+    "front": ((0.3993, 0.0, -0.01576), (-1.5708, 0.0, -1.5708)),
+    "rear": ((-0.39143, 0.0, -0.026131), (-1.5708, 0.0, 1.5708)),
+}
+"""The B2-W's color cameras (field of view not in the URDF; 90 deg horizontal assumed)."""
 D435I = {"hfov": 87.0, "vfov": 58.0, "width": 64, "height": 40, "min_range": 0.3, "max_range": 4.0}
 """D435i depth: field of view (deg), rays per frame in simulation (a 13x decimated 848 x 480 image on the robot),
 the range (m) of returns used in the height map."""
@@ -130,6 +137,15 @@ def rpy_matrix(rpy) -> list[list[float]]:
     return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
             [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
             [-sp, cp * sr, cp * cr]]
+
+
+def optical_frame_quat(rpy) -> tuple[float, float, float, float]:
+    """Quaternion (x, y, z, w) of an optical frame given as (roll, pitch, yaw) (R = Rz Ry Rx), e.g. of
+    :data:`OPTICAL_CAMERAS`; the frame of a camera in the ROS convention."""
+    r, p, y = (v / 2 for v in rpy)
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    return (sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy)
 
 
 def depth_camera_quat(name: str) -> tuple[float, float, float, float]:

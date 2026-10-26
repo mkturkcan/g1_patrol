@@ -107,3 +107,27 @@ class B2WLabFusedDistillationRunnerCfg(B2WFusedDistillationRunnerCfg):
 @configclass
 class B2WLabLidarDistillationRunnerCfg(B2WLidarDistillationRunnerCfg):
     experiment_name = "b2w_nav_lab_lidar_student"
+
+
+@configclass
+class WarmStartDistillationAlgorithmCfg(RslRlDistillationAlgorithmCfg):
+    student_init: str | None = None
+    """Distillation checkpoint of a trained student whose inputs lack this student's last observation groups
+    (:class:`...g1.agents.distillation.WarmStartDistillation`); None: the student starts untrained."""
+
+
+@configclass
+class B2WLabCameraDistillationRunnerCfg(B2WLabFusedDistillationRunnerCfg):
+    """The lab fused student with the front color camera's encoder features as a third input (camera_env_cfg),
+    starting from the trained fused student (``agent.algorithm.student_init``) with the teacher of its distillation
+    (``--checkpoint``); 256 robots (the camera renders the demo's look)."""
+
+    max_iterations = 300
+    experiment_name = "b2w_nav_lab_camera_student"
+    obs_groups = {"student": ["student", "camera", "height_map"], "teacher": ["policy"]}
+    algorithm = WarmStartDistillationAlgorithmCfg(
+        class_name="g1_patrol.tasks.navigation.config.g1.agents.distillation:WarmStartDistillation",
+        num_learning_epochs=2,
+        learning_rate=5.0e-4,
+        gradient_length=16,
+    )
