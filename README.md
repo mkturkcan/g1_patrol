@@ -548,6 +548,43 @@ otherwise).*
 | Fused student trained with the civil lab, shield | 8,940 | 50.2 | 66.9 | 58.7 | 5.7 | 0.7 | 20.2 |
 <!-- /table:b2w_civil -->
 
+**Camera student.** A third student also sees the image of the B2-W's front color camera
+(`G1Patrol-B2W-Navigate-Lab-Camera`): the class token and 2 x 3 average-pooled patch tokens of a frozen DINOv2-small
+(2,688 features) of a 336 x 196 image, besides the fused student's inputs. During training the camera sees the
+environment drawn as in the demo: every tile dressed with textured materials, the indoor rooms under ceilings with light
+fixtures, their furniture drawn as NVIDIA SimReady props with tools, monitors and boxes on the work surfaces and boards
+and signs on the walls, and every pedestrian drawn as an animated character that only its own robot's camera sees; the
+geometry the robot and its sensors interact with is unchanged. The student starts from the released fused student with
+the camera's weights at zero and is distilled for 300 iterations with 256 robots
+(`bash scripts/reproduce/b2w_4_camera.sh`, about 2 h on one GPU). In simulation it reaches 70.5% of its goals (57.1%
+with the shield), against 73.5% (60.3%) for the fused student under the same setup (Table B4): the camera does not
+improve the policy in simulation.
+
+**Alignment after training.** The camera student is not trained on realistic images; its encoder is aligned afterwards.
+Of 126 replays of the camera environment (two seeds), the 61 indoor ones (the street tiles have no prompt yet) are
+transferred to realistic video by NVIDIA Cosmos 3 Nano, with the render's edges and depth as controls, so that the
+layout is kept, and a text prompt per replay drawing wall paint, floor, ceiling, light, equipment colors and clothing at
+random. The last 8 of the encoder's 12 blocks are then fine-tuned so that a transferred frame gives the patch tokens
+that the original encoder gives the render it was made from; the policy is unchanged
+(`bash scripts/reproduce/b2w_5_camera_align.sh`, 49 replays to fit, 12 held out). On the held-out replays, realistic
+images change the policy's actions (mean absolute change of the squashed actions from those on the renders) by 0.110
+with the original encoder and by 0.058 with the aligned one, against 0.141 when the camera features are replaced by
+their mean; the cosine similarity of the camera features to those of the renders rises from 0.77 to 0.93.
+`scripts/b2w/export_camera.py` exports the aligned encoder and the policy to ONNX; the robot stack (`deploy/b2w`) does
+not run the camera student yet.
+
+*Table B4. The camera student and the fused student it started from: lab mixture, 256 robots for 150 s (setup of Table
+B1 otherwise).*
+
+<!-- table:b2w_camera -->
+| Policy | Episodes | Goal (%) | Goal, lab hall (%) | Structure contact (%) | Pedestrian contact, robot moving (%) | Pedestrian walked into stopped robot (%) | Time-out (%) | Speed (m/s) | Shield stops (% of steps) |
+|---|---|---|---|---|---|---|---|---|---|
+| Fused student (released) | 2,322 | 73.5 | 82.0 | 9.6 | 6.6 | 8.6 | 1.7 | 0.53 | – |
+| Camera student (+ front color camera) | 2,183 | 70.5 | 81.6 | 12.1 | 7.0 | 7.7 | 2.2 | 0.48 | – |
+| Fused student, shield | 1,108 | 60.3 | 75.6 | 3.0 | 0.5 | 22.1 | 14.2 | 0.24 | 11.8 |
+| Camera student, shield | 1,112 | 57.1 | 74.1 | 2.2 | 1.2 | 24.4 | 15.1 | 0.23 | 12.6 |
+<!-- /table:b2w_camera -->
+
 ## Installation
 
 Requirements: Linux, an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0`).
@@ -580,6 +617,8 @@ bash scripts/reproduce/4_evaluate.sh           # evaluations, logs/reproduce/eva
 bash scripts/reproduce/5_ablations.sh          # optional: locomotion ablations (Tables 7 and 8)
 bash scripts/reproduce/b2w.sh                  # B2-W: props, teacher, lab teacher, students, evaluations, export (Table B1)
 bash scripts/reproduce/b2w_civil.sh            # B2-W: optional, training with the civil engineering lab (Table B3)
+bash scripts/reproduce/b2w_4_camera.sh         # B2-W: optional, the camera student and its evaluations (Table B4)
+bash scripts/reproduce/b2w_5_camera_align.sh   # B2-W: its encoder aligned after training (Cosmos 3 Nano; COSMOS_PYTHON, COSMOS3_NANO)
 python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
 python scripts/b2w/results_table.py --write    # writes the B2-W tables into the READMEs and docs/b2w/index.html
 ```
