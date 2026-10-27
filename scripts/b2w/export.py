@@ -32,6 +32,7 @@ from g1_patrol.b2w import LIDAR, deploy_config
 
 MAPS = {"G1Patrol-B2W-Navigate-Lab-Fused": "height_map", "G1Patrol-B2W-Navigate-Lab-Lidar": "lidar_map",
         "G1Patrol-B2W-Navigate-CivilLab-Fused": "height_map", "G1Patrol-B2W-Navigate-CivilLab-Lidar": "lidar_map",
+        "G1Patrol-B2W-Navigate-Lab-Fused-People": "height_map", "G1Patrol-B2W-Navigate-Lab-Lidar-People": "lidar_map",
         "G1Patrol-B2W-Navigate-Fused": "height_map", "G1Patrol-B2W-Navigate-Lidar": "lidar_map"}
 
 

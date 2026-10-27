@@ -2,7 +2,7 @@
 
 Prints the tables; with ``--write``, replaces them between ``<!-- table:NAME -->`` / ``<!-- /table:NAME -->``
 markers in ``README.md`` and ``deploy/b2w/README.md`` and in the ``<table id="NAMETable">`` elements of
-``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``, ``b2w_civil``, ``b2w_camera``).
+``docs/b2w/index.html`` (``b2w``, ``b2w_stress``, ``b2w_shield``, ``b2w_civil``, ``b2w_camera``, ``b2w_people``).
 
 Usage:
     python scripts/b2w/results_table.py [--logs logs/rsl_rl] [--tag release] [--write]
@@ -54,6 +54,20 @@ CAMERA = [  # (name, policy, evaluation file): 256 robots for 150 s (scripts/rep
     ("Camera student (+ front color camera)", "camera", "b2w_nominal.json"),
     ("Fused student, shield", "fused", "b2w_nominal_shield_256.json"),
     ("Camera student, shield", "camera", "b2w_nominal_shield.json"),
+]
+PEOPLE = [  # (name, run, policy, evaluation file): pedestrians as capsules or posed characters (b2w_6_people.sh)
+    ("Fused, released (capsules)", "release", "fused", "b2w_nominal.json"),
+    ("Fused, released (people)", "release", "fused", "b2w_nominal_people.json"),
+    ("Fused, fine-tuned with people (people)", "people", "fused", "b2w_nominal_people.json"),
+    ("Fused, fine-tuned with people (capsules)", "people", "fused", "b2w_nominal.json"),
+    ("Lidar-only, released (capsules)", "release", "lidar", "b2w_nominal.json"),
+    ("Lidar-only, released (people)", "release", "lidar", "b2w_nominal_people.json"),
+    ("Lidar-only, fine-tuned with people (people)", "people", "lidar", "b2w_nominal_people.json"),
+    ("Lidar-only, fine-tuned with people (capsules)", "people", "lidar", "b2w_nominal.json"),
+    ("Fused, released, shield (capsules)", "release", "fused", "b2w_nominal_shield.json"),
+    ("Fused, released, shield (people)", "release", "fused", "b2w_nominal_people_shield.json"),
+    ("Fused, fine-tuned with people, shield (people)", "people", "fused", "b2w_nominal_people_shield.json"),
+    ("Fused, fine-tuned with people, shield (capsules)", "people", "fused", "b2w_nominal_shield.json"),
 ]
 CIVIL_COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Goal, civil eng. lab (%)",
                  "Structure contact, civil eng. lab (%)", "Pedestrian contact, robot moving (%)", "Time-out (%)"]
@@ -107,6 +121,9 @@ CAPTIONS = {
     "b2w_shield": "<b>Table 2.</b> What the shield and the guard around it do (fused student, setup of Table 5).",
     "b2w_civil": "<b>Table 7.</b> The civil engineering lab: policies on a mixture in which it takes half the lab tiles "
                  "(setup of Table 5 otherwise); the released policy was trained without it.",
+    "b2w_people": "<b>Table 9.</b> Pedestrians as the lidar and the depth cameras see them: capsules, as in "
+                  "training, or Isaac Sim characters in walking poses (people); the released students and the students "
+                  "fine-tuned with people (setup of Table 5).",
     "b2w_camera": "<b>Table 8.</b> The camera student and the fused student it started from, on the lab mixture (the "
                   "camera student with its camera seeing the environment drawn as in the demo), 256 robots for 150 s.",
 }
@@ -135,6 +152,9 @@ def main():
         path = root / f"b2w_nav_lab_{runs[who]}/{run}/eval/{f}"
         if path.exists():
             civil_rows.append((name, _civil_cells(json.loads(path.read_text()))))
+    rows["b2w_people"] = ("Policy (pedestrians seen as)", [
+        (name, _cells(json.loads(path.read_text()))) for name, run, who, f in PEOPLE
+        if (path := root / f"b2w_nav_lab_{runs[who]}/{run}/eval/{f}").exists()])
     columns = {name: COLUMNS for name in rows}
     rows["b2w_civil"], columns["b2w_civil"] = ("Policy", civil_rows), CIVIL_COLUMNS
     for name, (first, r) in rows.items():

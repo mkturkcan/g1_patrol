@@ -113,3 +113,18 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:B2WLabCameraDistillationRunnerCfg",
     },
 )
+
+for _student, _env_cfg, _agent_cfg in (
+    ("Fused", "B2WLabFusedStudentPeopleEnvCfg", "B2WLabFusedDistillationRunnerCfg"),
+    ("Lidar", "B2WLabLidarStudentPeopleEnvCfg", "B2WLabLidarDistillationRunnerCfg"),
+):
+    gym.register(
+        id=f"G1Patrol-B2W-Navigate-Lab-{_student}-People",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.human_targets:{_env_cfg}",
+            "default_agent": "rsl_rl",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_agent_cfg}",
+        },
+    )

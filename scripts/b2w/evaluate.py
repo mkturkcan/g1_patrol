@@ -10,6 +10,8 @@ Stress tests of the sim-to-real assumptions:
 * ``--lidar_dropout`` / ``--odometry_drift``: a degraded lidar map (student); ``--camera_failure``: the fused
   student's depth cameras deliver nothing;
 * ``--twin <place.yaml>``: only the digital twin of the real place (:mod:`g1_patrol.tasks.navigation.nyc.twin`);
+* ``--people_meshes``: the lidar and the depth cameras see the pedestrians as Isaac Sim characters in walking poses
+  (:mod:`g1_patrol.tasks.navigation.config.b2w.human_targets`) instead of the capsules of training;
 * ``--shield``: the policy's commands pass through the safety shield (:mod:`g1_patrol.shield`) as on the robot, fed
   by the simulated lidar and depth cameras and the height map; reports how often it intervenes;
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
@@ -107,6 +109,7 @@ def main(argv: list[str]) -> None:
     shield_set = _extra(argv, "shield_set")
     guard_set = _extra(argv, "guard_set")
     person_oracle = _extra(argv, "person_oracle", flag=True)
+    people_meshes = _extra(argv, "people_meshes", flag=True)
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
@@ -119,6 +122,10 @@ def main(argv: list[str]) -> None:
 
         env_cfg.scene.terrain.terrain_generator = nyc_terrain_generator_cfg(
             num_rows=6, variants_per_kind=4, kinds=["twin"], route_half_width=FOOTPRINT[1], twin=os.path.abspath(twin))
+    if people_meshes:  # the lidar and the depth cameras see posed Isaac Sim characters instead of capsules
+        from g1_patrol.tasks.navigation.config.b2w.human_targets import use_people_meshes
+
+        use_people_meshes(env_cfg)
     if controller != "nominal":
         _apply_controller(env_cfg.actions.base, controller)
     if speed_limit is not None:
@@ -243,6 +250,7 @@ def main(argv: list[str]) -> None:
             "speed_limit": speed_limit,
             "shield_set": shield_set,
             "person_oracle": person_oracle,
+            "people_meshes": people_meshes,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
             "mean_time_to_goal_s": float(goal_time.sum() / counts["goal_reached"].sum().clamp(min=1)) * base_env.step_dt,
@@ -285,7 +293,8 @@ def main(argv: list[str]) -> None:
             metrics["map_stats"] = map_statistics(torch.cat(maps).numpy(), MAP["unknown_value"], MAP["resolution"])
         out = args_cli.out or os.path.join(os.path.dirname(resume_path), "eval",
                                            f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}"
-                                           f"{'_no_cameras' if camera_failure else ''}{'_shield' if use_shield else ''}"
+                                           f"{'_no_cameras' if camera_failure else ''}{'_people' if people_meshes else ''}"
+                                           f"{'_shield' if use_shield else ''}"
                                            f"{f'_limit{speed_limit}' if speed_limit is not None else ''}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w") as f:

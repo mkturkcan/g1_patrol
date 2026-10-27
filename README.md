@@ -595,7 +595,7 @@ pip install "isaacsim[all,extscache]==6.1.0.0" --extra-index-url https://pypi.nv
 pip install -U torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
 git clone --branch release/3.0.0 https://github.com/isaac-sim/IsaacLab.git IsaacLab-3.0
 cd IsaacLab-3.0 && ./isaaclab.sh -i "newton,rl[rsl-rl],visualizer" && cd ..
-pip install "moviepy>=1.0.3,<2" pytest
+pip install "moviepy>=1.0.3,<2" pytest open3d==0.20.0
 git clone https://github.com/mkturkcan/g1_patrol.git && pip install --no-deps -e g1_patrol
 ```
 
