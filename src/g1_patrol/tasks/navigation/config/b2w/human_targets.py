@@ -1,11 +1,14 @@
-"""Pedestrians as the lidar and the depth cameras see them: an Isaac Sim character in a walking pose instead of a capsule.
+"""Pedestrians as the lidar and the depth cameras see them: Isaac Sim characters in walking poses instead of capsules.
 
 Each pedestrian's capsule (a kinematic rigid body: physics, contacts) gets a child mesh ``person``: one of the posed
 characters baked by ``scripts/b2w/bake_people_meshes.py`` (10 characters at 8 phases of the gait cycle, about 4,000
 triangles each; ``$G1_PATROL_PEOPLE_MESHES``, default ``~/.cache/g1_patrol/people_meshes``), facing the walking
 direction (the capsule's yaw) with its feet on the ground, never drawn (purpose ``guide``). :func:`use_people_meshes`
 makes an environment's lidar and depth cameras cast their rays at these meshes instead of the capsules; the pedestrians
-keep their slot's pose for the whole run (the characters' limbs do not move).
+keep their slot's pose for the whole run (the characters' limbs do not move). Slot ``i`` takes mesh ``11 (i + offset)``
+(mod 80) of the sorted files, the same in every environment: with the default offset 0 the 20 slots of a scene take 20
+of the 80 meshes (all 10 characters); ``$G1_PATROL_PEOPLE_OFFSET=40`` gives them 20 others (the same characters in
+other poses).
 """
 
 from __future__ import annotations
@@ -25,7 +28,8 @@ def _mesh_file(index: int) -> str:
     files = sorted(glob.glob(os.path.join(people_meshes_dir(), "*.npz")))
     if not files:
         raise FileNotFoundError(f"no people meshes in {people_meshes_dir()}: run scripts/b2w/bake_people_meshes.py")
-    return files[(index * 11) % len(files)]  # 11 is coprime with 80: neighbouring slots differ in character and pose
+    offset = int(os.environ.get("G1_PATROL_PEOPLE_OFFSET", "0"))
+    return files[11 * (index + offset) % len(files)]  # 11 is coprime with 80: neighbours differ in character and pose
 
 
 def _add_person(stage, prim_path: str):
@@ -70,7 +74,7 @@ def spawn_hidden_capsule_with_person(prim_path, cfg, translation=None, orientati
 
 
 def use_people_meshes(env_cfg) -> None:
-    """Give the pedestrians ``person`` meshes and make the lidar and the depth cameras see these instead of the capsules."""
+    """Give the pedestrians ``person`` meshes; the lidar and the depth cameras see these instead of the capsules."""
     from .camera_env_cfg import spawn_hidden_pedestrian
 
     for ped in env_cfg.scene.pedestrians.rigid_objects.values():

@@ -42,3 +42,19 @@ def test_missing_people_meshes_are_reported(tmp_path, monkeypatch):
     monkeypatch.setenv("G1_PATROL_PEOPLE_MESHES", str(tmp_path))
     with pytest.raises(FileNotFoundError, match="bake_people_meshes"):
         human_targets._mesh_file(0)
+
+
+def test_people_offset_gives_other_meshes(tmp_path, monkeypatch):
+    from g1_patrol.tasks.navigation.config.b2w import human_targets
+
+    for k in range(10):
+        for j in range(8):
+            (tmp_path / f"character{k}_w{j / 16:.2f}.npz").touch()
+    monkeypatch.setenv("G1_PATROL_PEOPLE_MESHES", str(tmp_path))
+    slots = range(20)
+    seen = {human_targets._mesh_file(i) for i in slots}
+    monkeypatch.setenv("G1_PATROL_PEOPLE_OFFSET", "40")
+    other = {human_targets._mesh_file(i) for i in slots}
+    assert len(seen) == len(other) == 20 and not seen & other
+    characters = lambda files: {f.rsplit("/", 1)[-1].split("_")[0] for f in files}  # noqa: E731
+    assert characters(seen) == characters(other) == {f"character{k}" for k in range(10)}

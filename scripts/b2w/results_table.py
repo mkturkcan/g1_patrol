@@ -55,20 +55,18 @@ CAMERA = [  # (name, policy, evaluation file): 256 robots for 150 s (scripts/rep
     ("Fused student, shield", "fused", "b2w_nominal_shield_256.json"),
     ("Camera student, shield", "camera", "b2w_nominal_shield.json"),
 ]
-PEOPLE = [  # (name, run, policy, evaluation file): pedestrians as capsules or posed characters (b2w_6_people.sh)
-    ("Fused, released (capsules)", "release", "fused", "b2w_nominal.json"),
-    ("Fused, released (people)", "release", "fused", "b2w_nominal_people.json"),
-    ("Fused, fine-tuned with people (people)", "people", "fused", "b2w_nominal_people.json"),
-    ("Fused, fine-tuned with people (capsules)", "people", "fused", "b2w_nominal.json"),
-    ("Lidar-only, released (capsules)", "release", "lidar", "b2w_nominal.json"),
-    ("Lidar-only, released (people)", "release", "lidar", "b2w_nominal_people.json"),
-    ("Lidar-only, fine-tuned with people (people)", "people", "lidar", "b2w_nominal_people.json"),
-    ("Lidar-only, fine-tuned with people (capsules)", "people", "lidar", "b2w_nominal.json"),
-    ("Fused, released, shield (capsules)", "release", "fused", "b2w_nominal_shield.json"),
-    ("Fused, released, shield (people)", "release", "fused", "b2w_nominal_people_shield.json"),
-    ("Fused, fine-tuned with people, shield (people)", "people", "fused", "b2w_nominal_people_shield.json"),
-    ("Fused, fine-tuned with people, shield (capsules)", "people", "fused", "b2w_nominal_shield.json"),
+PEOPLE = [  # (name, run, policy, shield): pedestrians seen as capsules or posed characters (b2w_6_people.sh)
+    ("Fused, released", "release", "fused", False),
+    ("Fused, fine-tuned with people", "people", "fused", False),
+    ("Lidar-only, released", "release", "lidar", False),
+    ("Lidar-only, fine-tuned with people", "people", "lidar", False),
+    ("Fused, released, shield", "release", "fused", True),
+    ("Fused, fine-tuned with people, shield", "people", "fused", True),
 ]
+PEOPLE_SEEN = (("capsules", ""), ("people", "_people"), ("people in other poses", "_people40"))
+PEOPLE_COLUMNS = ([f"Goal, {seen} (%)" for seen, _ in PEOPLE_SEEN]
+                  + [f"Pedestrian contact, robot moving, {seen} (%)" for seen, _ in PEOPLE_SEEN]
+                  + ["Structure contact, people (%)"])
 CIVIL_COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Goal, civil eng. lab (%)",
                  "Structure contact, civil eng. lab (%)", "Pedestrian contact, robot moving (%)", "Time-out (%)"]
 
@@ -122,8 +120,9 @@ CAPTIONS = {
     "b2w_civil": "<b>Table 7.</b> The civil engineering lab: policies on a mixture in which it takes half the lab tiles "
                  "(setup of Table 5 otherwise); the released policy was trained without it.",
     "b2w_people": "<b>Table 9.</b> Pedestrians as the lidar and the depth cameras see them: capsules, as in "
-                  "training, or Isaac Sim characters in walking poses (people); the released students and the students "
-                  "fine-tuned with people (setup of Table 5).",
+                  "training, or Isaac Sim characters in walking poses (people: 20 of 80 posed meshes, those of the "
+                  "fine-tuning; other poses: 20 others); the released students and the students fine-tuned with "
+                  "people for 500 iterations (setup of Table 5).",
     "b2w_camera": "<b>Table 8.</b> The camera student and the fused student it started from, on the lab mixture (the "
                   "camera student with its camera seeing the environment drawn as in the demo), 256 robots for 150 s.",
 }
@@ -152,10 +151,18 @@ def main():
         path = root / f"b2w_nav_lab_{runs[who]}/{run}/eval/{f}"
         if path.exists():
             civil_rows.append((name, _civil_cells(json.loads(path.read_text()))))
-    rows["b2w_people"] = ("Policy (pedestrians seen as)", [
-        (name, _cells(json.loads(path.read_text()))) for name, run, who, f in PEOPLE
-        if (path := root / f"b2w_nav_lab_{runs[who]}/{run}/eval/{f}").exists()])
+    people_rows = []
+    for name, run, who, shield in PEOPLE:
+        runs_eval = root / f"b2w_nav_lab_{runs[who]}/{run}/eval"
+        d = [json.loads(f.read_text()) if (f := runs_eval / f"b2w_nominal{suffix}{'_shield' if shield else ''}.json")
+             .exists() else None for _, suffix in PEOPLE_SEEN]
+        if d[0] or d[1]:
+            people_rows.append((name, [_pct(x and x["goal_reached_rate"]) for x in d]
+                                + [_pct(x and x["pedestrian_contacts"]["robot_moving_rate"]) for x in d]
+                                + [_pct(d[1] and d[1]["obstacle_collision_rate"])]))
+    rows["b2w_people"] = ("Policy", people_rows)
     columns = {name: COLUMNS for name in rows}
+    columns["b2w_people"] = PEOPLE_COLUMNS
     rows["b2w_civil"], columns["b2w_civil"] = ("Policy", civil_rows), CIVIL_COLUMNS
     for name, (first, r) in rows.items():
         print(_markdown(first, r, columns[name]) + "\n")
