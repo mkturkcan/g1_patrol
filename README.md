@@ -585,6 +585,40 @@ B1 otherwise).*
 | Camera student, shield | 1,112 | 57.1 | 74.1 | 2.2 | 1.2 | 24.4 | 15.1 | 0.23 | 12.6 |
 <!-- /table:b2w_camera -->
 
+**Pedestrians as people.** In training, the lidar and the depth cameras see every pedestrian as a capsule 0.5 m wide
+and 1.7 m tall. To measure what this costs, they can see Isaac Sim characters in walking poses instead: the 10
+characters of the demo, each skinned at 8 phases of its gait cycle and decimated to 4,000 triangles
+(`scripts/b2w/bake_people_meshes.py`), facing the way the pedestrian walks; contacts remain those of the capsule
+(`scripts/b2w/evaluate.py --people_meshes`). A person gives the lidar about two thirds of a capsule's returns at every
+distance (83 against 120 at 3 m; `scripts/figures/b2w_people_returns.py`). Seeing people, the released fused student
+moves into pedestrians in 9.6% of the episodes instead of 6.9% and the lidar-only student in 9.9% instead of 7.0%, at
+goal rates 0.8 and 2.2 points lower (Table B5); the shield, which acts on the sensor returns themselves, keeps these
+contacts at 0.4% (0.6% with capsules). Fine-tuning the students for 500 iterations with their sensors seeing people
+(DAgger with the same teacher, from the released students; `bash scripts/reproduce/b2w_6_people.sh`, about 2 h on four
+GPUs) closes the gap: with people, the fused student moves into pedestrians in 6.5% of the episodes and reaches
+73.4% of its goals, and 6.3% and 73.7% with 20 poses not used in the fine-tuning, while with capsules it does as before
+(7.0%, 72.5%). The lidar-only student improves alike with people (7.7%, 72.7%), at a small cost with capsules (7.4%,
+72.3%). Structure contacts rise with fewer pedestrian contacts (10.1% against 9.3% for the fused student with people),
+since an episode ends at its first contact. With the shield, the fine-tuned and the released fused students do equally
+well (0.3% and 0.4% with people). Evaluations with people are not bitwise reproducible, unlike those with capsules: two
+runs of the released fused student gave 9.0% and 9.6%.
+
+*Table B5. Pedestrians as the lidar and the depth cameras see them: capsules, as in training, or Isaac Sim characters
+in walking poses (people: the 20 of 80 posed meshes used in the fine-tuning; other poses: 20 others). Released students
+and students fine-tuned with people for 500 iterations; pedestrian contacts with the robot moving towards the person,
+all contacts with the capsules (setup of Table B1).*
+
+<!-- table:b2w_people -->
+| Policy | Goal, capsules (%) | Goal, people (%) | Goal, other poses (%) | Pedestrian contact, capsules (%) | Pedestrian contact, people (%) | Pedestrian contact, other poses (%) | Structure contact, people (%) |
+|---|---|---|---|---|---|---|---|
+| Fused, released | 72.5 | 71.7 | 71.5 | 6.9 | 9.6 | 9.2 | 9.3 |
+| Fused, fine-tuned | 72.5 | 73.4 | 73.7 | 7.0 | 6.5 | 6.3 | 10.1 |
+| Lidar-only, released | 73.1 | 70.9 | 71.2 | 7.0 | 9.9 | 9.7 | 10.0 |
+| Lidar-only, fine-tuned | 72.3 | 72.7 | 72.5 | 7.4 | 7.7 | 7.6 | 11.0 |
+| Fused + shield, released | 57.3 | 56.2 | – | 0.6 | 0.4 | – | 1.8 |
+| Fused + shield, fine-tuned | 57.0 | 55.7 | – | 0.4 | 0.3 | – | 1.7 |
+<!-- /table:b2w_people -->
+
 ## Installation
 
 Requirements: Linux, an NVIDIA RTX GPU, Python 3.12, Isaac Sim 6.1 and Isaac Lab 3.0 (`release/3.0.0`).
@@ -619,6 +653,7 @@ bash scripts/reproduce/b2w.sh                  # B2-W: props, teacher, lab teach
 bash scripts/reproduce/b2w_civil.sh            # B2-W: optional, training with the civil engineering lab (Table B3)
 bash scripts/reproduce/b2w_4_camera.sh         # B2-W: optional, the camera student and its evaluations (Table B4)
 bash scripts/reproduce/b2w_5_camera_align.sh   # B2-W: its encoder aligned after training (Cosmos 3 Nano; COSMOS_PYTHON, COSMOS3_NANO)
+bash scripts/reproduce/b2w_6_people.sh         # B2-W: optional, the students fine-tuned with people meshes (Table B5)
 python scripts/figures/build_results.py        # writes the result tables into README.md and docs/index.html
 python scripts/b2w/results_table.py --write    # writes the B2-W tables into the READMEs and docs/b2w/index.html
 ```

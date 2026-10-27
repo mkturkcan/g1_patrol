@@ -57,16 +57,15 @@ CAMERA = [  # (name, policy, evaluation file): 256 robots for 150 s (scripts/rep
 ]
 PEOPLE = [  # (name, run, policy, shield): pedestrians seen as capsules or posed characters (b2w_6_people.sh)
     ("Fused, released", "release", "fused", False),
-    ("Fused, fine-tuned with people", "people", "fused", False),
+    ("Fused, fine-tuned", "people", "fused", False),
     ("Lidar-only, released", "release", "lidar", False),
-    ("Lidar-only, fine-tuned with people", "people", "lidar", False),
-    ("Fused, released, shield", "release", "fused", True),
-    ("Fused, fine-tuned with people, shield", "people", "fused", True),
+    ("Lidar-only, fine-tuned", "people", "lidar", False),
+    ("Fused + shield, released", "release", "fused", True),
+    ("Fused + shield, fine-tuned", "people", "fused", True),
 ]
-PEOPLE_SEEN = (("capsules", ""), ("people", "_people"), ("people in other poses", "_people40"))
+PEOPLE_SEEN = (("capsules", ""), ("people", "_people"), ("other poses", "_people40"))
 PEOPLE_COLUMNS = ([f"Goal, {seen} (%)" for seen, _ in PEOPLE_SEEN]
-                  + [f"Pedestrian contact, robot moving, {seen} (%)" for seen, _ in PEOPLE_SEEN]
-                  + ["Structure contact, people (%)"])
+                  + [f"Pedestrian contact, {seen} (%)" for seen, _ in PEOPLE_SEEN] + ["Structure contact, people (%)"])
 CIVIL_COLUMNS = ["Episodes", "Goal (%)", "Goal, lab hall (%)", "Goal, civil eng. lab (%)",
                  "Structure contact, civil eng. lab (%)", "Pedestrian contact, robot moving (%)", "Time-out (%)"]
 
@@ -120,9 +119,10 @@ CAPTIONS = {
     "b2w_civil": "<b>Table 7.</b> The civil engineering lab: policies on a mixture in which it takes half the lab tiles "
                  "(setup of Table 5 otherwise); the released policy was trained without it.",
     "b2w_people": "<b>Table 9.</b> Pedestrians as the lidar and the depth cameras see them: capsules, as in "
-                  "training, or Isaac Sim characters in walking poses (people: 20 of 80 posed meshes, those of the "
-                  "fine-tuning; other poses: 20 others); the released students and the students fine-tuned with "
-                  "people for 500 iterations (setup of Table 5).",
+                  "training, or Isaac Sim characters in walking poses (people: the 20 of 80 posed meshes used in the "
+                  "fine-tuning; other poses: 20 others). Released students and students fine-tuned with people for 500 "
+                  "iterations; pedestrian contacts with the robot moving towards the person, all contacts with the "
+                  "capsules (setup of Table 5).",
     "b2w_camera": "<b>Table 8.</b> The camera student and the fused student it started from, on the lab mixture (the "
                   "camera student with its camera seeing the environment drawn as in the demo), 256 robots for 150 s.",
 }

@@ -298,6 +298,10 @@ crawling near what moved lowers contacts in which the robot moves into a pedestr
 rate to 57.3%. With the speed caps of the first trials: 53.9% at 0.5 m/s, 58.7% at 1.0 m/s. The lidar-only student is
 as good as the fused one in simulation; the cameras see the ground close around the robot that the lidar misses (low
 obstacles beside it), which the simulated tiles rarely test.
+In training the lidar and the depth cameras see pedestrians as capsules; seeing Isaac Sim characters in walking poses
+instead, the released student with the shield moved into pedestrians in 0.4% of the episodes and reached 56.2% of its
+goals (`README.md`, Table B5). A student fine-tuned with such characters (`scripts/reproduce/b2w_6_people.sh`, exported
+to `deploy/b2w/release_people`) does as well with the shield and better without it; it is not the released policy.
 
 ### The lab
 
