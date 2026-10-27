@@ -58,3 +58,17 @@ def test_people_offset_gives_other_meshes(tmp_path, monkeypatch):
     assert len(seen) == len(other) == 20 and not seen & other
     characters = lambda files: {f.rsplit("/", 1)[-1].split("_")[0] for f in files}  # noqa: E731
     assert characters(seen) == characters(other) == {f"character{k}" for k in range(10)}
+
+
+def test_walking_characters_and_phase_order(tmp_path, monkeypatch):
+    from g1_patrol.tasks.navigation.config.b2w import human_targets
+
+    for k in range(10):
+        for j in (7, 0, 1):  # created out of order
+            (tmp_path / f"character{k}_w{j / 16:.2f}.npz").touch()
+    monkeypatch.setenv("G1_PATROL_PEOPLE_MESHES", str(tmp_path))
+    assert human_targets.walking_characters("train") == [f"character{k}" for k in range(8)]
+    assert human_targets.walking_characters("held_out") == ["character8", "character9"]
+    assert len(human_targets.walking_characters("all")) == 10
+    poses = human_targets._poses_by_character()["character3"]
+    assert [p.rsplit("_w", 1)[1] for p in poses] == ["0.00.npz", "0.06.npz", "0.44.npz"]

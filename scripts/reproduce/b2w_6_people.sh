@@ -3,8 +3,9 @@
 # characters in walking poses (scripts/b2w/bake_people_meshes.py; G1Patrol-B2W-Navigate-Lab-{Fused,Lidar}-People)
 # instead of the capsules of stage 2: DAgger with the same teacher, from the students of stage 2, ITERATIONS more
 # iterations (default 500; run tag PEOPLE_TAG, default people; B2W_DEVICE and B2W_DEVICE2). Evaluations (on the GPUs
-# of B2W_EVAL_DEVICES): both students with people, with people in poses not seen in the fine-tuning (--people_offset)
-# and with capsules, the fused one also with the shield, and the students of stage 2 with people. Export to
+# of B2W_EVAL_DEVICES): both students with people, with people in poses not seen in the fine-tuning (--people_offset),
+# with walking people (--walking_people: poses following each pedestrian's gait; also with 2 characters held out) and
+# with capsules, the fused one also with the shield, and the students of stage 2 alike. Export to
 # B2W_PEOPLE_RELEASE (default deploy/b2w/release_people) and its _lidar, which are not the released policy. Run after
 # scripts/reproduce/b2w.sh.
 source scripts/reproduce/env.sh
@@ -48,6 +49,12 @@ JOBS=(  # the shielded (slow) evaluations first, one per GPU; the students of st
     "b2w_6_eval_release_lidar_people40.log --task $LIDAR_TASK --checkpoint $RELEASE_LIDAR --people_meshes --people_offset 40"
     "b2w_6_eval_fused_people40.log --task $FUSED_TASK --checkpoint $FUSED --people_meshes --people_offset 40"
     "b2w_6_eval_lidar_people40.log --task $LIDAR_TASK --checkpoint $LIDAR --people_meshes --people_offset 40"
+    "b2w_6_eval_release_fused_walking_all.log --task $FUSED_TASK --checkpoint $RELEASE_FUSED --walking_people all"
+    "b2w_6_eval_release_fused_walking_held_out.log --task $FUSED_TASK --checkpoint $RELEASE_FUSED --walking_people held_out"
+    "b2w_6_eval_fused_walking_all.log --task $FUSED_TASK --checkpoint $FUSED --walking_people all"
+    "b2w_6_eval_fused_walking_held_out.log --task $FUSED_TASK --checkpoint $FUSED --walking_people held_out"
+    "b2w_6_eval_release_lidar_walking_all.log --task $LIDAR_TASK --checkpoint $RELEASE_LIDAR --walking_people all"
+    "b2w_6_eval_lidar_walking_all.log --task $LIDAR_TASK --checkpoint $LIDAR --walking_people all"
 )
 queue() {  # the jobs i, i + n, ... on device $2
     local i=$1 device=$2 k log args

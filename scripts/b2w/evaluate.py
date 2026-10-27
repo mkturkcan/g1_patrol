@@ -13,6 +13,7 @@ Stress tests of the sim-to-real assumptions:
 * ``--people_meshes``: the lidar and the depth cameras see the pedestrians as Isaac Sim characters in walking poses
   (:mod:`g1_patrol.tasks.navigation.config.b2w.human_targets`) instead of the capsules of training; with
   ``--people_offset 40``, 20 other meshes than those of the fine-tuning with people (the same characters, other poses);
+  ``--walking_people {all,train,held_out}``: characters of that subset whose poses follow their gait instead;
 * ``--shield``: the policy's commands pass through the safety shield (:mod:`g1_patrol.shield`) as on the robot, fed
   by the simulated lidar and depth cameras and the height map; reports how often it intervenes;
 * ``--map_stats``: statistics of the student's lidar maps, to compare with those of a recorded drive
@@ -112,6 +113,8 @@ def main(argv: list[str]) -> None:
     person_oracle = _extra(argv, "person_oracle", flag=True)
     people_meshes = _extra(argv, "people_meshes", flag=True)
     people_offset = int(_extra(argv, "people_offset", 0))
+    walking_people = _extra(argv, "walking_people")
+    people_meshes = people_meshes or walking_people is not None
     if not any(a == "--task" or a.startswith("--task=") for a in argv):
         argv = ["--task", "G1Patrol-B2W-Navigate-Fused", *argv]
     args_cli = parse_args(argv)
@@ -128,7 +131,7 @@ def main(argv: list[str]) -> None:
         from g1_patrol.tasks.navigation.config.b2w.human_targets import use_people_meshes
 
         os.environ["G1_PATROL_PEOPLE_OFFSET"] = str(people_offset)  # read when the pedestrians are spawned
-        use_people_meshes(env_cfg)
+        use_people_meshes(env_cfg, walking=walking_people)
     if controller != "nominal":
         _apply_controller(env_cfg.actions.base, controller)
     if speed_limit is not None:
@@ -255,6 +258,7 @@ def main(argv: list[str]) -> None:
             "person_oracle": person_oracle,
             "people_meshes": people_meshes,
             "people_offset": people_offset if people_meshes else None,
+            "walking_people": walking_people,
             "episodes": episodes,
             **{f"{o}_rate": float(counts[o].sum()) / max(episodes, 1) for o in outcomes},
             "mean_time_to_goal_s": float(goal_time.sum() / counts["goal_reached"].sum().clamp(min=1)) * base_env.step_dt,
@@ -296,6 +300,7 @@ def main(argv: list[str]) -> None:
 
             metrics["map_stats"] = map_statistics(torch.cat(maps).numpy(), MAP["unknown_value"], MAP["resolution"])
         people = f"_people{people_offset or ''}" if people_meshes else ""
+        people = f"_walking_{walking_people}" if walking_people else people
         out = args_cli.out or os.path.join(os.path.dirname(resume_path), "eval",
                                            f"b2w_{controller.replace(':', '_').replace('/', '_')}{'_twin' if twin else ''}"
                                            f"{'_no_cameras' if camera_failure else ''}{people}"

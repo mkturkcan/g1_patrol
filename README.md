@@ -600,8 +600,11 @@ GPUs) closes the gap: with people, the fused student moves into pedestrians in 6
 (7.0%, 72.5%). The lidar-only student improves alike with people (7.7%, 72.7%), at a small cost with capsules (7.4%,
 72.3%). Structure contacts rise with fewer pedestrian contacts (10.1% against 9.3% for the fused student with people),
 since an episode ends at its first contact. With the shield, the fine-tuned and the released fused students do equally
-well (0.3% and 0.4% with people). Evaluations with people are not bitwise reproducible, unlike those with capsules: two
-runs of the released fused student gave 9.0% and 9.6%.
+well (0.3% and 0.4% with people). With the characters walking, each pedestrian's pose following its own gait
+(`--walking_people`), the results hold: 9.1% for the released fused student and 6.4% for the fine-tuned one (6.5% with
+two characters held out of the draw), 9.5% and 7.7% for the lidar-only students. Evaluations with people are not
+bitwise reproducible, unlike those with capsules: over four runs, contacts in which the robot moved varied by at most
+0.6 points and goal rates by at most 0.8.
 
 *Table B5. Pedestrians as the lidar and the depth cameras see them: capsules, as in training, or Isaac Sim characters
 in walking poses (people: the 20 of 80 posed meshes used in the fine-tuning; other poses: 20 others). Released students
