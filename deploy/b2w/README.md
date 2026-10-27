@@ -145,7 +145,8 @@ moved into anyone. Run four more times, the two-people scenario reached the goal
 contacts) and once ran out of its 150 s while the people kept walking into the stopped robot. In four civil
 engineering lab worlds (`python deploy/b2w/sim/export_world.py --kind civil_lab
 --seed 1..4`, run with `SIL_WORLD=<world.json>`; the props are their bounding boxes), the release reached all 8 goals
-(22-59 s) without contacts.
+(22-59 s) without contacts. The student fine-tuned with people meshes (`release:=$PWD/deploy/b2w/release_people`, below)
+reached the goal in the five driving scenarios, the two-people one in 102 s with 6 contacts, none with the robot moving.
 
 ## Troubleshooting
 
