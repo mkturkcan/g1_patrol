@@ -66,60 +66,97 @@ def colored_arrow(s, a, b, color, sw=2.2, dash=None):
 
 
 def topdown(s, x, y, w, h):
-    """Eq. 2 from above: the robot's nine directions against a crossing person's constant-velocity forecast."""
-    s.rect(x, y, w, h, "white")
-    scale, v, g, H, reach = 52.0, 0.8, 0.6, 2.0, 1.6
-    ox, oy = x + w * 0.45, y + h - 15
+    """Eq. 2 from above: where the robot would be after 1 s and 2 s along each of its nine directions (rings), against
+    where a crossing person will be (constant-velocity forecast). A direction is cut at the first time the two come
+    within the gap g; directions that pass behind the person stay open."""
+    s.clip_id += 1
+    cid = f"c{s.clip_id}"
+    s.defs.append(f'<clipPath id="{cid}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4"/></clipPath>')
+    s.rect(x, y, w, h, "white", sw=0)
+    scale, v, g, H = 46.0, 0.8, 0.6, 2.0
+    ox, oy = x + w * 0.44, y + h - 16
     P = lambda mx, my: (ox + mx * scale, oy - my * scale)
-    p0, u = (-0.95, 1.72), (0.9, 0.0)
-    light = "#C9CDD3"
+    p0, u = (-0.95, 1.86), (0.9, 0.0)
+    ink2, faint, ring = "#3c4043", "#EEF0F3", "#B4BAC2"
+    out = [f'<g clip-path="url(#{cid})">']
+    add = out.append
 
-    def halo(tx, ty, text, size=9.5, anchor="middle", color="#3c4043", weight=400):
-        s.body.append(f'<text x="{tx:.1f}" y="{ty:.1f}" font-family="{FONT}" font-size="{size}" font-weight="{weight}" text-anchor="{anchor}" '
-                      f'dominant-baseline="middle" fill="{color}" stroke="#fff" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{text}</text>')
+    def halo(tx, ty, text, size=9.2, anchor="middle", color=ink2, weight=400):
+        add(f'<text x="{tx:.1f}" y="{ty:.1f}" font-family="{FONT}" font-size="{size}" font-weight="{weight}" text-anchor="{anchor}" '
+            f'dominant-baseline="middle" fill="{color}" stroke="#fff" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke">{text}</text>')
 
-    # directions: cut where the gap to the forecast first falls below g
+    def path(d, color, sw, dash=None, cap="round", opacity=1):
+        extra = f' stroke-dasharray="{dash}"' if dash else ""
+        add(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{sw}" stroke-linecap="{cap}" stroke-linejoin="round" opacity="{opacity}"{extra}/>')
+
+    def arrowhead(tip, e, color, size=6.4):
+        bx, by = tip[0] - e[0] * size, tip[1] + e[1] * size
+        nx, ny = e[1] * size * 0.46, e[0] * size * 0.46
+        add(f'<path d="M{tip[0]:.1f},{tip[1]:.1f} L{bx + nx:.1f},{by + ny:.1f} L{bx - nx:.1f},{by - ny:.1f} z" fill="{color}"/>')
+
+    # half-metre grid
+    k = -6
+    while k <= 8:
+        gx = ox + k * 0.5 * scale
+        path(f"M{gx:.1f},{y} V{y + h}", faint, 1)
+        k += 1
+    for k in range(-1, 6):
+        gy = oy - k * 0.5 * scale
+        path(f"M{x},{gy:.1f} H{x + w}", faint, 1)
+    # where the robot would be after 1 s and 2 s
+    for t in (1.0, 2.0):
+        r = v * t * scale
+        a0, a1 = math.radians(-52), math.radians(52)
+        path(f"M{ox + r * math.sin(a0):.1f},{oy - r * math.cos(a0):.1f} A{r:.1f},{r:.1f} 0 0 1 {ox + r * math.sin(a1):.1f},{oy - r * math.cos(a1):.1f}", ring, 1.1, "3 2.6", cap="butt")
+        halo(ox + (r + 1) * math.sin(math.radians(-58)), oy - (r + 1) * math.cos(math.radians(-58)) + 1, f"{t:.0f} s", 8.6, color="#80868b")
+    # the person's forecast: positions after 1 s and 2 s, and the gap that must stay free at 2 s
+    a = P(*p0)
+    end = P(p0[0] + u[0] * (H + 0.42), p0[1])
+    c2 = P(p0[0] + u[0] * H, p0[1])
+    add(f'<circle cx="{c2[0]:.1f}" cy="{c2[1]:.1f}" r="{g * scale:.1f}" fill="{RED}" fill-opacity="0.09" stroke="{RED}" stroke-opacity="0.55" stroke-width="1.1" stroke-dasharray="3 2.4"/>')
+    path(f"M{a[0] + 9:.1f},{a[1]:.1f} H{end[0] - 6:.1f}", GRAY, 1.5, "4 3", cap="butt")
+    arrowhead(end, (1.0, 0.0), GRAY, 6.5)
+    # the nine directions
     marks = []
     for deg in range(-40, 41, 10):
         e = (math.sin(math.radians(deg)), math.cos(math.radians(deg)))
         tstar = next((i / 10 for i in range(1, int(H * 10) + 1)
                       if math.hypot(v * i / 10 * e[0] - p0[0] - u[0] * i / 10, v * i / 10 * e[1] - p0[1] - u[1] * i / 10) < g), None)
-        start, full = P(e[0] * 0.27, e[1] * 0.27), P(e[0] * reach, e[1] * reach)
+        start, full = P(e[0] * 0.36, e[1] * 0.36), P(e[0] * v * H, e[1] * v * H)
         if tstar is None:
-            colored_arrow(s, start, full, BLUE, sw=2.4)
+            stop = P(e[0] * (v * H - 0.1), e[1] * (v * H - 0.1))
+            path(f"M{start[0]:.1f},{start[1]:.1f} L{stop[0]:.1f},{stop[1]:.1f}", BLUE, 2.3, cap="butt")
+            arrowhead(full, e, BLUE)
             continue
-        line(s, f"M{start[0]:.1f},{start[1]:.1f} L{full[0]:.1f},{full[1]:.1f}", light, 1.6, "1 3.2", cap="round")
         c = P(e[0] * v * tstar, e[1] * v * tstar)
-        d = max(v * tstar - 0.2, 0.3)
-        q = P(e[0] * d, e[1] * d)
-        line(s, f"M{start[0]:.1f},{start[1]:.1f} L{q[0]:.1f},{q[1]:.1f}", BLUE, 2.4, cap="round")
+        q = P(e[0] * max(v * tstar - 0.2, 0.3), e[1] * max(v * tstar - 0.2, 0.3))
+        path(f"M{q[0]:.1f},{q[1]:.1f} L{full[0]:.1f},{full[1]:.1f}", "#AEB4BC", 1.5, "0.1 3.1")
+        path(f"M{start[0]:.1f},{start[1]:.1f} L{q[0]:.1f},{q[1]:.1f}", BLUE, 2.3, opacity=0.55)
         marks.append(c)
-    # the person's forecast, with the positions after 1 s and 2 s
-    a, b = P(*p0), P(p0[0] + u[0] * (H + 0.35), p0[1] + u[1] * (H + 0.35))
-    colored_arrow(s, a, b, GRAY, sw=1.6, dash="4 3")
-    for t in (1.0, 2.0):
-        c = P(p0[0] + u[0] * t, p0[1] + u[1] * t)
-        s.body.append(f'<circle cx="{c[0]:.1f}" cy="{c[1]:.1f}" r="6.5" fill="{FILL["pink"]}" fill-opacity="0.75" stroke="{GRAY}" stroke-width="1.4" stroke-dasharray="2.5 2"/>')
-        halo(c[0], c[1] - 13.5, f"{t:.0f} s")
     for c in marks:
-        line(s, f"M{c[0] - 3.2:.1f},{c[1] - 3.2:.1f}l6.4,6.4m0,-6.4l-6.4,6.4", "#fff", 4.2, cap="round")
-        line(s, f"M{c[0] - 3.2:.1f},{c[1] - 3.2:.1f}l6.4,6.4m0,-6.4l-6.4,6.4", RED, 1.9, cap="round")
-    s.body.append(f'<circle cx="{a[0]:.1f}" cy="{a[1]:.1f}" r="7.5" fill="{FILL["pink"]}" stroke="#000" stroke-width="2"/>')
-    halo(a[0] - 12, a[1] + 0.5, "person", 10.5, anchor="end", color="#000")
-    s.body.append(f'<circle cx="{ox:.1f}" cy="{oy:.1f}" r="8.5" fill="{FILL["orange"]}" stroke="#000" stroke-width="2"/>')
-    s.body.append(f'<path d="M{ox - 3.2:.1f},{oy + 1.8:.1f} L{ox:.1f},{oy - 4.2:.1f} L{ox + 3.2:.1f},{oy + 1.8:.1f} z" fill="#000"/>')
-    halo(ox - 13, oy + 0.5, "robot", 10.5, anchor="end", color="#000")
+        path(f"M{c[0] - 2.9:.1f},{c[1] - 2.9:.1f}l5.8,5.8m0,-5.8l-5.8,5.8", "#fff", 4)
+        path(f"M{c[0] - 2.9:.1f},{c[1] - 2.9:.1f}l5.8,5.8m0,-5.8l-5.8,5.8", RED, 1.8)
+    for t in (1.0, 2.0):
+        c = P(p0[0] + u[0] * t, p0[1])
+        add(f'<circle cx="{c[0]:.1f}" cy="{c[1]:.1f}" r="6.2" fill="#F7E6E8" stroke="#000" stroke-opacity="0.55" stroke-width="1.3" stroke-dasharray="2.4 1.9"/>')
+        halo(c[0], c[1] - 12.5, f"{t:.0f} s", 8.6, color="#80868b")
+    add(f'<circle cx="{a[0]:.1f}" cy="{a[1]:.1f}" r="7.2" fill="{FILL["pink"]}" stroke="#000" stroke-width="1.9"/>')
+    halo(a[0] - 11.5, a[1] + 0.5, "person", 9.6, anchor="end", color="#000", weight=500)
+    add(f'<circle cx="{ox:.1f}" cy="{oy:.1f}" r="8.2" fill="{FILL["orange"]}" stroke="#000" stroke-width="1.9"/>')
+    add(f'<path d="M{ox - 3:.1f},{oy + 2:.1f} L{ox:.1f},{oy - 4:.1f} L{ox + 3:.1f},{oy + 2:.1f} z" fill="#000"/>')
+    halo(ox - 12.5, oy + 0.5, "robot", 9.6, anchor="end", color="#000", weight=500)
+    halo(c2[0] + g * scale * 0.72, c2[1] + g * scale * 0.72 + 6, "0.6 m gap", 8.6, anchor="start", color=RED)
     # legend
-    lx, ly = x + w - 84, y + h - 43
-    for k, lab in enumerate(("offered by PAI", "clear now only", "conflict in 2 s")):
-        yy = ly + k * 13.5
-        if k == 0:
-            line(s, f"M{lx},{yy}h13", BLUE, 2.4, cap="round")
-        elif k == 1:
-            line(s, f"M{lx},{yy}h13", "#9aa0a6", 1.6, "1 3.2", cap="round")
-        else:
-            line(s, f"M{lx + 3.5},{yy - 3}l6,6m0,-6l-6,6", RED, 1.9, cap="round")
-        s.text(lx + 18, yy + 0.5, lab, size=9.5, anchor="start", color="#3c4043")
+    lx, ly, lh = x + w - 88, y + h - 43, 12.6
+    add(f'<rect x="{lx - 7}" y="{ly - 9}" width="{89}" height="{3 * lh + 6.5}" rx="3" fill="#fff" fill-opacity="0.92" stroke="#DADCE0" stroke-width="1"/>')
+    path(f"M{lx},{ly}h12", BLUE, 2.3, cap="butt")
+    path(f"M{lx},{ly + lh}h12", "#AEB4BC", 1.5, "0.1 3.1")
+    path(f"M{lx + 3.2},{ly + 2 * lh - 2.8}l5.6,5.6m0,-5.6l-5.6,5.6", RED, 1.8)
+    for k, lab in enumerate(("offered", "cut by forecast", "first conflict")):
+        add(f'<text x="{lx + 17}" y="{ly + k * lh + 0.5:.1f}" font-family="{FONT}" font-size="8.8" dominant-baseline="middle" fill="{ink2}">{lab}</text>')
+    out.append("</g>")
+    s.body.append("".join(out))
+    s.rect(x, y, w, h, "none")
 
 
 def split_image(s, a, b, x, y, w, h):
