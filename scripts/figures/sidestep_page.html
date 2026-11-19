@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sidestep Benchmark</title>
+<meta name="description" content="Sidestep: a closed-loop benchmark of foundation models for humanoid navigation among pedestrians. Results, visualizations and preprint.">
+<meta property="og:title" content="Sidestep: A Closed-Loop Benchmark of Foundation Models for Humanoid Navigation Among Pedestrians">
+<meta property="og:description" content="Foundation models steer a simulated humanoid through New York City streets from an egocentric camera, compared with classical planners and reinforcement-learning policies on the same episodes.">
+<meta property="og:image" content="figures/teaser_bench.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Code:wght@400;500&display=swap">
+<!--STYLE-->
+<style>
+/* Sidestep page */
+:root { --c-ref: #5f6368; --c-nav: #eb6834; --c-er: #1baf7a; --c-vlm: #2a78d6; --c-game: #6250d6; --c-named: #9aa0a6; --c-neg: #eb6834; --c-pos: #2a78d6; }
+.sub { margin-top: 30px; font-size: 1.15rem; font-weight: 500; }
+.space { margin-top: 28px; }
+.findings { margin: 14px 0 0; padding-left: 22px; color: var(--text-2); }
+.findings li { margin-top: 8px; }
+.chart .rowlab { fill: var(--text); font-size: 12.5px; }
+.chart .rowsub { fill: var(--muted); font-size: 12.5px; }
+.chart .val { fill: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chart .axis { stroke: var(--outline); stroke-width: 1; }
+.chart .refline { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .reflab { fill: var(--muted); font-size: 11px; }
+.chart-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chart-legend .ring { width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--c-named); }
+#boardTable { font-size: 0.86rem; }
+#boardTable thead th { cursor: pointer; white-space: normal; vertical-align: bottom; user-select: none; }
+#boardTable thead th[aria-sort="descending"]::after { content: " ↓"; }
+#boardTable thead th[aria-sort="ascending"]::after { content: " ↑"; }
+#boardTable td.num span, #realismTable td.num span { color: var(--muted); font-size: 0.86em; }
+#boardTable .fam { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
+#compareTable td, #compareTable th { font-size: 0.9rem; }
+#compareTable td:first-child { color: var(--muted); white-space: nowrap; }
+#compareTable th:last-child, #compareTable td:last-child { color: var(--text); background: var(--surface); padding-left: 12px; }
+#compareTable th, #compareTable td { padding-right: 14px; }
+.videos2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 760px) { .videos2 { grid-template-columns: 1fr; } }
+.videos2 video { width: 100%; border-radius: 12px; background: #000; }
+.videos2 p { margin-top: 8px; font-size: 0.9rem; color: var(--muted); }
+figure { margin: 0; }
+.chart-head .seg { max-width: 100%; flex-wrap: wrap; border-radius: 18px; }
+#boardTable { min-width: 860px; } #realismTable { min-width: 720px; } #compareTable { min-width: 720px; }
+figure img { width: 100%; border-radius: 10px; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wide">
+    <a class="mark" href="../">G1 Patrol</a>
+    <nav aria-label="Sections">
+      <a href="#abstract">Abstract</a>
+      <a href="#benchmark">Benchmark</a>
+      <a href="#leaderboard">Leaderboard</a>
+      <a href="#analysis">Analysis</a>
+      <a href="#realism">Realism</a>
+      <a href="#related">Related benchmarks</a>
+      <a class="gh" href="sidestep.pdf">Paper</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="col titleblock">
+    <h1>Sidestep: A Closed-Loop Benchmark of Foundation Models for Humanoid Navigation Among Pedestrians</h1>
+    <p class="authors">Mehmet Kerem Turkcan</p>
+    <div class="links">
+      <a href="sidestep.pdf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Paper (PDF)</a>
+      <a href="sidestep_supp.pdf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>Supplement</a>
+      <a href="https://github.com/mkturkcan/g1_patrol"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17 4.6 18 4.9 18 4.9c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.800 1.2 3.100 0 4.400-2.700 5.400-5.300 5.700.4.4.800 1.100.800 2.200v3.300c0 .3.2.7.800.6A11.500 11.500 0 0 0 23.500 12C23.500 5.700 18.300.5 12 .5z"/></svg>Repository</a>
+      <a href="../"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h18M3 12l6-6M3 12l6 6"/></svg>G1 Patrol</a>
+    </div>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <img src="figures/teaser_bench.jpg" alt="A Unitree G1 crossing a street among pedestrians; the model's camera view with marked candidate motions; clear distances seen from above" width="1485" height="288">
+      <figcaption><b>Figure 1.</b> Foundation models drive a simulated Unitree G1 through New York City sidewalks and crosswalks from its head camera. Left: a logged crossing episode. Middle: the model's view with arrows for directions that are clear now, and with the predictive affordance interface (PAI), which draws only motions forecast to stay clear of tracked pedestrians. Right: clear distances from above in a constructed scene.</figcaption>
+    </figure>
+  </div>
+
+  <section id="abstract" class="col abstract">
+    <h2>Abstract</h2>
+    <p>For robots and people to share everyday spaces, safe navigation through crowded, unstructured human environments is a prerequisite and the starting point for any form of human-robot coordination in the real world. Foundation models are increasingly proposed as general-purpose robot controllers, but whether they meet this requirement has not been established. As a first step, we introduce Sidestep, a closed-loop benchmark in which foundation models steer a simulated humanoid through New York City streets from an egocentric camera. We evaluate navigation, vision-language-action and general vision-language models against classical planners and reinforcement-learning policies. Specialized navigation models often fall below a blind goal-seeking baseline, and general vision-language models fail predominantly by colliding with pedestrians. Surprisingly, the same models localize pedestrians and recognize their walking direction, which indicates that they perceive pedestrians but do not anticipate their motion. We therefore propose a predictive affordance interface (PAI) that restricts a model's choices to motions forecast to remain free of collisions. The PAI substantially improves the success of most models, yet a gap to classical planners and to policies trained for the robot's sensors remains. We further study whether these findings hold when rendered views are replaced with realistic video generated in the control loop. Our results identify anticipation of human motion as a central open problem for robots that share space with people.</p>
+  </section>
+
+  <section id="findings" class="col">
+    <h2>Main results</h2>
+    <ul class="findings">
+      <li><b>Navigation models.</b> The five navigation-model configurations succeed in 5–14% of the goal-track test episodes. A goal seeker without perception succeeds in 19%.</li>
+      <li><b>General vision-language models.</b> Given arrows for directions that are currently clear, the six models succeed in 24–42% of the episodes, and 29–38% of their episodes end in contact with a pedestrian.</li>
+      <li><b>Predictive affordance interface.</b> The PAI raises the success of nine of ten models. The best model, Gemma 4 31B, rises from 34% to 62%, and its pedestrian contacts fall from 35% to 15%.</li>
+      <li><b>References.</b> With the same inputs, a dynamic-window planner succeeds in 64% and ORCA in 67% of the episodes. Reinforcement-learning policies reach 66% with lidar, 68% with a depth camera and 71% with privileged state.</li>
+      <li><b>Realistic video in the loop.</b> With the PAI, success on realistic video is 58.3% against 61.5% on renders for Qwen3.5-27B and 58.9% against 61.5% for Gemma 4 31B; neither difference is significant. EgoActor-8B, which acts on raw images, falls from 15.6% to 8.3%.</li>
+    </ul>
+  </section>
+
+  <section id="benchmark" class="col">
+    <h2>Benchmark</h2>
+    <p class="prose">A simulated Unitree G1 humanoid walks with a learned locomotion policy that tracks velocity commands. Every controller sets these commands and none controls joints. The model under test receives images from the head camera and, on the goal track, the goal's position relative to the robot. An episode succeeds when the robot crosses the goal line. It fails on contact with a pedestrian or a structure, on entering the roadway outside a crosswalk, on a fall, or after 40 s. All controllers play the same seeded episodes.</p>
+    <div class="tablewrap space">
+      <table>
+        <tbody>
+          <tr><td class="def">Robot</td><td>Unitree G1 in Isaac Lab; learned walking policy at 50 Hz; forward −0.4 to 1.0 m/s, lateral ±0.15 m/s, yaw rate ±1 rad/s</td></tr>
+          <tr><td class="def">Observation</td><td>Head camera 1.2 m above the ground, 640 × 360, 90° horizontal field of view, ray-traced; pedestrians drawn as animated characters</td></tr>
+          <tr><td class="def">Scenes</td><td>Procedural New York City street tiles (16 × 10 m) of six types at ten difficulty levels; walkways from 5.0 down to 1.25 m; 4 to 20 pedestrians per tile</td></tr>
+          <tr><td class="def">Pedestrians</td><td>Social-force model on walking paths, most timed to cross the robot's route; 10–40% do not notice the robot and react only within 1 m</td></tr>
+          <tr><td class="def">Setups</td><td>Sidewalk (open sidewalks, sidewalk sheds, construction zones, doorways; goal about 14 m ahead) and Crossing (crosswalks and plazas; goal 7–13 m away)</td></tr>
+          <tr><td class="def">Tracks</td><td>Goal track (goal position given) and language track (task given in words only)</td></tr>
+          <tr><td class="def">Test set</td><td>192 episodes per controller on the goal track (96 per setup), identical for every controller</td></tr>
+          <tr><td class="def">Metrics</td><td>Success; rates of pedestrian contact, structure contact, roadway entry and time-out; 95% Wilson intervals; paired tests on the same episodes</td></tr>
+          <tr><td class="def">Controllers</td><td>15 foundation models in 33 configurations; rule-based, planning (dynamic window, ORCA) and reinforcement-learning references (privileged state, lidar, depth camera)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="videos2 space">
+      <div>
+        <video controls muted loop playsinline preload="none" poster="media/gemma_pai_c1r27_side.jpg" src="media/gemma_pai_c1r27_side.mp4"></video>
+        <p>Gemma 4 31B with the PAI crossing a plaza (goal reached in 20.0 s).</p>
+      </div>
+      <div>
+        <video controls muted loop playsinline preload="none" poster="media/gemma_pai_c1r4_chase.jpg" src="media/gemma_pai_c1r4_chase.mp4"></video>
+        <p>A failure with the PAI on a crosswalk: a pedestrian who does not notice the robot walks into it while it stands still (contact at 6.0 s).</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="leaderboard" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Leaderboard</h2>
+      <p class="prose">Success on the goal track over both setups, with 95% Wilson intervals. Each row is one controller and interface. Vision-language models are run through named actions, through VLMnav's arrows and through the PAI. The PAI runs used other inference servers than the main evaluation; the paper's paired comparisons use runs from the same server.</p>
+    </div>
+    <figure class="space">
+      <div class="chart-head">
+        <div class="chart-legend" id="boardLegend"></div>
+        <div class="seg" id="boardSeg" role="group" aria-label="Controller family"></div>
+      </div>
+      <div class="chart" id="boardChart"></div>
+      <figcaption><b>Figure 2.</b> Goal-track success of every controller (192 test episodes each, the same for all). Whiskers: 95% Wilson intervals. Dashed lines: the blind goal seeker, the dynamic-window planner with the PAI's inputs, and the reinforcement-learning policy with privileged state.</figcaption>
+    </figure>
+    <details class="table" open>
+      <summary>Table 1. All controllers, both tracks (select a column header to sort)</summary>
+      <div class="tablewrap"><table id="boardTable"></table></div>
+    </details>
+    <p class="prose space" style="font-size:0.92rem">Success and contact rates in percent; brackets: 95% Wilson intervals. "≥ 0.5 m": success counting only episodes in which the robot never came within 0.5 m of anyone. "–": not run (the goal track needs the goal's position, the language track a model that reads instructions).</p>
+  </section>
+
+  <section id="analysis" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Analysis</h2>
+      <h3 class="sub" style="margin-top:0">Effect of the Interface</h3>
+      <p class="prose">The same model is evaluated through three interfaces. Arrows for currently clear directions help most models reach the goal but leave pedestrian contacts high. The PAI, which offers only motions forecast to stay clear, raises the success of nine of the ten models and lowers the pedestrian contacts of most. The exception is Hy-Embodied-VLM-1.0, which mostly selects the interface's single-step options.</p>
+    </div>
+    <figure class="space">
+      <div class="chart-head">
+        <div class="chart-legend" id="ifaceLegend"></div>
+        <div class="seg" id="ifaceSeg" role="group" aria-label="Metric"></div>
+      </div>
+      <div class="chart" id="ifaceChart"></div>
+      <figcaption><b>Figure 3.</b> Each vision-language model through named actions, VLMnav's arrows and the PAI on the goal track. The metric can be switched between success and pedestrian contact. Dashed line: the dynamic-window planner with the PAI's inputs.</figcaption>
+    </figure>
+
+    <div class="col space" style="padding:0">
+      <h3 class="sub">Success and Pedestrian Contact</h3>
+      <p class="prose">Controllers with the PAI and the references occupy the region of high success and low pedestrian contact. Navigation models have low rates of both, because most of their episodes end in structure contacts, roadway entries or time-outs.</p>
+    </div>
+    <figure class="space">
+      <div class="chart-legend" id="scatterLegend"></div>
+      <div class="chart" id="scatterChart"></div>
+      <figcaption><b>Figure 4.</b> Goal-track success against the share of episodes ending in pedestrian contact, one point per controller and interface. Filled points: PAI or reference; open points: other interfaces.</figcaption>
+    </figure>
+
+    <div class="col space" style="padding:0">
+      <h3 class="sub">Ablation of the Interface Components</h3>
+      <p class="prose">A fractional factorial design switches the PAI's components on and off. Anticipation, the forecast of pedestrian motion, has the largest estimated effect on success (+8.6 points) and accounts for the reduction in pedestrian contacts (−16.1 points). Clearance from structures and the roadway map reduce structure contacts and roadway entries, respectively.</p>
+    </div>
+    <figure class="space">
+      <div class="chart-head">
+        <div class="chart-legend" id="factLegend"></div>
+        <div class="seg" id="factSeg" role="group" aria-label="Outcome"></div>
+      </div>
+      <div class="chart" id="factChart"></div>
+      <figcaption><b>Figure 5.</b> Main effects of the PAI's components on the outcome rates (percentage points; within-episode contrasts, 95% intervals). Filled bars: intervals that exclude zero.</figcaption>
+    </figure>
+  </section>
+
+  <section id="realism" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Closed-Loop Realism</h2>
+      <p class="prose">Rendered images may disadvantage models trained on real imagery. The realism track therefore replaces each rendered view with realistic video: a causal video model transfers the robot's view as it is rendered, and the model under test acts on the transfer while the simulator keeps the state and scores the episode.</p>
+    </div>
+    <figure class="space">
+      <img src="figures/realism_examples.jpg" alt="Pairs of rendered views and their realistic transfers in four episodes" loading="lazy" style="max-width:820px;margin-inline:auto">
+      <figcaption><b>Figure 6.</b> Renders (left) and their streamed transfers as the model received them (right) in four episodes. The transfer keeps the layout of the scene and the positions and poses of the people, and changes materials, clothing and lighting.</figcaption>
+    </figure>
+    <figure class="space">
+      <div class="chart-legend" id="realLegend"></div>
+      <div class="chart" id="realChart"></div>
+      <figcaption><b>Figure 7.</b> Success on rendered views and on realistic video for the same 192 episodes per arm. Values at the right: transfer minus render in percentage points with the 95% bootstrap interval.</figcaption>
+    </figure>
+    <details class="table">
+      <summary>Table 2. Realism track, both setups</summary>
+      <div class="tablewrap"><table id="realismTable"></table></div>
+    </details>
+  </section>
+
+  <section id="related" class="wide">
+    <div class="col" style="padding:0">
+      <h2>Relation to Sidewalk Navigation Benchmarks</h2>
+      <p class="prose">Two recent works study the same setting. <a href="https://vail.cs.ucla.edu/SidewalkBench/">SidewalkBench</a> (Liu et al., CoRL 2026) evaluates nine visual navigation models on procedurally generated and scanned sidewalk scenes and reports that pedestrian interaction remains a bottleneck. <a href="https://arxiv.org/abs/2606.12603">FlowPilot</a> (He et al., 2026) is a monocular navigation policy pretrained on delivery-robot fleet data and tuned with human interventions. Both are stronger than Sidestep in scene diversity, route length, scanned real scenes and real-robot tests. Sidestep addresses different questions:</p>
+      <ul class="findings">
+        <li><b>Which model families are tested.</b> Sidestep evaluates general vision-language models, embodied reasoning models and vision-language-action models in addition to navigation models. CityWalker and InternVLA-N1 appear in both benchmarks, and the low success of navigation models here is consistent with SidewalkBench.</li>
+        <li><b>What the task permits.</b> Planners and reinforcement-learning policies run on the same episodes, with and without privileged state. A model's score is therefore read against what a non-learned planner or a sensor-trained policy achieves, which neither prior work reports.</li>
+        <li><b>Why the models fail.</b> SidewalkBench quantifies failures and states that it does not analyze their causes. Sidestep probes perception directly and uses a factorial intervention, which attributes the dominant failure to missing anticipation of pedestrian motion.</li>
+        <li><b>A remedy without training.</b> SidewalkBench and FlowPilot improve models by fine-tuning on synthetic or intervention data. The PAI changes only the interface and applies to any decision maker.</li>
+        <li><b>Embodiment and pedestrians.</b> The robot is a humanoid with a learned walking policy. Pedestrians react to the robot through a social-force model and a fraction of them are inattentive; SidewalkBench scripts eight behaviors triggered by the robot's position.</li>
+        <li><b>Realism.</b> Sidestep streams generative video into the control loop on the same episodes, which is complementary to SidewalkBench's Gaussian-splatting scans.</li>
+        <li><b>Statistics.</b> Every configuration is reported with a confidence interval, and comparisons use paired tests on identical episodes.</li>
+      </ul>
+    </div>
+    <div class="tablewrap space">
+      <table id="compareTable">
+        <thead><tr><th></th><th>SidewalkBench</th><th>FlowPilot</th><th>Sidestep (this work)</th></tr></thead>
+        <tbody>
+          <tr><td>Contribution</td><td>Benchmark</td><td>Navigation policy</td><td>Benchmark and a diagnostic interface (PAI)</td></tr>
+          <tr><td>Models evaluated</td><td>9 visual navigation models</td><td>FlowPilot and 7 navigation baselines</td><td>15 foundation models: navigation, vision-language-action, embodied reasoning and general vision-language models</td></tr>
+          <tr><td>References on the same episodes</td><td>None</td><td>Imitation and DAgger variants</td><td>Rule-based, dynamic window, ORCA; RL with privileged state, lidar, depth</td></tr>
+          <tr><td>Robot</td><td>Sidewalk robot, monocular RGB</td><td>Wheeled delivery robot, monocular RGB</td><td>Humanoid (Unitree G1) with a learned walking policy, head camera</td></tr>
+          <tr><td>Pedestrians</td><td>8 scripted behaviors triggered by the robot's position</td><td>Not stated</td><td>Social-force model, reactive, 10–40% inattentive</td></tr>
+          <tr><td>Scenes</td><td>100 procedural scenes (2 × 2 km), 11 scanned blocks</td><td>Procedural scenes, 36 km of routes</td><td>Procedural street tiles (16 × 10 m), 6 types, 10 difficulty levels</td></tr>
+          <tr><td>Route length</td><td>Up to more than 100 m</td><td>More than 100 m</td><td>7–14 m</td></tr>
+          <tr><td>Failure analysis</td><td>Failure counts; causes not analyzed</td><td>–</td><td>Perception probes, contact attribution, factorial intervention</td></tr>
+          <tr><td>Remedy studied</td><td>Fine-tuning on synthetic data</td><td>Tuning on human interventions</td><td>Training-free interface with motion forecasts</td></tr>
+          <tr><td>Realism</td><td>Gaussian-splatting scans</td><td>Real-robot tests</td><td>Generative video streamed in the control loop</td></tr>
+          <tr><td>Real-robot tests</td><td>Small-scale</td><td>Yes (2.8 km and 17.8 km)</td><td>None</td></tr>
+          <tr><td>Reporting</td><td>Mean and standard deviation over 5 seeds</td><td>300 trials per method</td><td>192 paired episodes per controller, 95% intervals, paired tests</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose space" style="font-size:0.92rem;max-width:860px;margin-inline:auto">Entries for the two prior works are taken from their arXiv versions (2606.16953 and 2606.12603).</p>
+  </section>
+
+  <section id="limitations" class="col">
+    <h2>Limitations</h2>
+    <p class="prose">All results are in simulation. The PAI's inputs other than the camera tracker are ideal (the simulator's tracks and obstacles, exact depth and localization), and the simulation pauses while a model decides. Pedestrians follow a social-force model with scripted routes. The realism track uses one video model. Routes are short, and the benchmark covers one humanoid, one city and open models only.</p>
+  </section>
+
+  <section id="cite" class="col">
+    <h2>Citation</h2>
+    <pre class="bibtex" id="bib">@misc{turkcan2026sidestep,
+  title  = {Sidestep: A Closed-Loop Benchmark of Foundation Models for Humanoid Navigation Among Pedestrians},
+  author = {Turkcan, Mehmet Kerem},
+  year   = {2026},
+  note   = {Preprint},
+  url    = {https://mkturkcan.github.io/g1_patrol/sidestep/}
+}</pre>
+    <button class="copy" type="button" id="copyBib">Copy BibTeX</button>
+  </section>
+</main>
+
+<footer><div class="wide"><span>Sidestep benchmark · part of <a href="../">G1 Patrol</a></span><span><a href="#top">Back to top</a></span></div></footer>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(function () {
+"use strict";
+var D = JSON.parse(document.getElementById("data").textContent);
+var FAM = { ref: ["References", "var(--c-ref)"], nav: ["Navigation models", "var(--c-nav)"], er: ["Embodied reasoning models", "var(--c-er)"], vlm: ["General vision-language models", "var(--c-vlm)"], game: ["Game agent", "var(--c-game)"] };
+var NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) {
+  var e = document.createElementNS(NS, tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function h(tag, attrs, parent, html) {
+  var e = document.createElement(tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  if (html != null) e.innerHTML = html;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+function fmt(v) { return v == null ? "–" : (Math.round(v * 10) / 10).toString().replace("-", "−"); }
+function signed(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + (Math.abs(v) % 1 === 0 && Math.abs(v) >= 10 ? Math.abs(v) : Math.abs(v).toFixed(1)); }
+function ci(t) { return t ? fmt(t[0]) + (t[1] != null ? " <span>[" + fmt(t[1]) + ", " + fmt(t[2]) + "]</span>" : "") : "–"; }
+function label(r) { return r.name + (r.iface ? " · " + r.iface : ""); }
+function legend(id, items) {
+  var box = document.getElementById(id); box.innerHTML = "";
+  items.forEach(function (it) { h("span", {}, box, '<i class="' + (it[2] || "") + '" style="' + (it[2] === "ring" ? "border-color:" + it[1] : "background:" + it[1]) + '"></i>' + esc(it[0])); });
+}
+function seg(id, options, onpick) {
+  var box = document.getElementById(id), cur = options[0][0];
+  options.forEach(function (o) {
+    var b = h("button", { type: "button", "aria-pressed": o[0] === cur }, box, esc(o[1]));
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(box.children, function (c) { c.setAttribute("aria-pressed", c === b); });
+      onpick(o[0]);
+    });
+  });
+}
+function tipFor(chart) {
+  var tip = h("div", { class: "tip", hidden: "" }, chart);
+  return {
+    show: function (evt, html) {
+      var r = chart.getBoundingClientRect();
+      tip.innerHTML = html; tip.hidden = false;
+      var x = Math.max(110, Math.min(r.width - 110, evt.clientX - r.left));
+      tip.style.left = x + "px"; tip.style.top = (evt.clientY - r.top) + "px";
+    },
+    hide: function () { tip.hidden = true; }
+  };
+}
+function hover(node, tip, html) {
+  node.addEventListener("pointermove", function (e) { tip.show(e, html); });
+  node.addEventListener("pointerleave", tip.hide);
+}
+function frame(id, height) {
+  var chart = document.getElementById(id); chart.innerHTML = "";
+  var W = Math.max(320, chart.clientWidth);
+  var svg = el("svg", { viewBox: "0 0 " + W + " " + height, width: W, height: height, role: "img" }, chart);
+  return { chart: chart, svg: svg, W: W, tip: tipFor(chart) };
+}
+function xaxis(f, x, y0, y1, ticks, unit) {
+  ticks.forEach(function (t) {
+    el("line", { class: "grid", x1: x(t), x2: x(t), y1: y0, y2: y1 }, f.svg);
+    el("text", { x: x(t), y: y1 + 16, "text-anchor": "middle" }, f.svg, fmt(t) + (unit || ""));
+  });
+}
+function refline(f, x, v, y0, y1, text, anchor) {
+  el("line", { class: "refline", x1: x(v), x2: x(v), y1: y0, y2: y1 }, f.svg);
+  el("text", { class: "reflab", x: x(v), y: y0 - 5, "text-anchor": anchor || "middle" }, f.svg, text);
+}
+function byName(name, iface) { return D.board.filter(function (r) { return r.name === name && (iface == null || r.iface === iface); })[0]; }
+var SEEK = byName("Blind goal seeker").succ[0], DWA = byName("Dynamic-window planner"), PRIV = byName("RL policy, privileged state").succ[0];
+
+/* Figure 2: leaderboard */
+var boardFamily = "all";
+function drawBoard() {
+  var rows = D.board.filter(function (r) { return r.succ && (boardFamily === "all" || r.family === boardFamily); })
+    .sort(function (a, b) { return b.succ[0] - a.succ[0]; });
+  var narrow = document.getElementById("boardChart").clientWidth < 640;
+  var rh = narrow ? 34 : 22, top = 26, f = frame("boardChart", top + rows.length * rh + 26);
+  var left = narrow ? 8 : 300, right = f.W - 46;
+  var x = function (v) { return left + (right - left) * v / 80; };
+  xaxis(f, x, top, top + rows.length * rh, [0, 20, 40, 60, 80], "%");
+  refline(f, x, SEEK, top, top + rows.length * rh, "goal seeker");
+  refline(f, x, DWA.succ[0], top, top + rows.length * rh, "planner", "end");
+  refline(f, x, PRIV, top, top + rows.length * rh, narrow ? "RL" : "privileged RL", "start");
+  rows.forEach(function (r, i) {
+    var y = top + i * rh + (narrow ? 24 : rh / 2), c = FAM[r.family][1], g = el("g", {}, f.svg);
+    if (narrow) el("text", { class: "rowlab", x: left, y: y - 11 }, g, label(r));
+    else {
+      var t = el("text", { class: "rowlab", x: left - 12, y: y + 4, "text-anchor": "end" }, g, r.name);
+      if (r.iface) el("tspan", { class: "rowsub" }, t, " · " + r.iface);
+    }
+    el("line", { x1: x(r.succ[1]), x2: x(r.succ[2]), y1: y, y2: y, stroke: c, "stroke-width": 2, "stroke-linecap": "round", opacity: 0.45 }, g);
+    el("circle", { cx: x(r.succ[0]), cy: y, r: 5, fill: c, stroke: "#fff", "stroke-width": 2 }, g);
+    el("text", { class: "val", x: right + 8, y: y + 4 }, g, fmt(r.succ[0]));
+    var hit = el("rect", { class: "hit", x: 0, y: top + i * rh, width: f.W, height: rh }, g);
+    hover(hit, f.tip, "<b>" + esc(label(r)) + "</b><br>" + FAM[r.family][0] + "<br>Success " + fmt(r.succ[0]) + "% [" + fmt(r.succ[1]) + ", " + fmt(r.succ[2]) + "]<br>Sidewalk " + fmt(r.sidewalk) + "% · Crossing " + fmt(r.crossing) + "%<br>Pedestrian contact " + fmt(r.ped[0]) + "%");
+  });
+}
+legend("boardLegend", ["ref", "nav", "er", "vlm"].map(function (k) { return [FAM[k][0], FAM[k][1], "dot"]; }));
+seg("boardSeg", [["all", "All"], ["ref", "References"], ["nav", "Navigation"], ["er", "Embodied reasoning"], ["vlm", "General VLMs"]], function (k) { boardFamily = k; drawBoard(); });
+
+/* Table 1 */
+var COLS = [["Controller", function (r) { return r.name; }, 0], ["Interface", function (r) { return r.iface; }, 0],
+  ["Success", function (r) { return r.succ; }, 1], ["Sidewalk", function (r) { return r.sidewalk; }, 1], ["Crossing", function (r) { return r.crossing; }, 1],
+  ["≥ 0.5 m", function (r) { return r.clear; }, 1], ["Pedestrian contact", function (r) { return r.ped; }, 1],
+  ["Language: sidewalk", function (r) { return r.lang_sidewalk; }, 1], ["Language: crossing", function (r) { return r.lang_crossing; }, 1], ["Language: ped. contact", function (r) { return r.lang_ped; }, 1]];
+var sortCol = 2, sortDir = -1;
+function scalar(v) { return v == null ? null : Array.isArray(v) ? v[0] : v; }
+function drawTable() {
+  var t = document.getElementById("boardTable"); t.innerHTML = "";
+  var tr = h("tr", {}, h("thead", {}, t));
+  COLS.forEach(function (c, i) {
+    var th = h("th", { class: c[2] ? "num" : "", scope: "col", tabindex: 0 }, tr, esc(c[0]));
+    if (i === sortCol) th.setAttribute("aria-sort", sortDir < 0 ? "descending" : "ascending");
+    var pick = function () { if (sortCol === i) sortDir = -sortDir; else { sortCol = i; sortDir = c[2] ? -1 : 1; } drawTable(); };
+    th.addEventListener("click", pick);
+    th.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+  var get = COLS[sortCol][1], body = h("tbody", {}, t);
+  D.board.slice().sort(function (a, b) {
+    var u = scalar(get(a)), v = scalar(get(b));
+    if (u == null || u === "") return 1; if (v == null || v === "") return -1;
+    return (typeof u === "string" ? u.localeCompare(v) : u - v) * sortDir;
+  }).forEach(function (r) {
+    var row = h("tr", {}, body);
+    COLS.forEach(function (c, i) {
+      var v = c[1](r);
+      if (i === 0) h("td", {}, row, '<i class="fam" style="background:' + FAM[r.family][1] + '" title="' + FAM[r.family][0] + '"></i>' + esc(v));
+      else if (!c[2]) h("td", {}, row, esc(v || ""));
+      else h("td", { class: "num" }, row, Array.isArray(v) ? ci(v) : fmt(v));
+    });
+  });
+}
+
+/* Figure 3: interfaces */
+var IFACE = [["named actions", "Named actions", "var(--c-named)"], ["VLMnav", "VLMnav arrows", "var(--c-nav)"], ["PAI", "PAI", "var(--c-vlm)"]];
+var ifaceMetric = "succ";
+function drawIface() {
+  var names = [];
+  D.board.forEach(function (r) { if ((r.family === "vlm" || r.family === "er") && r.iface === "PAI" && names.indexOf(r.name) < 0) names.push(r.name); });
+  names.sort(function (a, b) { return byName(b, "PAI")[ifaceMetric][0] - byName(a, "PAI")[ifaceMetric][0]; });
+  if (ifaceMetric === "ped") names.reverse();
+  var narrow = document.getElementById("ifaceChart").clientWidth < 640;
+  var rh = narrow ? 40 : 30, top = 26, f = frame("ifaceChart", top + names.length * rh + 26);
+  var left = narrow ? 8 : 190, right = f.W - 20, max = ifaceMetric === "succ" ? 80 : 50;
+  var x = function (v) { return left + (right - left) * v / max; };
+  xaxis(f, x, top, top + names.length * rh, ifaceMetric === "succ" ? [0, 20, 40, 60, 80] : [0, 10, 20, 30, 40, 50], "%");
+  refline(f, x, DWA[ifaceMetric][0], top, top + names.length * rh, "planner");
+  names.forEach(function (n, i) {
+    var y = top + i * rh + (narrow ? 27 : rh / 2), g = el("g", {}, f.svg);
+    el("text", { class: "rowlab", x: narrow ? left : left - 12, y: narrow ? y - 12 : y + 4, "text-anchor": narrow ? "start" : "end" }, g, n);
+    var pts = IFACE.map(function (it) { var r = byName(n, it[0]); return r && r[ifaceMetric] ? [it, r[ifaceMetric]] : null; }).filter(Boolean);
+    var xs = pts.map(function (p) { return x(p[1][0]); });
+    el("line", { x1: Math.min.apply(null, xs), x2: Math.max.apply(null, xs), y1: y, y2: y, stroke: "var(--outline)", "stroke-width": 2 }, g);
+    var html = "<b>" + esc(n) + "</b>";
+    pts.forEach(function (p) {
+      if (p[0][0] === "named actions") el("circle", { cx: x(p[1][0]), cy: y, r: 4.5, fill: "#fff", stroke: p[0][2], "stroke-width": 2 }, g);
+      else el("circle", { cx: x(p[1][0]), cy: y, r: 5.5, fill: p[0][2], stroke: "#fff", "stroke-width": 2 }, g);
+      html += "<br>" + p[0][1] + ": " + fmt(p[1][0]) + "% [" + fmt(p[1][1]) + ", " + fmt(p[1][2]) + "]";
+    });
+    hover(el("rect", { class: "hit", x: 0, y: top + i * rh, width: f.W, height: rh }, g), f.tip, html);
+  });
+}
+legend("ifaceLegend", IFACE.map(function (it) { return [it[1], it[2], it[0] === "named actions" ? "ring" : "dot"]; }));
+seg("ifaceSeg", [["succ", "Success"], ["ped", "Pedestrian contact"]], function (k) { ifaceMetric = k; drawIface(); });
+
+/* Figure 4: success against pedestrian contact */
+function drawScatter() {
+  var rows = D.board.filter(function (r) { return r.succ && r.ped; });
+  var H = 420, f = frame("scatterChart", H), left = 48, right = f.W - 16, top = 14, bottom = H - 44;
+  var x = function (v) { return left + (right - left) * v / 55; }, y = function (v) { return bottom - (bottom - top) * v / 80; };
+  [0, 10, 20, 30, 40, 50].forEach(function (t) {
+    el("line", { class: "grid", x1: x(t), x2: x(t), y1: top, y2: bottom }, f.svg);
+    el("text", { x: x(t), y: bottom + 16, "text-anchor": "middle" }, f.svg, t + "%");
+  });
+  [0, 20, 40, 60, 80].forEach(function (t) {
+    el("line", { class: "grid", x1: left, x2: right, y1: y(t), y2: y(t) }, f.svg);
+    el("text", { x: left - 8, y: y(t) + 4, "text-anchor": "end" }, f.svg, t + "%");
+  });
+  el("text", { x: (left + right) / 2, y: H - 6, "text-anchor": "middle" }, f.svg, "Episodes ending in pedestrian contact");
+  el("text", { x: left, y: top - 2, "text-anchor": "start" }, f.svg, "Success");
+  var named = { "Gemma 4 31B|PAI": "Gemma 4 31B, PAI", "Dynamic-window planner|PAI inputs": "Planner", "RL policy, privileged state|": "Privileged RL", "Blind goal seeker|": "Goal seeker", "Qwen3.5-27B|VLMnav": "Qwen3.5-27B, VLMnav" };
+  rows.forEach(function (r) {
+    var c = FAM[r.family][1], solid = r.iface === "PAI" || r.family === "ref", cx = x(r.ped[0]), cy = y(r.succ[0]);
+    el("circle", { cx: cx, cy: cy, r: 6, fill: solid ? c : "#fff", stroke: solid ? "#fff" : c, "stroke-width": 2 }, f.svg);
+    var tag = named[r.name + "|" + r.iface];
+    if (tag) el("text", { class: "rowsub", x: cx + 10, y: cy + (tag === "Planner" ? -8 : tag.indexOf("Gemma") === 0 ? 14 : 4) }, f.svg, tag);
+    hover(el("circle", { class: "hit", cx: cx, cy: cy, r: 12 }, f.svg), f.tip, "<b>" + esc(label(r)) + "</b><br>Success " + fmt(r.succ[0]) + "%<br>Pedestrian contact " + fmt(r.ped[0]) + "%");
+  });
+}
+legend("scatterLegend", ["ref", "nav", "er", "vlm"].map(function (k) { return [FAM[k][0], FAM[k][1], "dot"]; }));
+
+/* Figure 5: factorial */
+var FACT = [["succ", "Success"], ["ped", "Pedestrian contact"], ["structure", "Structure contact"], ["roadway", "Roadway entry"], ["timeout", "Time-out"]];
+var factKey = "succ";
+function drawFact() {
+  var rows = D.factorial, idx = FACT.map(function (o) { return o[0]; }).indexOf(factKey);
+  var narrow = document.getElementById("factChart").clientWidth < 560;
+  var rh = narrow ? 42 : 34, top = 12, f = frame("factChart", top + rows.length * rh + 26);
+  var left = narrow ? 8 : 170, right = f.W - 60, lim = 20;
+  var x = function (v) { return left + (right - left) * (v + lim) / (2 * lim); };
+  [-20, -10, 0, 10, 20].forEach(function (t) {
+    el("line", { class: t === 0 ? "axis" : "grid", x1: x(t), x2: x(t), y1: top, y2: top + rows.length * rh }, f.svg);
+    el("text", { x: x(t), y: top + rows.length * rh + 16, "text-anchor": "middle" }, f.svg, signed(t));
+  });
+  rows.forEach(function (r, i) {
+    var v = r[factKey], y = top + i * rh + (narrow ? 26 : rh / 2), g = el("g", {}, f.svg), sig = r.sig[idx];
+    var c = v[0] < 0 ? "var(--c-neg)" : "var(--c-pos)";
+    el("text", { class: "rowlab", x: narrow ? left : left - 12, y: narrow ? y - 13 : y + 4, "text-anchor": narrow ? "start" : "end" }, g, r.name);
+    var x0 = Math.min(x(0), x(v[0])), w = Math.max(1, Math.abs(x(v[0]) - x(0)));
+    el("rect", { x: x0, y: y - 7, width: w, height: 14, rx: 3, fill: sig ? c : "#fff", stroke: c, "stroke-width": sig ? 0 : 1.5 }, g);
+    el("line", { x1: x(v[1]), x2: x(v[2]), y1: y, y2: y, stroke: "var(--text)", "stroke-width": 1.5 }, g);
+    el("text", { class: "val", x: right + 8, y: y + 4 }, g, signed(v[0]));
+    hover(el("rect", { class: "hit", x: 0, y: top + i * rh, width: f.W, height: rh }, g), f.tip, "<b>" + esc(r.name) + "</b><br>" + FACT[idx][1] + ": " + signed(v[0]) + " points [" + signed(v[1]) + ", " + signed(v[2]) + "]");
+  });
+}
+legend("factLegend", [["Increase", "var(--c-pos)"], ["Decrease", "var(--c-neg)"]]);
+seg("factSeg", FACT, function (k) { factKey = k; drawFact(); });
+
+/* Figure 7: realism */
+function drawReal() {
+  var rows = D.realism, narrow = document.getElementById("realChart").clientWidth < 640;
+  var rh = narrow ? 42 : 30, top = 12, f = frame("realChart", top + rows.length * rh + 26);
+  var left = narrow ? 8 : 300, right = f.W - (narrow ? 110 : 150);
+  var x = function (v) { return left + (right - left) * v / 70; };
+  xaxis(f, x, top, top + rows.length * rh, [0, 10, 20, 30, 40, 50, 60, 70], "%");
+  rows.forEach(function (r, i) {
+    var y = top + i * rh + (narrow ? 27 : rh / 2), g = el("g", {}, f.svg);
+    el("text", { class: "rowlab", x: narrow ? left : left - 12, y: narrow ? y - 13 : y + 4, "text-anchor": narrow ? "start" : "end" }, g, r.name);
+    el("line", { x1: x(r.render), x2: x(r.transfer), y1: y, y2: y, stroke: "var(--outline)", "stroke-width": 2 }, g);
+    el("circle", { cx: x(r.render), cy: y, r: 4.5, fill: "#fff", stroke: "var(--c-ref)", "stroke-width": 2 }, g);
+    el("circle", { cx: x(r.transfer), cy: y, r: 5.5, fill: "var(--c-vlm)", stroke: "#fff", "stroke-width": 2 }, g);
+    el("text", { class: "val", x: right + 10, y: y + 4 }, g, signed(r.diff[0]) + " [" + signed(r.diff[1]) + ", " + signed(r.diff[2]) + "]");
+    hover(el("rect", { class: "hit", x: 0, y: top + i * rh, width: f.W, height: rh }, g), f.tip, "<b>" + esc(r.name) + "</b><br>Render " + fmt(r.render) + "% · Realistic video " + fmt(r.transfer) + "%<br>Difference " + signed(r.diff[0]) + " points, p = " + esc(r.p) + "<br>Pedestrian contact " + fmt(r.ped_render) + "% · " + fmt(r.ped_transfer) + "%");
+  });
+  var t = document.getElementById("realismTable");
+  t.innerHTML = "<thead><tr><th>Arm</th><th class='num'>Episodes</th><th class='num'>Success, render</th><th class='num'>Success, realistic video</th><th class='num'>Difference</th><th class='num'>p</th><th class='num'>Ped. contact, render</th><th class='num'>Ped. contact, realistic video</th></tr></thead>";
+  var body = h("tbody", {}, t);
+  rows.forEach(function (r) {
+    h("tr", {}, body, "<td>" + esc(r.name) + "</td><td class='num'>" + r.n + "</td><td class='num'>" + fmt(r.render) + "</td><td class='num'>" + fmt(r.transfer) + "</td><td class='num'>" + signed(r.diff[0]) + " <span>[" + signed(r.diff[1]) + ", " + signed(r.diff[2]) + "]</span></td><td class='num'>" + esc(r.p) + "</td><td class='num'>" + fmt(r.ped_render) + "</td><td class='num'>" + fmt(r.ped_transfer) + "</td>");
+  });
+}
+legend("realLegend", [["Rendered views", "var(--c-ref)", "ring"], ["Realistic video", "var(--c-vlm)", "dot"]]);
+
+function drawAll() { drawBoard(); drawIface(); drawScatter(); drawFact(); drawReal(); }
+drawAll(); drawTable();
+var timer; window.addEventListener("resize", function () { clearTimeout(timer); timer = setTimeout(drawAll, 150); });
+document.getElementById("copyBib").addEventListener("click", function () {
+  var b = this; navigator.clipboard.writeText(document.getElementById("bib").textContent).then(function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy BibTeX"; }, 1500); });
+});
+})();
+</script>
+</body>
+</html>
